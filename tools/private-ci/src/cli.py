@@ -72,8 +72,8 @@ def load_config(path: str | None) -> dict[str, Any]:
     return config
 
 
-def private_config(args: argparse.Namespace) -> dict[str, Any]:
-    raw = load_config(args.config)
+def private_config(args: argparse.Namespace, raw: dict[str, Any] | None = None) -> dict[str, Any]:
+    raw = load_config(args.config) if raw is None else raw
     source = repository(nonempty(args.private_repo or raw.get("privateRepository"), "privateRepository"))
     source_ref = commit(nonempty(args.private_ref or raw.get("ref"), "Private source ref"))
     configured = raw.get("commands", {})
@@ -202,6 +202,60 @@ def dispatch(args: argparse.Namespace) -> int:
     return 0
 
 
+def refresh(args: argparse.Namespace) -> int:
+    repo = repository(args.repo)
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.config_secret) or args.config_secret.upper().startswith("GITHUB_"):
+        raise CliError("--config-secret must be a valid non-reserved GitHub secret name")
+    if args.config == "-":
+        raise CliError("refresh requires an existing external configuration file")
+    path = Path(args.config).resolve()
+    if not path.is_file():
+        raise CliError("refresh requires an existing external configuration file")
+    if any((parent / ".git").exists() for parent in path.parents):
+        raise CliError("Private configuration must remain outside Git working trees")
+    # Validate the old source pin too; refresh cannot silently repair an unpinned config.
+    existing = load_config(str(path))
+    private_config(argparse.Namespace(config=str(path), private_repo=None, private_ref=None,
+                                      command_cli=None, command_gui=None, artifact_path=None), existing)
+    revision = args.private_ref
+    if args.source_directory:
+        try:
+            result = subprocess.run(["git", "-C", args.source_directory, "rev-parse", "--verify", "HEAD"],
+                                    text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+        except (OSError, ValueError) as error:
+            raise CliError("Git could not read the local source revision") from error
+        if result.returncode:
+            raise CliError("Git could not read the local source revision")
+        revision = result.stdout.strip()
+    existing["ref"] = commit(nonempty(revision, "Private source ref"))
+    payload = json.dumps(existing, indent=2) + "\n"
+    staged: Path | None = None
+    retain = False
+    try:
+        # Stage and fsync in the same external directory before touching the remote secret.
+        descriptor, name = tempfile.mkstemp(prefix=".private-ci-refresh-", suffix=".json", dir=path.parent)
+        staged = Path(name)
+        if hasattr(os, "fchmod"):
+            os.fchmod(descriptor, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            stream.write(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        gh(["secret", "set", args.config_secret, "--repo", repo], payload)
+        try:
+            os.replace(staged, path)
+        except OSError as error:
+            retain = True
+            raise CliError(f"Secret updated but local replacement failed; protected prepared config retained at {staged}") from error
+    except OSError as error:
+        raise CliError("Could not prepare the protected configuration update") from error
+    finally:
+        if staged is not None and not retain:
+            staged.unlink(missing_ok=True)
+    print(f"Updated {args.config_secret} for {repo}; private configuration replaced atomically")
+    return 0
+
+
 def status(args: argparse.Namespace) -> int:
     repo = repository(args.repo)
     fields = "databaseId,status,conclusion,url,headSha,createdAt,workflowName"
@@ -253,6 +307,14 @@ def parser() -> argparse.ArgumentParser:
     run.add_argument("--branch")
     run.add_argument("--implementation", choices=("rust", "typescript", "both"), help="Optional selector for associated two-implementation callers; omitted for generic callers")
     run.set_defaults(handler=dispatch)
+    update = commands.add_parser("refresh", help="Refresh the private source pin and secret without changing public workflows")
+    update.add_argument("--repo", required=True, help="Associated public companion OWNER/REPOSITORY")
+    update.add_argument("--config", required=True, help="Existing private JSON file outside Git working trees")
+    update.add_argument("--config-secret", default="PRIVATE_CI_CONFIG", help="Configuration secret name, including optional _RS or _TS suffix")
+    source = update.add_mutually_exclusive_group(required=True)
+    source.add_argument("--private-ref", help="New immutable private source commit SHA")
+    source.add_argument("--source-directory", help="Local private source checkout whose HEAD is captured without printing it")
+    update.set_defaults(handler=refresh)
     state = commands.add_parser("status", help="Read companion run status through gh")
     state.add_argument("--repo", required=True)
     state.add_argument("--platform", choices=PLATFORMS)

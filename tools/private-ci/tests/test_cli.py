@@ -194,6 +194,52 @@ class CliTests(unittest.TestCase):
                 self.assertEqual(result, 2)
                 self.assertFalse((self.target / ".github").exists())
 
+    def test_refresh_updates_only_secret_and_external_file_without_printing_private_payload(self):
+        self.invoke(self.arguments)
+        before = {path: path.read_bytes() for path in self.target.rglob("*") if path.is_file()}
+        configuration = json.loads(self.private_output.read_text())
+        configuration["projectMetadata"] = {"keep": "private-metadata"}
+        self.private_output.write_text(json.dumps(configuration))
+        revision = "c" * 40
+        with patch.object(cli, "gh", return_value="") as gh:
+            result, out, err = self.invoke(["refresh", "--repo", "owner/mod-builds", "--config", str(self.private_output),
+                                          "--config-secret", "PRIVATE_CI_CONFIG_TS", "--private-ref", revision])
+        self.assertEqual(result, 0, err)
+        self.assertEqual(json.loads(self.private_output.read_text())["ref"], revision)
+        self.assertEqual(json.loads(self.private_output.read_text())["projectMetadata"], {"keep": "private-metadata"})
+        self.assertEqual(gh.call_args.args[0], ["secret", "set", "PRIVATE_CI_CONFIG_TS", "--repo", "owner/mod-builds"])
+        self.assertEqual(json.loads(gh.call_args.args[1])["ref"], revision)
+        self.assertNotIn(revision, out + err)
+        self.assertNotIn("secret-command", out + err)
+        self.assertNotIn("owner/private-source", out + err)
+        self.assertEqual(before, {path: path.read_bytes() for path in self.target.rglob("*") if path.is_file()})
+        if os.name != "nt":
+            self.assertEqual(self.private_output.stat().st_mode & 0o777, 0o600)
+
+    def test_refresh_failed_secret_update_preserves_original_file_and_removes_staging(self):
+        self.invoke(self.arguments)
+        original = self.private_output.read_bytes()
+        with patch.object(cli, "gh", side_effect=cli.CliError("GitHub CLI operation failed")):
+            result, _, _ = self.invoke(["refresh", "--repo", "owner/mod-builds", "--config", str(self.private_output),
+                                       "--private-ref", "c" * 40])
+        self.assertEqual(result, 2)
+        self.assertEqual(self.private_output.read_bytes(), original)
+        self.assertEqual(list(self.root.glob(".private-ci-refresh-*")), [])
+
+    def test_refresh_git_revision_uses_literal_argv_and_never_prints_sha(self):
+        self.invoke(self.arguments)
+        malicious_path = str(self.root / "source; echo DO_NOT_EXECUTE")
+        revision = "d" * 40
+        completed = subprocess.CompletedProcess(["git"], 0, stdout=revision + "\n", stderr="")
+        with patch.object(cli.subprocess, "run", return_value=completed) as command, patch.object(cli, "gh", return_value=""):
+            result, out, err = self.invoke(["refresh", "--repo", "owner/mod-builds", "--config", str(self.private_output),
+                                          "--source-directory", malicious_path])
+        self.assertEqual(result, 0, err)
+        self.assertEqual(command.call_args.args[0], ["git", "-C", malicious_path, "rev-parse", "--verify", "HEAD"])
+        self.assertFalse(command.call_args.kwargs.get("shell", False))
+        self.assertNotIn(revision, out + err)
+        self.assertEqual(json.loads(self.private_output.read_text())["ref"], revision)
+
     def test_status_requires_a_complete_filter(self):
         with patch.object(cli, "gh") as gh:
             result, _, _ = self.invoke(["status", "--repo", "owner/mod-builds", "--platform", "linux"])

@@ -5,6 +5,8 @@ import os
 from pathlib import Path
 import shlex
 import shutil
+import signal
+import stat
 import subprocess
 import sys
 import tarfile
@@ -107,13 +109,21 @@ class ExecutorTests(unittest.TestCase):
 
     def test_snapshot_rejects_zip_slip_links_and_collisions_before_writes(self):
         bad_entries = [[("root/../escape.txt", "bad")], [("/absolute.txt", "bad")],
-                       [("root/folder\\escape.txt", "bad")], [("root/file", "one"), ("root/file/child", "two")],
+                       [("root/folder\\escape.txt", "bad")], [("root/safe\0hidden.exe", "bad")], [("root/file", "one"), ("root/file/child", "two")],
                        [("root/a", "one"), ("root/A", "two")], [("first/a", "one"), ("second/b", "two")]]
         for index, entries in enumerate(bad_entries):
             archive = self.root / f"bad-{index}.zip"
             with zipfile.ZipFile(archive, "w") as output:
                 for name, value in entries:
-                    output.writestr(name, value)
+                    # ZipInfo's constructor sanitizes separators on Windows.
+                    # Set the raw header name afterward so this fixture remains
+                    # malformed on every platform, including when re-read.
+                    raw = zipfile.ZipInfo("placeholder")
+                    raw.filename = name
+                    raw.orig_filename = name
+                    output.writestr(raw, value)
+            with zipfile.ZipFile(archive) as source:
+                self.assertEqual([entry.orig_filename for entry in source.infolist()], [name for name, _ in entries])
             destination = self.root / f"out-{index}"
             with self.subTest(entries=entries), self.assertRaises(ValueError):
                 executor.extract_snapshot(archive, destination)
@@ -126,6 +136,78 @@ class ExecutorTests(unittest.TestCase):
             output.writestr(link, "../outside")
         with self.assertRaises(ValueError):
             executor.extract_snapshot(archive, self.root / "link-out")
+
+    def test_portable_paths_and_unicode_collisions_are_rejected_before_any_snapshot_write(self):
+        malformed = [
+            [("root/.. /escape.txt", "bad")], [("root/.. ./escape.txt", "bad")],
+            [("root/folder./file.txt", "bad")], [("root/folder /file.txt", "bad")],
+            [("root/CON.txt", "bad")], [("root/NUL", "bad")], [("root/COM1.log", "bad")],
+            [("root/LPT².txt", "bad")], [("root/AUX .log", "bad")],
+            [("root/question?.txt", "bad")], [("root/control\x7f.txt", "bad")],
+            [("root/café.txt", "one"), ("root/cafe\u0301.txt", "two")],
+        ]
+        for index, entries in enumerate(malformed):
+            archive = self.root / f"portable-{index}.zip"
+            with zipfile.ZipFile(archive, "w") as output:
+                # A valid earlier entry proves the whole manifest is preflighted.
+                output.writestr("root/earlier.txt", "must not be written")
+                for name, value in entries:
+                    raw = zipfile.ZipInfo("placeholder")
+                    raw.filename = name
+                    raw.orig_filename = name
+                    output.writestr(raw, value)
+            destination = self.root / f"portable-output-{index}"
+            with self.subTest(entries=entries):
+                with self.assertRaises(ValueError):
+                    executor.extract_snapshot(archive, destination)
+                self.assertFalse(destination.exists())
+                with self.assertRaises(ValueError):
+                    executor.validate_trace_archive(archive)
+
+    @unittest.skipIf(os.name == "nt", "POSIX owner-only executable permissions")
+    def test_snapshot_preserves_executable_bit_with_owner_only_file_permissions(self):
+        archive = self.root / "executable.zip"
+        with zipfile.ZipFile(archive, "w") as output:
+            script = zipfile.ZipInfo("root/script.sh")
+            script.create_system = 3
+            script.external_attr = 0o100755 << 16
+            output.writestr(script, "#!/bin/sh\nprintf portable-executable\n")
+            ordinary = zipfile.ZipInfo("root/data.txt")
+            ordinary.create_system = 3
+            ordinary.external_attr = 0o100644 << 16
+            output.writestr(ordinary, "ordinary file")
+        destination = self.root / "executable-output"
+        executor.extract_snapshot(archive, destination)
+        self.assertEqual(stat.S_IMODE((destination / "script.sh").stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE((destination / "data.txt").stat().st_mode), 0o600)
+        result = subprocess.run([str(destination / "script.sh")], capture_output=True, check=True)
+        self.assertEqual(result.stdout, b"portable-executable")
+
+    def test_raw_names_are_rejected_even_when_windows_reader_normalizes_them(self):
+        archive = self.root / "raw-reader.zip"
+        raw_name = "root/folder\\escape.txt"
+        with zipfile.ZipFile(archive, "w") as output:
+            raw = zipfile.ZipInfo("placeholder")
+            raw.filename = raw_name
+            raw.orig_filename = raw_name
+            output.writestr(raw, "malformed raw path")
+        original_init = zipfile.ZipInfo.__init__
+        def windows_init(entry, *args, **kwargs):
+            original_init(entry, *args, **kwargs)
+            entry.filename = entry.filename.replace("\\", "/")
+        # Emulate the Windows reader's normalization on Linux/macOS too.
+        # The original header name remains available in orig_filename.
+        with patch.object(zipfile.ZipInfo, "__init__", windows_init):
+            with zipfile.ZipFile(archive) as source:
+                entry = source.infolist()[0]
+                self.assertEqual(entry.filename, "root/folder/escape.txt")
+                self.assertEqual(entry.orig_filename, raw_name)
+            destination = self.root / "raw-reader-output"
+            with self.assertRaises(ValueError):
+                executor.extract_snapshot(archive, destination)
+            self.assertFalse(destination.exists())
+            with self.assertRaises(ValueError):
+                executor.validate_trace_archive(archive)
 
     @unittest.skipUnless(os.name != "nt" and shutil.which("bash"), "Requires native POSIX bash")
     def test_real_command_output_is_private_and_only_ciphertext_remains(self):
@@ -171,6 +253,42 @@ class ExecutorTests(unittest.TestCase):
         self.assertEqual(code, 124)
         self.assertTrue(timed_out)
         self.assertIn("private timed output", (private / "build.log").read_text())
+
+    def test_interrupted_wait_kills_only_owned_process_tree_before_propagating(self):
+        workspace = self.root / "interrupt-workspace"
+        workspace.mkdir()
+        private = self.root / "interrupt-private"
+        private.mkdir()
+        config = executor.parse_config(raw_config(), "linux", "cli")
+        process = unittest.mock.Mock(pid=987654)
+        process.wait.side_effect = [KeyboardInterrupt(PAYLOAD), 0, 0]
+        process.poll.return_value = 0
+        with patch.object(executor.subprocess, "Popen", return_value=process), patch.object(executor.subprocess, "run") as taskkill:
+            if os.name == "nt":
+                with self.assertRaises(KeyboardInterrupt):
+                    executor.run_command(config, "linux", workspace, private, {})
+                self.assertEqual(taskkill.call_args.args[0], ["taskkill", "/pid", "987654", "/t", "/f"])
+                self.assertEqual(taskkill.call_args.kwargs["timeout"], 5)
+            else:
+                with patch.object(executor.os, "killpg") as kill_group:
+                    with self.assertRaises(KeyboardInterrupt):
+                        executor.run_command(config, "linux", workspace, private, {})
+                    self.assertEqual(kill_group.call_args_list, [unittest.mock.call(987654, signal.SIGTERM), unittest.mock.call(987654, signal.SIGKILL)])
+            self.assertGreaterEqual(process.wait.call_count, 2)
+            self.assertTrue(all(call.kwargs.get("timeout") == 5 for call in process.wait.call_args_list[1:]))
+
+    def test_sigterm_cancellation_has_generic_output_and_restores_previous_handler(self):
+        previous = signal.getsignal(signal.SIGTERM)
+        stdout, stderr = io.StringIO(), io.StringIO()
+        def interrupt(*_args, **_kwargs):
+            signal.raise_signal(signal.SIGTERM)
+        with patch.object(executor, "execute", side_effect=interrupt), contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+            code = executor.main(["--platform", "linux", "--kind", "cli", "--output", str(self.root / "cancelled"), "--age", str(self.age)])
+        self.assertEqual(code, 130)
+        self.assertEqual(stdout.getvalue(), "")
+        self.assertEqual(stderr.getvalue(), "Private CI execution cancelled.\n")
+        self.assertNotIn(PAYLOAD, stderr.getvalue())
+        self.assertEqual(signal.getsignal(signal.SIGTERM), previous)
 
     def test_artifact_size_limits_and_external_symlinks_are_rejected(self):
         workspace = self.root / "bounded-workspace"

@@ -16,6 +16,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import unicodedata
 import zipfile
 
 
@@ -59,12 +60,17 @@ class Config:
 def relative_path(value: object) -> str:
     if not isinstance(value, str) or not value or "\\" in value or ":" in value:
         raise ValueError("Invalid relative path")
-    if any(ord(char) < 32 for char in value) or value.startswith("/"):
+    if any(unicodedata.category(char) == "Cc" or char in '<>"|?*' for char in value) or value.startswith("/"):
         raise ValueError("Invalid relative path")
-    parts = value.rstrip("/").split("/")
-    if any(part in ("", ".", "..") for part in parts):
-        raise ValueError("Invalid relative path")
+    parts = (value[:-1] if value.endswith("/") else value).split("/")
+    devices = {"CON", "PRN", "AUX", "NUL"} | {prefix + digit for prefix in ("COM", "LPT") for digit in "123456789¹²³"}
+    if any(part in ("", ".", "..") or part.endswith((".", " ")) or part.split(".", 1)[0].rstrip(" .").upper() in devices for part in parts):
+        raise ValueError("Invalid portable relative path")
     return "/".join(parts)
+
+
+def canonical_path(value: str) -> str:
+    return unicodedata.normalize("NFC", value).casefold()
 
 
 def parse_config(raw: str, platform: str, kind: str) -> Config:
@@ -130,7 +136,9 @@ def extract_snapshot(archive: Path, destination: Path) -> None:
         roots = set()
         names = set()
         for item in entries:
-            name = relative_path(item.filename)
+            # filename is platform-normalized and NUL-truncated by ZipInfo.
+            # Reject ambiguous raw header names before those changes hide them.
+            name = relative_path(item.orig_filename)
             parts = PurePosixPath(name).parts
             roots.add(parts[0])
             mode = item.external_attr >> 16
@@ -141,7 +149,7 @@ def extract_snapshot(archive: Path, destination: Path) -> None:
                     raise ValueError("Snapshot must have one root directory")
                 continue
             relative = "/".join(parts[1:])
-            key = relative.casefold()
+            key = canonical_path(relative)
             if key in names:
                 raise ValueError("Duplicate snapshot path")
             names.add(key)
@@ -149,11 +157,11 @@ def extract_snapshot(archive: Path, destination: Path) -> None:
         if len(roots) != 1:
             raise ValueError("Snapshot must have one root directory")
         # File/directory collisions are rejected before any output is created.
-        files = {target.relative_to(destination).as_posix().casefold()
+        files = {canonical_path(target.relative_to(destination).as_posix())
                  for item, target in plans if not item.is_dir()}
         for _, target in plans:
             relative = target.relative_to(destination)
-            if any(parent.as_posix().casefold() in files for parent in relative.parents if str(parent) != "."):
+            if any(canonical_path(parent.as_posix()) in files for parent in relative.parents if str(parent) != "."):
                 raise ValueError("Snapshot file/directory collision")
         destination.mkdir(parents=True)
         for item, target in plans:
@@ -163,14 +171,18 @@ def extract_snapshot(archive: Path, destination: Path) -> None:
             target.parent.mkdir(parents=True, exist_ok=True)
             with source.open(item) as input_file, target.open("xb") as output_file:
                 shutil.copyfileobj(input_file, output_file, 1024 * 1024)
-            if os.name != "nt" and (item.external_attr >> 16) & 0o111:
-                target.chmod(0o700)
+            if os.name != "nt":
+                target.chmod(0o700 if (item.external_attr >> 16) & 0o111 else 0o600)
 
 
 def stop_process_tree(process: subprocess.Popen, log) -> None:
     if os.name == "nt":
-        subprocess.run(["taskkill", "/pid", str(process.pid), "/t", "/f"],
-                       stdout=log, stderr=log, check=False)
+        try:
+            subprocess.run(["taskkill", "/pid", str(process.pid), "/t", "/f"],
+                           stdout=log, stderr=log, timeout=5, check=False)
+        except (OSError, subprocess.TimeoutExpired):
+            if process.poll() is None:
+                process.kill()
     else:
         try:
             os.killpg(process.pid, signal.SIGTERM)
@@ -188,7 +200,7 @@ def stop_process_tree(process: subprocess.Popen, log) -> None:
             pass
     if process.poll() is None:
         process.kill()
-    process.wait()
+    process.wait(timeout=5)
 
 
 def run_command(config: Config, platform: str, workspace: Path, private: Path,
@@ -213,6 +225,11 @@ def run_command(config: Config, platform: str, workspace: Path, private: Path,
         except subprocess.TimeoutExpired:
             stop_process_tree(process, log)
             return 124, True
+        except BaseException:
+            # Cancellation must not leave the private recipe's owned children
+            # running after TemporaryDirectory removes their logs and source.
+            stop_process_tree(process, log)
+            raise
 
 
 def validate_trace_archive(path: Path) -> None:
@@ -220,14 +237,28 @@ def validate_trace_archive(path: Path) -> None:
         entries = archive.infolist()
         if len(entries) > MAX_EVIDENCE_ENTRIES or sum(entry.file_size for entry in entries) > MAX_EVIDENCE_TOTAL_BYTES:
             raise ValueError("Trace exceeds evidence bounds")
+        names = set()
+        files = set()
+        paths = []
         for entry in entries:
-            name = relative_path(entry.filename)
+            # Apply the same raw-header and canonical collision policy to traces.
+            name = relative_path(entry.orig_filename)
+            key = canonical_path(name)
+            if key in names:
+                raise ValueError("Duplicate trace path")
+            names.add(key)
+            paths.append(PurePosixPath(name))
+            if not entry.is_dir():
+                files.add(key)
             parts = PurePosixPath(name).parts
             if any(part.casefold() in BASELINE_DIRECTORIES for part in parts[:-1]) or Path(name).suffix.casefold() in GAME_SUFFIXES:
                 raise ValueError("Trace contains a prohibited baseline path or file type")
             mode = entry.external_attr >> 16
             if stat.S_ISLNK(mode) or (stat.S_IFMT(mode) and not (stat.S_ISREG(mode) or stat.S_ISDIR(mode))):
                 raise ValueError("Trace links and special files are not allowed")
+        for path in paths:
+            if any(canonical_path(parent.as_posix()) in files for parent in path.parents if str(parent) != "."):
+                raise ValueError("Trace file/directory collision")
 
 
 def validate_artifact(item: Path, artifact: Path) -> None:
@@ -341,12 +372,21 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--kind", choices=KINDS, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--age", type=Path, required=True)
+    previous_sigterm = signal.getsignal(signal.SIGTERM)
+    def cancel_execution(_signum, _frame):
+        raise KeyboardInterrupt()
+    signal.signal(signal.SIGTERM, cancel_execution)
     try:
         args = parser.parse_args(argv)
         code = execute(args.platform, args.kind, args.output, args.age)
+    except KeyboardInterrupt:
+        print("Private CI execution cancelled.", file=sys.stderr)
+        return 130
     except Exception:
         print("Private CI execution failed.", file=sys.stderr)
         return 1
+    finally:
+        signal.signal(signal.SIGTERM, previous_sigterm)
     if code:
         print("Private CI execution failed; encrypted evidence retained.", file=sys.stderr)
     else:

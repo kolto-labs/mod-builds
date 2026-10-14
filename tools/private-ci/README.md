@@ -7,7 +7,9 @@ pipeline for an associated project, not a general-purpose free compute relay.
 There are six manual entry workflows: `private-ci-{cli,gui}-{linux,windows,macos}.yml`.
 Each can select Rust, TypeScript, or both. Standard public hosted runners currently
 have no Actions compute charge; self-hosted machines have their own operating
-costs. Account restrictions can still prevent allocation. Calling this public
+costs. Encrypted artifacts still consume storage allowance; larger hosted runners
+are billed even for public repositories. See [GitHub billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
+Account restrictions can still prevent allocation. Calling this public
 workflow from a **private** repository does not change private caller billing.
 
 ## What stays private
@@ -24,7 +26,10 @@ ciphertext size remain public. Encryption does not hide those facts. Repository
 administrators and anyone allowed to modify secret-bearing workflows must be
 trusted. This is not a sandbox for malicious private code. Debug/PR execution is
 rejected before the private workload. Use reviewed immutable revisions and protect
-the public branch and workflow changes.
+the public branch and workflow changes. The [Actions terms](https://docs.github.com/en/site-policy/github-terms/github-terms-for-additional-products-and-features#actions)
+limit hosted jobs to work associated with the software project in the repository;
+private tools are not categorically prohibited, but relabeling unrelated workloads
+is not a reliable way to establish that association.
 
 The evidence directory is fixed to `artifacts/evidence`. It accepts bounded
 JSON/log/text/Markdown/TOML/HTML, installer UI PNGs, and validated `trace.zip` files.
@@ -78,10 +83,27 @@ python tools/private-ci/gh-private-ci run --repo kolto-labs/mod-builds --platfor
 python tools/private-ci/gh-private-ci status --repo kolto-labs/mod-builds
 ```
 
+Update a private snapshot without editing public YAML, then dispatch:
+
+```sh
+python tools/private-ci/gh-private-ci refresh --repo kolto-labs/mod-builds --config /your/private/rust-config.json --config-secret PRIVATE_CI_CONFIG_RS --source-directory /your/private/ModSync.rs
+python tools/private-ci/gh-private-ci run --repo kolto-labs/mod-builds --platform linux --kind gui --implementation rust
+```
+
+Use `--private-ref FULL_SHA` instead of `--source-directory` to select an explicitly
+reviewed snapshot. The update sends JSON through stdin and prints neither the
+payload nor the SHA. A failed secret update leaves the local file unchanged. No
+public workflow is rewritten. Use `PRIVATE_CI_CONFIG_TS` for TypeScript and
+`PRIVATE_CI_CONFIG` for generic single-project adopters.
+
 The equivalent `gh workflow run private-ci-cli-linux.yml --repo kolto-labs/mod-builds`
 works too. Add `--field runner-mode=self-hosted` for an owner-controlled runner
 registered with `self-hosted`, its OS label, and `modsync-session`. Public repositories
 must not give untrusted pull requests access to those machines or credentials.
+Prefer ephemeral runner lifecycles. Catchable interruptions stop owned processes;
+SIGKILL, machine failure, or forced cancellation can still leave private temporary
+inputs until the owner destroys or cleans the runner. Never expose that filesystem
+as a public artifact directory.
 
 Download encrypted artifacts as a repository reader, then decrypt locally:
 
@@ -143,7 +165,7 @@ cd tools/private-ci
 python -m unittest discover -s tests -v
 ```
 
-The credential-free tests cover archive containment, secret stripping, private
+The 49 credential-free tests cover archive containment, secret stripping, private
 logs, failure preservation, timeout cleanup, artifact restrictions, pinned callers,
 and Steam admission/manifest checks. A separate local end-to-end check fetched a
 real private snapshot and verified real `age` encryption/decryption. Those checks
