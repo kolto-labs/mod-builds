@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.agekey
+*.age
+private-config*.json
+games/
+.steam-cache/

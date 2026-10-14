@@ -1,0 +1,7 @@
+{
+  "age-v1.2.1-linux-amd64.tar.gz": "7df45a6cc87d4da11cc03a539a7470c15b1041ab2b396af088fe9990f7c79d50",
+  "age-v1.2.1-linux-arm64.tar.gz": "57fd79a7ece5fe501f351b9dd51a82fbee1ea8db65a8839db17f5c080245e99f",
+  "age-v1.2.1-darwin-amd64.tar.gz": "424e1d64438a730626540b2e01e98d132a64214442ca9465b3e82336d12e633e",
+  "age-v1.2.1-darwin-arm64.tar.gz": "cf79875bd5970dc2dac60c87fa50cee1ff1f9a41b0eb273f65e174aff37c367a",
+  "age-v1.2.1-windows-amd64.zip": "46db0db71f146061f7c8fffa912cb806aef1bc8450e27a3abc1744f0591b89fb"
+}

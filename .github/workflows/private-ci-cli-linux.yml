@@ -1,0 +1,43 @@
+name: Mod-build verification (linux, cli)
+on:
+  workflow_dispatch:
+    inputs:
+      runner-mode:
+        description: Standard hosted or owner-controlled licensed-game runner
+        type: choice
+        options: [hosted, self-hosted]
+        default: hosted
+      implementation:
+        description: Installer implementation to verify
+        type: choice
+        options: [both, rust, typescript]
+        default: both
+permissions:
+  contents: read
+jobs:
+  rust:
+    if: inputs.implementation == 'both' || inputs.implementation == 'rust'
+    uses: ./.github/workflows/modsync-private-job.yml
+    with:
+      platform: linux
+      kind: cli
+      implementation: rust
+      runner-mode: ${{ inputs.runner-mode }}
+      tool-repository: ${{ github.repository }}
+    secrets:
+      PRIVATE_CI_CONFIG: ${{ secrets.PRIVATE_CI_CONFIG_RS }}
+      PRIVATE_CI_TOKEN: ${{ secrets.PRIVATE_CI_TOKEN }}
+      PRIVATE_CI_RECIPIENT: ${{ secrets.PRIVATE_CI_RECIPIENT }}
+  typescript:
+    if: inputs.implementation == 'both' || inputs.implementation == 'typescript'
+    uses: ./.github/workflows/modsync-private-job.yml
+    with:
+      platform: linux
+      kind: cli
+      implementation: typescript
+      runner-mode: ${{ inputs.runner-mode }}
+      tool-repository: ${{ github.repository }}
+    secrets:
+      PRIVATE_CI_CONFIG: ${{ secrets.PRIVATE_CI_CONFIG_TS }}
+      PRIVATE_CI_TOKEN: ${{ secrets.PRIVATE_CI_TOKEN }}
+      PRIVATE_CI_RECIPIENT: ${{ secrets.PRIVATE_CI_RECIPIENT }}

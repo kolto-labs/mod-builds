@@ -1,0 +1,20 @@
+{
+  "privateRepository": "OWNER/PRIVATE_PROJECT",
+  "ref": "0000000000000000000000000000000000000000",
+  "commands": {
+    "linux": {
+      "cli": "python your_cli_verification.py --receipts artifacts/evidence",
+      "gui": "xvfb-run -a python your_native_gui_verification.py --receipts artifacts/evidence"
+    },
+    "windows": {
+      "cli": "python your_cli_verification.py --receipts artifacts/evidence; if ($LASTEXITCODE) { exit $LASTEXITCODE }",
+      "gui": "python your_native_gui_verification.py --receipts artifacts/evidence; if ($LASTEXITCODE) { exit $LASTEXITCODE }"
+    },
+    "macos": {
+      "cli": "python your_cli_verification.py --receipts artifacts/evidence",
+      "gui": "python your_native_gui_verification.py --receipts artifacts/evidence"
+    }
+  },
+  "artifactPath": "artifacts/evidence",
+  "timeoutMinutes": 45
+}

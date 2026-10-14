@@ -4,6 +4,13 @@ This repository is used for development and support of the [KOTOR Community Mod 
 
 If you are looking to install mods, <ins>**PLEASE FOLLOW THE INSTRUCTIONS ON THE WEBSITE**</ins>. This repository often contains content which is still under active development and untested.
 
+## Private installer verification
+
+This fork includes six CLI/native GUI workflows for verifying the public guides
+with private installer implementations. See [setup and privacy boundaries](tools/private-ci/README.md)
+and the [US license research](tools/private-ci/docs/LICENSE_RESEARCH.md) before
+using purchased game files. Game originals are never public workflow artifacts.
+
 ## Branch Strategy
 
 This repository uses a [Gitflow](https://www.atlassian.com/git/tutorials/comparing-workflows/gitflow-workflow) branch strategy.
