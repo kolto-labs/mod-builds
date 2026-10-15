@@ -104,11 +104,14 @@ jobs:
                   command.append('--immutable')
               subprocess.run(command, check=True, timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
           for item in selected:
-              manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else manifest
-              manifest.setdefault('refresh_attempts', {})[item['id']] = time.time()
-              cache.atomic_json(manifest_path, manifest)
-              old = manifest['entries'].get(item['id'], {})
+              stage = 'attempt-manifest'
+              result = None
               try:
+                  manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else manifest
+                  manifest.setdefault('refresh_attempts', {})[item['id']] = time.time()
+                  cache.atomic_json(manifest_path, manifest)
+                  old = manifest['entries'].get(item['id'], {})
+                  stage = 'restore'
                   if remote and old.get('sha256'):
                       path = cache.object_path(root, old)
                       size = old['size']
@@ -130,20 +133,17 @@ jobs:
                   available = shutil.disk_usage(root).free - reserve
                   if available <= 0:
                       raise ValueError('insufficient download disk')
+                  stage = 'refresh'
                   cache.discover = lambda guides, item=item: [item]
                   item_report = root.parent / 'cache-item-report.json'
+                  item_report.unlink(missing_ok=True)
                   cache.main(['refresh', '--cache-dir', str(root), '--max-age-days', '14',
                               '--max-bytes', str(available), '--download-timeout', '600',
                               '--integrity-timeout', '300', '--timeout', '20', '--retries', '1',
                               '--report', str(item_report)])
                   result = json.loads(item_report.read_text())
-                  report['entries'].extend(result['entries'])
-                  report['ok'] = report['ok'] and result['ok']
-              except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
-                  report['ok'] = False
-                  report['entries'].append({'id': item['id'], 'status': 'unresolved', 'reason': 'restore or refresh failed; private diagnostics withheld', 'exception_category': type(error).__name__})
-              finally:
                   if remote:
+                      stage = 'persist-object'
                       current = json.loads(manifest_path.read_text())
                       uploaded = set()
                       for entry in current['entries'].values():
@@ -153,10 +153,21 @@ jobs:
                               path = cache.object_path(root, entry)
                               transfer(path, remote + '/objects/' + path.name, immutable=True)
                               uploaded.add(entry['sha256'])
+                      stage = 'persist-manifest'
                       transfer(manifest_path, remote + '/manifest.json')
+                      stage = 'evict'
                       for path in (root / 'objects').iterdir():
                           if path.is_file():
                               path.unlink()
+                  report['entries'].extend(result['entries'])
+                  report['ok'] = report['ok'] and result['ok'] and all(entry.get('status') == 'fresh' for entry in result['entries'])
+              except Exception as error:
+                  report['ok'] = False
+                  failure = {'id': item['id'], 'status': 'unresolved', 'reason': 'item operation failed; private diagnostics withheld', 'stage': stage, 'exception_category': type(error).__name__}
+                  if isinstance(error, subprocess.CalledProcessError):
+                      failure['returncode'] = error.returncode
+                  report['entries'].append(failure)
+              finally:
                   cache.atomic_json(root.parent / 'cache-report.json', report)
           cache.atomic_json(root.parent / 'cache-report.json', report)
           sys.exit(0 if report['ok'] else 1)
@@ -234,6 +245,11 @@ jobs:
                     'persistence_succeeded': int(os.environ['PERSIST_RESULT'] == 'success')}
           print(json.dumps(totals, sort_keys=True))
           categories = Counter(entry.get('exception_category') for entry in entries)
+          for stage in ('attempt-manifest', 'restore', 'refresh', 'persist-object', 'persist-manifest', 'evict'):
+              failures = [entry for entry in entries if entry.get('stage') == stage]
+              if failures:
+                  codes = Counter(entry['returncode'] for entry in failures if isinstance(entry.get('returncode'), int))
+                  print(json.dumps({'failure_stage': stage, 'count': len(failures), 'returncodes': dict(codes)}, sort_keys=True))
           try:
               private_log = (root / 'cache-private.log').read_text(errors='replace')
           except OSError:
