@@ -31,15 +31,9 @@ unsafe paths, duplicate entries, and values exceeding the 48 KiB GitHub secret
 limit; they fail instead of truncating. Compression and base64 do not encrypt
 authentication state.
 
-When acquisition is due, the workflow checks public egress through two IP
-geolocation services and requires agreement on IP and US state. It publishes
-the public IP, state, city, country, and source details in the
-`steam-egress-location-<game>-<run>-<attempt>` artifact with one-day retention,
-then waits 60 seconds before Steam authentication. Geolocation is approximate
-and does not establish Steam's observed location. Authentication starts
-automatically when the delay expires; Steam may separately request approval in
-its mobile app. Saved-state portability across fresh runners remains unproven,
-so bundle support is not evidence of a successful saved login.
+The workflow does not perform public-egress or location checks. Steam Guard
+approval remains an external Steam account requirement; no location is inferred
+or reported by the workflow.
 
 Browser web-session cookies authenticate Steam websites, not the Steam client
 protocol used by SteamCMD. A signed-in browser does not establish SteamCMD
@@ -112,7 +106,7 @@ regenerates `baseline-<game>.json` as the filtered inventory. Its
 | `source_receipt_sha256` | SHA-256 of the preserved, unmodified source receipt bytes. |
 
 Acquisition, manual-install, and automated-install workflows use the
-`steam-sealed-v3-excludingmovies-` cache namespace. Both install consumers
+`steam-sealed-v4-` cache namespace. Both install consumers
 require the six scope fields and validate their types and values, verify the
 preserved source receipt SHA-256, and derive the expected filtered inventory
 by excluding case-insensitive `.bik` paths from that source receipt. They check

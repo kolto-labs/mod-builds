@@ -137,9 +137,8 @@ jobs:
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ runner.temp }}/sealed/baseline.seal
-          key: steam-sealed-v3-excludingmovies-${{ inputs.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: steam-sealed-v3-excludingmovies-${{ inputs.game }}-${{ runner.os }}-
-          fail-on-cache-miss: true
+          key: steam-sealed-v4-${{ inputs.game }}-${{ runner.os }}-${{ github.run_id }}
+          restore-keys: steam-sealed-v4-${{ inputs.game }}-${{ runner.os }}-
 
       - name: Authenticate filtered game cache and create independent install copy
         env:

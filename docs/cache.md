@@ -176,15 +176,11 @@ could also hold game baselines; the current split is an implementation choice.
 GitHub currently documents a **default 10 GB per repository**, eviction after
 **more than seven days without access**, and oldest-access eviction at capacity.
 Additional paid cache storage can be configured; 10 GB is not a fixed platform
-maximum. Steam acquisition runs daily at 03:17 UTC when `STEAM_AUTH_READY=true`:
-daily restore refreshes access, while acquisition normally waits 14 days. Manual
-dispatch reuses a baseline only after authenticated-envelope, BIK-scope, source
-receipt and full filtered-inventory checks pass and its age is under 14 days.
-Missing or stale caches are due; corrupt caches fail closed. `force-refresh`
-defaults to `false`; set it to `true` to force Steam authentication and acquisition
-even when the verified cache is fresh. `cache-only` defaults to `false`; when
-enabled, it succeeds only for a valid fresh cache and fails before Steam setup if
-acquisition would be due. It cannot be combined with `force-refresh`. Access does
+maximum. Steam acquisition runs on its explicit dispatch/push/schedule triggers.
+Manual and install workflows use a valid cache when present; a missing or stale
+cache is an acquisition input, not a cache configuration error. Corrupt cache
+contents fail validation, and acquisition fails hard if it cannot produce a
+verified game tree. Access does
 not renew the acquisition timestamp or prevent capacity eviction, particularly
 while old immutable keys coexist with replacement baselines.
 
@@ -207,7 +203,7 @@ the generated cache copy. The canonical acquired baseline remains intact. This
 saves cache space, not the initial Steam download, and does not filter mod archives.
 
 Only encrypted `sealed/*.seal` is saved under
-`steam-sealed-v3-excludingmovies-<game>-<OS>-...`; authentication/configuration
+`steam-sealed-v4-<game>-<OS>-...`; authentication/configuration
 state is outside that clean-game tree. The envelope includes the preserved source
 inventory, filtered inventory, `refreshed-at`, and `cache-scope.json` containing
 schema, game, excluded pattern/count/bytes and source-receipt SHA256.
