@@ -22,6 +22,7 @@ jobs:
       RCLONE_CONFIG_MODCACHE_TYPE: s3
       RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
       RCLONE_CONFIG_MODCACHE_REGION: auto
+      RCLONE_CONFIG_MODCACHE_NO_CHECK_BUCKET: 'true'
       RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_ACCESS_KEY_ID }}
       RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_SECRET_ACCESS_KEY }}
       RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
@@ -138,9 +139,9 @@ jobs:
                   result = json.loads(item_report.read_text())
                   report['entries'].extend(result['entries'])
                   report['ok'] = report['ok'] and result['ok']
-              except (ValueError, KeyError, OSError, subprocess.SubprocessError):
+              except (ValueError, KeyError, OSError, subprocess.SubprocessError) as error:
                   report['ok'] = False
-                  report['entries'].append({'id': item['id'], 'status': 'unresolved', 'reason': 'restore or refresh failed; private diagnostics withheld'})
+                  report['entries'].append({'id': item['id'], 'status': 'unresolved', 'reason': 'restore or refresh failed; private diagnostics withheld', 'exception_category': type(error).__name__})
               finally:
                   if remote:
                       current = json.loads(manifest_path.read_text())
@@ -206,7 +207,7 @@ jobs:
           MAX_ITEMS: ${{ github.event_name == 'schedule' && 20 || inputs.max-items }}
         shell: python
         run: |
-          import json, os
+          import json, os, re
           from collections import Counter
           from pathlib import Path
           root = Path(os.environ['RUNNER_TEMP'])
@@ -224,6 +225,25 @@ jobs:
           verified = [entry for entry in manifest.values() if entry.get('checked_at', 0) >= progress.get('started_at', float('inf')) and entry.get('evidence') in ('download-200', 'download-without-upstream-metadata')]
           stop = progress.get('stop', 'not started')
           complete = data.get('ok') is True and progress.get('exit_code') == 0
+          totals = {'reported_entries': len(entries), 'fresh': counts['fresh'],
+                    'stale_unknown': counts['stale-unknown'], 'unresolved': counts['unresolved'],
+                    'manifest_checked': updated, 'verified_downloads': len(verified),
+                    'verified_bytes': sum(entry.get('size', 0) for entry in verified),
+                    'report_available': int(bool(data)), 'refresh_complete': int(complete),
+                    'private_backend': int(os.environ['PRIVATE_BACKEND'] == 'true'),
+                    'persistence_succeeded': int(os.environ['PERSIST_RESULT'] == 'success')}
+          print(json.dumps(totals, sort_keys=True))
+          categories = Counter(entry.get('exception_category') for entry in entries)
+          try:
+              private_log = (root / 'cache-private.log').read_text(errors='replace')
+          except OSError:
+              private_log = ''
+          for category in ('ValueError', 'KeyError', 'OSError', 'FileNotFoundError', 'PermissionError', 'CalledProcessError', 'TimeoutExpired', 'ModuleNotFoundError', 'TypeError'):
+              if categories[category]:
+                  print(f'exception_category={category} count={categories[category]}')
+              hidden_count = len(re.findall(r'^(?:[A-Za-z_][A-Za-z0-9_]*\.)*' + category + r':', private_log, re.MULTILINE))
+              if hidden_count:
+                  print(f'private_exception_category={category} count={hidden_count}')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write(f'Refresh complete: {complete}; state: {stop}.\n\n')
               summary.write(f'Due-link limit: {os.environ["MAX_ITEMS"]}. Completion applies only to selected links; fresh remote references are retained.\n\n')
