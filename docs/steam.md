@@ -24,7 +24,22 @@ a fresh five-character authorization code. Saved configuration may still require
 Steam Guard authorization. The acquisition workflow also accepts
 `STEAM_CONFIG_VDF_GZIP`: base64-encoded gzip-compressed `config.vdf`, decoded
 before invoking the helper; it takes precedence over `STEAM_CONFIG_VDF`.
-Compression and base64 do not encrypt authentication state.
+It also accepts a versioned bundle containing `config.vdf` and only allowlisted
+`ssfn*` and `registry.vdf` candidates below the private Steam home. Legacy
+compressed raw `config.vdf` remains supported. Capture and restore reject links,
+unsafe paths, duplicate entries, and values exceeding the 48 KiB GitHub secret
+limit; they fail instead of truncating. Compression and base64 do not encrypt
+authentication state.
+
+When acquisition is due, the workflow checks public egress through two IP
+geolocation services and requires agreement on IP and US state. It publishes
+the public IP, state, city, country, and source details in the
+`steam-egress-location-<game>-<run>-<attempt>` artifact with one-day retention,
+then waits 60 seconds before Steam authentication. Geolocation is approximate
+and does not establish Steam's observed location. Authentication starts
+automatically when the delay expires; Steam may separately request approval in
+its mobile app. Saved-state portability across fresh runners remains unproven,
+so bundle support is not evidence of a successful saved login.
 
 Browser web-session cookies authenticate Steam websites, not the Steam client
 protocol used by SteamCMD. A signed-in browser does not establish SteamCMD
@@ -76,10 +91,10 @@ prove local copy integrity, not an independent Valve content signature.
 
 The game cache must contain **no `*.bik` files**, matched case-insensitively
 at every directory depth (including names such as `nocache.bik` or `INTRO.BIK`).
-This exclusion applies only to the generated cache copy. The canonical Steam
-baseline and its full acquisition receipt remain unaffected, and the initial
-Steam download still acquires and validates the full game, including movies.
-This saves cache space; it does not reduce the initial Steam download.
+This exclusion applies only after acquisition to the generated cache copy. It
+does not make Steam skip movie files during the initial download. The canonical
+Steam baseline and its full acquisition receipt remain unaffected. This saves
+cache space; it does not reduce the initial Steam download.
 
 Before filtering, the acquisition workflow verifies the complete cache staging
 copy against the source inventory. It preserves the original receipt bytes as
