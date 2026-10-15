@@ -1,0 +1,20 @@
+name: ModSync K2 manual
+
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed-plan:
+        description: Repository-relative committed reviewed plan path
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    uses: ./.github/workflows/modsync-manual.yml
+    with:
+      game: k2
+      plan: ${{ inputs.reviewed-plan }}
+    secrets: inherit

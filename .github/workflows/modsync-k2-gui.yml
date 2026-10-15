@@ -1,0 +1,30 @@
+name: ModSync K2 gui
+
+on:
+  workflow_dispatch:
+    inputs:
+      reviewed-rust:
+        description: Repository-relative committed reviewed Rust manifest path
+        type: string
+        required: true
+      reviewed-ts:
+        description: Repository-relative committed reviewed TypeScript manifest path
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        implementation: [rust, typescript]
+    uses: ./.github/workflows/modsync-install.yml
+    with:
+      game: k2
+      mode: gui
+      implementation: ${{ matrix.implementation }}
+      review-manifest: ${{ matrix.implementation == 'rust' && inputs.reviewed-rust || inputs.reviewed-ts }}
+    secrets: inherit

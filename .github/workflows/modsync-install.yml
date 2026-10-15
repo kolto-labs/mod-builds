@@ -1,6 +1,39 @@
 name: ModSync full guide install
 
 on:
+  workflow_call:
+    inputs:
+      game:
+        type: string
+        default: k1
+        required: true
+      mode:
+        type: string
+        default: cli
+        required: true
+      implementation:
+        type: string
+        default: rust
+        required: true
+      review-manifest:
+        description: 'Optional repository-relative reviewed manifest file at this commit; installation fails if omitted'
+        type: string
+        required: false
+    secrets:
+      ACTIONS_STEP_DEBUG:
+        required: false
+      ACTIONS_RUNNER_DEBUG:
+        required: false
+      MODSYNC_SOURCE_TOKEN:
+        required: true
+      CACHE_ENCRYPTION_KEY:
+        required: true
+      MOD_CACHE_S3_READ_ACCESS_KEY_ID:
+        required: false
+      MOD_CACHE_S3_READ_SECRET_ACCESS_KEY:
+        required: false
+      MOD_CACHE_S3_ENDPOINT:
+        required: false
   workflow_dispatch:
     inputs:
       game:
@@ -32,7 +65,7 @@ concurrency:
 
 jobs:
   install:
-    if: github.repository == 'kolto-labs/mod-builds' && github.event_name == 'workflow_dispatch' && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
+    if: github.repository == 'kolto-labs/mod-builds' && (github.event_name == 'workflow_dispatch' || github.event_name == 'workflow_call') && github.ref == format('refs/heads/{0}', github.event.repository.default_branch)
     runs-on: ubuntu-latest
     timeout-minutes: 360
     defaults:
