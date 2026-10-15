@@ -12,10 +12,6 @@ on:
         type: string
         required: true
     secrets:
-      ACTIONS_STEP_DEBUG:
-        required: false
-      ACTIONS_RUNNER_DEBUG:
-        required: false
       CACHE_ENCRYPTION_KEY:
         required: true
       MOD_CACHE_S3_READ_ACCESS_KEY_ID:

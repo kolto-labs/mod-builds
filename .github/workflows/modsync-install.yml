@@ -20,10 +20,6 @@ on:
         type: string
         required: false
     secrets:
-      ACTIONS_STEP_DEBUG:
-        required: false
-      ACTIONS_RUNNER_DEBUG:
-        required: false
       MODSYNC_SOURCE_TOKEN:
         required: true
       CACHE_ENCRYPTION_KEY:
