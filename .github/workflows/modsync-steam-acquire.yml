@@ -549,22 +549,18 @@ jobs:
         run: rm -rf "$RUNNER_TEMP/steam-state" "$RUNNER_TEMP/clean" "$RUNNER_TEMP/game" "$RUNNER_TEMP/restored" "$RUNNER_TEMP/steam-private.log" "$RUNNER_TEMP/steam-diagnostic.log" "$RUNNER_TEMP/steam-report.json" "$RUNNER_TEMP/steamcmd.tar.gz" "$RUNNER_TEMP/sealed" "$RUNNER_TEMP/steam-diagnostics" "$RUNNER_TEMP/steam-diagnostics.seal"
   finalize-auth-readiness:
     needs: acquire
-    if: always()
-    continue-on-error: true
+    if: needs.acquire.result == 'success'
     runs-on: ubuntu-latest
     permissions:
       actions: read
     steps:
       - name: Download sanitized per-game auth proofs
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: steam-auth-proven-*
           path: ${{ runner.temp }}/steam-auth-proven
           merge-multiple: true
-          if-no-artifact: ignore
       - name: Enable readiness only after both game proofs
-        continue-on-error: true
         shell: python
         env:
           GH_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
