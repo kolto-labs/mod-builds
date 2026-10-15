@@ -2,6 +2,8 @@
 """Archive cache shared by installer adapters; Python 3.10+, standard library only."""
 
 import argparse
+from email.message import EmailMessage
+from email.policy import default as email_policy
 import hashlib
 from http.client import HTTPException
 from http.cookiejar import CookieJar
@@ -16,8 +18,9 @@ import subprocess
 import sys
 import tempfile
 import time
+import unicodedata
 from urllib.error import HTTPError, URLError
-from urllib.parse import parse_qs, parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
+from urllib.parse import parse_qs, parse_qsl, unquote, urlencode, urljoin, urlsplit, urlunsplit
 from urllib.request import HTTPCookieProcessor, Request, build_opener
 import zipfile
 
@@ -252,6 +255,42 @@ def local_valid(root, entry):
         return False
 
 
+def safe_archive_name(value, extension):
+    if not isinstance(value, str):
+        return None
+    name = unicodedata.normalize("NFC", value).replace("\\", "/").rsplit("/", 1)[-1]
+    name = "".join(character if character.isalnum() or character in " ._-()[]+" else "_"
+                   for character in name).strip(" .")
+    if not name or len(name.encode("utf-8")) > 240 or not ARCHIVE.search(name):
+        return None
+    stem, suffix = name.rsplit(".", 1)
+    if not stem.strip(" ._") or suffix.lower() != extension:
+        return None
+    if stem.split(".", 1)[0].upper() in {"CON", "PRN", "AUX", "NUL", *(
+            prefix + str(number) for prefix in ("COM", "LPT") for number in range(1, 10))}:
+        name = "_" + name
+    return name
+
+
+def archive_name(item, extension, url, disposition=None):
+    if disposition:
+        try:
+            message = EmailMessage(policy=email_policy)
+            message["Content-Disposition"] = disposition
+            name = safe_archive_name(message.get_filename(), extension)
+            if name:
+                return name
+        except (ValueError, TypeError, IndexError):
+            pass
+    name = safe_archive_name(unquote(urlsplit(url).path.rsplit("/", 1)[-1]), extension)
+    if name:
+        return name
+    basename = unquote(urlsplit(url).path.rsplit("/", 1)[-1])
+    basename = re.sub(r"[^a-zA-Z0-9_.-]+", "_", unicodedata.normalize("NFC", basename)).strip(" ._")
+    basename = basename[:80] or "archive"
+    return basename + "-" + item["id"] + "." + extension
+
+
 def refresh_one(item, old, root, args, endpoint=None, depth=0):
     endpoint = endpoint or resolve(item, args)
     endpoint_key = endpoint_id(endpoint)
@@ -268,7 +307,10 @@ def refresh_one(item, old, root, args, endpoint=None, depth=0):
             if not any(name in headers for name in ("If-None-Match", "If-Modified-Since")) or not valid:
                 raise ValueError("unexpected 304 without a verified cached object")
             validate(object_path(root, old), args.integrity_timeout)
-            return {**old, "checked_at": now, "status": "fresh", "evidence": "conditional-304"}
+            name = archive_name(item, old["extension"], response.geturl(),
+                                response.headers.get("Content-Disposition"))
+            return {**old, "archive_name": old.get("archive_name", name),
+                    "checked_at": now, "status": "fresh", "evidence": "conditional-304"}
         if response.code != 200:
             raise ValueError("expected complete HTTP 200 archive")
         if "html" in response.headers.get("Content-Type", "").lower():
@@ -308,6 +350,8 @@ def refresh_one(item, old, root, args, endpoint=None, depth=0):
             version = version_id(response.geturl())
             known = bool(etag or modified or version)
             return {"sha256": sha, "size": size, "extension": kind,
+                    "archive_name": archive_name(item, kind, response.geturl(),
+                                                 response.headers.get("Content-Disposition")),
                     "endpoint_id": endpoint_key, "endpoint": clean_url(response.geturl()),
                     "etag": etag, "last_modified": modified, "version_id": version,
                     "checked_at": now, "status": "fresh" if known else "stale-unknown",
@@ -367,6 +411,7 @@ def main(argv=None):
         manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"schema": 1, "entries": {}}
         if manifest.get("schema") != 1 or not isinstance(manifest.get("entries"), dict):
             raise ValueError("unsupported manifest schema")
+        restored_names = {}
         for item in items:
             old = manifest["entries"].get(item["id"], {})
             entry = {"id": item["id"], "url": clean_url(item["url"]), "provider": item["provider"]}
@@ -387,7 +432,22 @@ def main(argv=None):
                     args.destination.mkdir(parents=True, exist_ok=True)
                     if old.get("extension") not in ("zip", "7z", "rar"):
                         raise ValueError("invalid manifest archive extension")
-                    filename = item["id"] + "." + old["extension"]
+                    if "archive_name" in old:
+                        filename = safe_archive_name(old["archive_name"], old["extension"])
+                        if filename is None:
+                            raise ValueError("invalid manifest archive name")
+                    else:
+                        filename = archive_name(item, old["extension"], old.get("endpoint") or item["url"])
+                    name_key = filename.casefold()
+                    if name_key in restored_names and restored_names[name_key] != item["id"]:
+                        raise ValueError("archive filename collision")
+                    restored_names[name_key] = item["id"]
+                    matches = [path for path in args.destination.iterdir()
+                               if unicodedata.normalize("NFC", path.name).casefold() == name_key]
+                    if matches:
+                        if (len(matches) != 1 or matches[0].name != filename or matches[0].is_symlink()
+                                or not matches[0].is_file() or digest(matches[0]) != old["sha256"]):
+                            raise ValueError("archive filename collision")
                     descriptor, temporary = tempfile.mkstemp(dir=args.destination, prefix=".restore-")
                     try:
                         with os.fdopen(descriptor, "wb") as output, source.open("rb") as incoming:
@@ -396,7 +456,8 @@ def main(argv=None):
                             os.fsync(output.fileno())
                         if digest(Path(temporary)) != old["sha256"]:
                             raise ValueError("restore SHA256 mismatch")
-                        os.replace(temporary, args.destination / filename)
+                        if not matches:
+                            os.link(temporary, args.destination / filename)
                     finally:
                         Path(temporary).unlink(missing_ok=True)
                     entry.update(status="restored", sha256=old["sha256"], file=filename)
