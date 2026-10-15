@@ -73,42 +73,61 @@ jobs:
         run: |
           umask 077
           python - <<'PY' > "$RUNNER_TEMP/steam-private.log" 2>&1
-          import base64, gzip, importlib.util, io, os, subprocess
+          import base64, gzip, importlib.util, io, os, subprocess, traceback
           from pathlib import Path
           from urllib.error import URLError
 
           os.umask(0o077)
-          compressed = os.environ.pop('STEAM_CONFIG_VDF_GZIP', '')
-          if compressed:
-              with gzip.GzipFile(fileobj=io.BytesIO(base64.b64decode(compressed, validate=True))) as saved:
-                  configuration = saved.read(16 * 1024 * 1024 + 1)
-              if not configuration or len(configuration) > 16 * 1024 * 1024:
-                  raise ValueError('Saved Steam configuration exceeds size limit')
-              os.environ['STEAM_CONFIG_VDF'] = base64.b64encode(configuration).decode('ascii')
           temporary = Path(os.environ['RUNNER_TEMP'])
-          specification = importlib.util.spec_from_file_location('steam_acquire', 'tools/private-ci/src/steam_acquire.py')
-          module = importlib.util.module_from_spec(specification)
-          specification.loader.exec_module(module)
-          original_run = module.run_steam
           diagnostic = temporary / 'steam-diagnostic.log'
-          def private_run(command, script_path, log, environment, timeout):
-              with diagnostic.open('wb') as private_log:
-                  return original_run(command, script_path, private_log, environment, timeout)
-          module.run_steam = private_run
           reason = 'unknown'
+          exception_class = 'none'
+          exception_frames = 'none'
           verified = False
           try:
+              compressed = os.environ.pop('STEAM_CONFIG_VDF_GZIP', '')
+              if compressed:
+                  with gzip.GzipFile(fileobj=io.BytesIO(base64.b64decode(compressed, validate=True))) as saved:
+                      configuration = saved.read(16 * 1024 * 1024 + 1)
+                  if not configuration or len(configuration) > 16 * 1024 * 1024:
+                      raise ValueError('Saved Steam configuration exceeds size limit')
+                  os.environ['STEAM_CONFIG_VDF'] = base64.b64encode(configuration).decode('ascii')
+              specification = importlib.util.spec_from_file_location('steam_acquire', 'tools/private-ci/src/steam_acquire.py')
+              module = importlib.util.module_from_spec(specification)
+              specification.loader.exec_module(module)
+              original_run = module.run_steam
+              def private_run(command, script_path, log, environment, timeout):
+                  with diagnostic.open('wb') as private_log:
+                      return original_run(command, script_path, private_log, environment, timeout)
+              module.run_steam = private_run
               module.acquire_game(os.environ['GAME'], temporary / 'game',
                                   temporary / 'steam-state', temporary / 'steam-report.json',
                                   dict(os.environ), 1800)
               verified = True
               reason = 'verified'
           except Exception as error:
+              allowed_classes = {'TypeError', 'ValueError', 'RuntimeError', 'OSError', 'FileNotFoundError',
+                                 'PermissionError', 'HTTPError', 'URLError', 'ConnectionError',
+                                 'TimeoutError', 'TimeoutExpired', 'BadGzipFile', 'EOFError', 'Error',
+                                 'ImportError', 'ModuleNotFoundError', 'AttributeError', 'KeyError'}
+              exception_class = type(error).__name__
+              if exception_class not in allowed_classes:
+                  exception_class = 'OtherError'
+              allowed_files = {'<stdin>', 'steam_acquire.py', 'request.py', 'error.py',
+                               'gzip.py', 'base64.py', 'subprocess.py', 'client.py', 'socket.py',
+                               'ssl.py', '_compression.py'}
+              exception_frames = ','.join(
+                  (Path(frame.filename).name if Path(frame.filename).name in allowed_files else 'redacted')
+                  + ':' + str(frame.lineno)
+                  for frame in traceback.extract_tb(error.__traceback__)
+              ) or 'none'
+              if isinstance(error, TypeError):
+                  reason = 'adapter-error'
               if isinstance(error, (URLError, ConnectionError, subprocess.TimeoutExpired)):
                   reason = 'network-or-timeout'
-              if not os.environ.get('STEAM_USERNAME') or not (
+              if reason == 'unknown' and (not os.environ.get('STEAM_USERNAME') or not (
                   os.environ.get('STEAM_PASSWORD') or os.environ.get('STEAM_CONFIG_VDF')
-              ):
+              )):
                   reason = 'auth'
               candidates = [diagnostic]
               candidates += list((temporary / 'steam-state/home/steamcmd/logs').glob('*.txt'))
@@ -125,12 +144,14 @@ jobs:
                   ('auth', ('invalid password', 'invalid login', 'login failure', 'invalid credentials', 'account disabled')),
                   ('network-or-timeout', ('connection failed', 'connection timeout', 'connection timed out', 'failed to connect', 'no connection')),
               ):
-                  if any(marker in evidence for marker in markers):
+                  if reason == 'unknown' and any(marker in evidence for marker in markers):
                       reason = category
                       break
           finally:
               with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
                   output.write('reason=' + reason + '\n')
+                  output.write('exception_class=' + exception_class + '\n')
+                  output.write('exception_frames=' + exception_frames + '\n')
           raise SystemExit(0 if verified else 1)
           PY
       - name: Seal clean game and inventory only
@@ -174,7 +195,7 @@ jobs:
         run: |
           import os
           reason = os.environ.get('ACQUISITION_REASON', '')
-          allowed = {'verified', 'steam-guard', 'auth', 'ownership', 'network-or-timeout', 'unknown'}
+          allowed = {'verified', 'steam-guard', 'auth', 'ownership', 'network-or-timeout', 'adapter-error', 'unknown'}
           reason = reason if reason in allowed else 'setup-or-cache-failure'
           print('Steam acquisition status: ' + reason)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
