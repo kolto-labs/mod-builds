@@ -162,7 +162,7 @@ jobs:
         run: |
           umask 077
           python - <<'PY' > "$RUNNER_TEMP/steam-private.log" 2>&1
-          import base64, gzip, importlib.util, io, os, subprocess, traceback
+          import base64, importlib.util, os, subprocess, traceback
           from pathlib import Path
           from urllib.error import URLError
 
@@ -175,19 +175,29 @@ jobs:
           steam_code = 'none'
           verified = False
           module = None
+          steam_auth = None
+          auth_files = {}
+          pending_auth_restore = {'files': auth_files}
           try:
               compressed = os.environ.pop('STEAM_CONFIG_VDF_GZIP', '')
               if compressed:
-                  with gzip.GzipFile(fileobj=io.BytesIO(base64.b64decode(compressed, validate=True))) as saved:
-                      configuration = saved.read(16 * 1024 * 1024 + 1)
-                  if not configuration or len(configuration) > 16 * 1024 * 1024:
-                      raise ValueError('Saved Steam configuration exceeds size limit')
+                  auth_specification = importlib.util.spec_from_file_location(
+                      'steam_auth', 'tools/modsync-ci/steam_auth.py')
+                  steam_auth = importlib.util.module_from_spec(auth_specification)
+                  auth_specification.loader.exec_module(steam_auth)
+                  auth_files = steam_auth.decode_secret(compressed)
+                  pending_auth_restore['files'] = auth_files
+                  configuration = auth_files[steam_auth.CONFIG_PATH]
                   os.environ['STEAM_CONFIG_VDF'] = base64.b64encode(configuration).decode('ascii')
               specification = importlib.util.spec_from_file_location('steam_acquire', 'tools/private-ci/src/steam_acquire.py')
               module = importlib.util.module_from_spec(specification)
               specification.loader.exec_module(module)
               original_run = module.run_steam
               def private_run(command, script_path, log, environment, timeout):
+                  if steam_auth and pending_auth_restore['files']:
+                      steam_auth.restore_auxiliary(
+                          pending_auth_restore['files'], temporary / 'steam-state/home')
+                      pending_auth_restore['files'] = {}
                   with diagnostic.open('wb') as private_log:
                       return original_run(command, script_path, private_log, environment, timeout)
               module.run_steam = private_run
@@ -259,17 +269,16 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
         run: |
-          import base64, gzip, os, subprocess
+          import importlib.util, os, subprocess
           from pathlib import Path
 
           try:
-              configuration = Path(os.environ['RUNNER_TEMP']) / 'steam-state/home/steamcmd/config/config.vdf'
-              content = configuration.read_bytes()
-              if not content:
-                  raise ValueError()
-              encoded = base64.b64encode(gzip.compress(content))
-              if len(encoded) > 48 * 1024:
-                  raise ValueError()
+              specification = importlib.util.spec_from_file_location(
+                  'steam_auth', 'tools/modsync-ci/steam_auth.py')
+              steam_auth = importlib.util.module_from_spec(specification)
+              specification.loader.exec_module(steam_auth)
+              home = Path(os.environ['RUNNER_TEMP']) / 'steam-state/home'
+              encoded = steam_auth.encode_secret(steam_auth.capture(home)).encode('ascii')
               subprocess.run(
                   ['gh', 'secret', 'set', 'STEAM_CONFIG_VDF_GZIP', '-R', os.environ['GITHUB_REPOSITORY']],
                   input=encoded, capture_output=True, check=True,
