@@ -1,0 +1,193 @@
+name: ModSync Steam acquisition
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 3 * * *'
+permissions:
+  contents: read
+jobs:
+  acquire:
+    if: github.repository == 'kolto-labs/mod-builds' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    concurrency:
+      group: steam-account
+      cancel-in-progress: false
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        game: [k1, k2]
+    env:
+      CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Require cache encryption
+        shell: bash
+        run: test "${#CACHE_ENCRYPTION_KEY}" -ge 32
+      - uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/sealed/*.seal
+          key: steam-sealed-v2-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: steam-sealed-v2-${{ matrix.game }}-${{ runner.os }}-
+      - name: Restore authenticated clean baseline
+        shell: bash
+        env:
+          GAME: ${{ matrix.game }}
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/steam-state"
+          if test -f "$RUNNER_TEMP/sealed/baseline.seal"; then
+            python tools/modsync-ci/seal.py unseal --source "$RUNNER_TEMP/sealed/baseline.seal" --destination "$RUNNER_TEMP/restored"
+            mv "$RUNNER_TEMP/restored/baseline-$GAME" "$RUNNER_TEMP/steam-state/"
+            mv "$RUNNER_TEMP/restored/baseline-$GAME.json" "$RUNNER_TEMP/steam-state/"
+          fi
+      - name: Apply fourteen-day acquisition gate with daily cache access
+        id: gate
+        shell: python
+        run: |
+          import os, time
+          from pathlib import Path
+          interval = 14 * 86400
+          stamp = Path(os.environ['RUNNER_TEMP']) / 'restored/refreshed-at'
+          age = time.time() - float(stamp.read_text()) if stamp.is_file() else interval
+          due = os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch' or not 0 <= age < interval
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('due=' + str(due).lower() + '\n')
+      - name: Install SteamCMD dependencies
+        if: steps.gate.outputs.due == 'true'
+        run: sudo apt-get update -qq && sudo apt-get install -y lib32gcc-s1
+      - name: Authenticate and acquire fresh validated game
+        id: acquisition
+        if: steps.gate.outputs.due == 'true'
+        shell: bash
+        env:
+          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+          STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+          STEAM_CONFIG_VDF_GZIP: ${{ secrets.STEAM_CONFIG_VDF_GZIP }}
+          STEAM_GUARD_CODE: ${{ secrets.STEAM_GUARD_CODE }}
+          GAME: ${{ matrix.game }}
+        run: |
+          umask 077
+          python - <<'PY' > "$RUNNER_TEMP/steam-private.log" 2>&1
+          import base64, gzip, importlib.util, io, os, subprocess
+          from pathlib import Path
+          from urllib.error import URLError
+
+          os.umask(0o077)
+          compressed = os.environ.pop('STEAM_CONFIG_VDF_GZIP', '')
+          if compressed:
+              with gzip.GzipFile(fileobj=io.BytesIO(base64.b64decode(compressed, validate=True))) as saved:
+                  configuration = saved.read(16 * 1024 * 1024 + 1)
+              if not configuration or len(configuration) > 16 * 1024 * 1024:
+                  raise ValueError('Saved Steam configuration exceeds size limit')
+              os.environ['STEAM_CONFIG_VDF'] = base64.b64encode(configuration).decode('ascii')
+          temporary = Path(os.environ['RUNNER_TEMP'])
+          specification = importlib.util.spec_from_file_location('steam_acquire', 'tools/private-ci/src/steam_acquire.py')
+          module = importlib.util.module_from_spec(specification)
+          specification.loader.exec_module(module)
+          original_run = module.run_steam
+          diagnostic = temporary / 'steam-diagnostic.log'
+          def private_run(command, script_path, log, environment, timeout):
+              with diagnostic.open('wb') as private_log:
+                  return original_run(command, script_path, private_log, environment, timeout)
+          module.run_steam = private_run
+          reason = 'unknown'
+          verified = False
+          try:
+              module.acquire_game(os.environ['GAME'], temporary / 'game',
+                                  temporary / 'steam-state', temporary / 'steam-report.json',
+                                  dict(os.environ), 1800)
+              verified = True
+              reason = 'verified'
+          except Exception as error:
+              if isinstance(error, (URLError, ConnectionError, subprocess.TimeoutExpired)):
+                  reason = 'network-or-timeout'
+              if not os.environ.get('STEAM_USERNAME') or not (
+                  os.environ.get('STEAM_PASSWORD') or os.environ.get('STEAM_CONFIG_VDF')
+              ):
+                  reason = 'auth'
+              candidates = [diagnostic]
+              candidates += list((temporary / 'steam-state/home/steamcmd/logs').glob('*.txt'))
+              candidates += list((temporary / 'steam-state/home/.steam/logs').glob('*.txt'))
+              evidence = ''
+              for candidate in candidates:
+                  if candidate.is_file() and not candidate.is_symlink():
+                      with candidate.open('rb') as source:
+                          source.seek(max(0, candidate.stat().st_size - 4 * 1024 * 1024))
+                          evidence += source.read().decode('utf-8', errors='replace').lower()
+              for category, markers in (
+                  ('steam-guard', ('steam guard code', 'two-factor code', 'two factor code', 'account logon denied', 'auth code', 'email code', 'waiting for confirmation')),
+                  ('ownership', ('no subscription', 'no license', 'missing license', 'does not own')),
+                  ('auth', ('invalid password', 'invalid login', 'login failure', 'invalid credentials', 'account disabled')),
+                  ('network-or-timeout', ('connection failed', 'connection timeout', 'connection timed out', 'failed to connect', 'no connection')),
+              ):
+                  if any(marker in evidence for marker in markers):
+                      reason = category
+                      break
+          finally:
+              with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+                  output.write('reason=' + reason + '\n')
+          raise SystemExit(0 if verified else 1)
+          PY
+      - name: Seal clean game and inventory only
+        if: steps.gate.outputs.due == 'true'
+        shell: bash
+        env:
+          GAME: ${{ matrix.game }}
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/clean" "$RUNNER_TEMP/sealed"
+          mv "$RUNNER_TEMP/game" "$RUNNER_TEMP/clean/baseline-$GAME"
+          cp "$RUNNER_TEMP/steam-state/baseline-$GAME.json" "$RUNNER_TEMP/clean/"
+          python -c 'import time; print(time.time())' > "$RUNNER_TEMP/clean/refreshed-at"
+          python tools/modsync-ci/seal.py seal --source "$RUNNER_TEMP/clean" --destination "$RUNNER_TEMP/sealed/baseline.seal"
+      - name: Enforce shared 10 GB cache budget
+        id: budget
+        if: steps.gate.outputs.due == 'true'
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          size = (Path(os.environ['RUNNER_TEMP']) / 'sealed/baseline.seal').stat().st_size
+          if size > 4_000_000_000:
+              raise SystemExit('Baseline exceeds the 4 GB per-game sealed cache budget; use external storage. Cache not saved.')
+          print('Sealed baseline fits the 4 GB per-game budget (8 GB for both games; 2 GB headroom).')
+      - uses: actions/cache/save@v4
+        id: cache_save
+        if: steps.gate.outputs.due == 'true'
+        with:
+          path: ${{ runner.temp }}/sealed/*.seal
+          key: steam-sealed-v2-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Publish sanitized status only
+        if: always()
+        shell: python
+        env:
+          ACQUISITION_DUE: ${{ steps.gate.outputs.due }}
+          ACQUISITION_REASON: ${{ steps.acquisition.outputs.reason }}
+          CACHE_SAVE_OUTCOME: ${{ steps.cache_save.outcome }}
+          JOB_STATUS: ${{ job.status }}
+          BUDGET_OUTCOME: ${{ steps.budget.outcome }}
+        run: |
+          import os
+          reason = os.environ.get('ACQUISITION_REASON', '')
+          allowed = {'verified', 'steam-guard', 'auth', 'ownership', 'network-or-timeout', 'unknown'}
+          reason = reason if reason in allowed else 'setup-or-cache-failure'
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              if os.environ['ACQUISITION_DUE'] == 'false':
+                  summary.write('Authenticated baseline is younger than fourteen days; acquisition skipped. Daily cache restore refreshes access within the seven-day eviction window.\n')
+              else:
+                  summary.write('Steam acquisition status: ' + reason + '.\n')
+                  if reason == 'unknown':
+                      summary.write('No conclusive Steam Guard/auth/ownership/network evidence; private diagnostics were suppressed.\n')
+                  summary.write('Cache save outcome: ' + os.environ['CACHE_SAVE_OUTCOME'] + '.\n')
+              summary.write('Job status: ' + os.environ['JOB_STATUS'] + '.\n')
+              if os.environ['BUDGET_OUTCOME'] == 'failure':
+                  summary.write('Cache budget exceeded: sealed baseline is larger than 4 GB; cache was not saved.\n')
+      - name: Remove private state
+        if: always()
+        shell: bash
+        run: rm -rf "$RUNNER_TEMP/steam-state" "$RUNNER_TEMP/clean" "$RUNNER_TEMP/game" "$RUNNER_TEMP/restored" "$RUNNER_TEMP/steam-private.log" "$RUNNER_TEMP/steam-diagnostic.log" "$RUNNER_TEMP/steam-report.json" "$RUNNER_TEMP/steamcmd.tar.gz" "$RUNNER_TEMP/sealed"

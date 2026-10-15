@@ -8,11 +8,15 @@ No login/ownership failure is bypassed and no game executable is launched.
 from __future__ import annotations
 
 import argparse
+import base64
+import hashlib
+import json
 import os
 from pathlib import Path, PurePosixPath
 import platform
 import re
 import signal
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -39,7 +43,9 @@ def script(game: str, directory: Path, username: str, password: str,
            guard: str | None = None) -> str:
     if game not in APPS:
         raise ValueError("Unsupported game")
-    login = "login " + token(username) + " " + token(password)
+    login = "login " + token(username)
+    if password:
+        login += " " + token(password)
     if guard:
         if not re.fullmatch(r"[A-Za-z0-9]{5}", guard):
             raise ValueError("Invalid Steam Guard code")
@@ -121,7 +127,7 @@ def verify_install(game: str, directory: Path, steam_root: Path) -> None:
     if field("appid") != str(app_id) or field("StateFlags") != "4":
         raise RuntimeError("Steam did not finish installing the owned app")
     # Manifest metadata alone is not a usable installer baseline.
-    for name in ("chitin.key", "dialog.tlk"):
+    for name in ("chitin.key", "dialog.tlk", "swkotor.exe" if game == "k1" else "swkotor2.exe"):
         path = directory / name
         if not path.is_file() or path.stat().st_size == 0:
             raise RuntimeError("Steam game resources are incomplete")
@@ -130,7 +136,7 @@ def verify_install(game: str, directory: Path, steam_root: Path) -> None:
 
 
 def run_steam(command: Path, script_path: Path, log, environment: dict[str, str], timeout: int) -> int:
-    options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True}
+    options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True, "umask": 0o077}
     process = subprocess.Popen([str(command), "+runscript", str(script_path)],
                                stdin=subprocess.DEVNULL, stdout=log, stderr=log,
                                cwd=command.parent, env=environment, **options)
@@ -154,56 +160,153 @@ def run_steam(command: Path, script_path: Path, log, environment: dict[str, str]
 
 def acquire(workspace: Path, log_path: Path, host: str, environment: dict[str, str],
             timeout: int = 3600) -> dict[str, Path]:
-    username, password = environment.get("STEAM_USERNAME"), environment.get("STEAM_PASSWORD")
-    if not username or not password:
-        raise ValueError("Steam acquisition requires STEAM_USERNAME and STEAM_PASSWORD")
-    if host not in BOOTSTRAPS:
-        raise ValueError("SteamCMD acquisition requires Linux or Windows")
-    workspace = workspace.resolve()
-    workspace.mkdir(parents=True, mode=0o700, exist_ok=True)
-    games = {game: workspace / "games" / game for game in APPS}
-    # Validate every script before any network activity.
-    # The first login authorizes this private SteamCMD cache. Reuse that cache for
-    # the second app; a short-lived Guard code may expire during the first download.
-    scripts = {game: script(game, path, username, password,
-                           environment.get("STEAM_GUARD_CODE") if index == 0 else None)
-               for index, (game, path) in enumerate(games.items())}
-    if any(path.exists() for path in games.values()):
-        raise ValueError("Steam acquisition requires fresh game directories")
-    log_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    # O_EXCL refuses symlink/log reuse; never send Steam output to public stdout.
-    log_fd = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-    clean_env = {key: value for key, value in environment.items()
-                 if key.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP", "LANG"}}
-    with os.fdopen(log_fd, "wb") as log, tempfile.TemporaryDirectory(prefix="steam-private-", dir=workspace) as temporary:
-        private = Path(temporary)
-        # Steam authentication caches and stdout are private ephemeral inputs.
-        clean_env.update(HOME=str(private), USERPROFILE=str(private), TMPDIR=str(private))
-        command = bootstrap(host, private / "steamcmd")
-        for game, path in games.items():
-            path.mkdir(parents=True, mode=0o700)
-            script_path = private / "acquire.script"
-            fd = os.open(script_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-            try:
-                with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as output:
-                    output.write(scripts[game])
-                code = run_steam(command, script_path, log, clean_env, timeout)
-            finally:
-                script_path.unlink(missing_ok=True)
-            if code:
-                raise RuntimeError("Steam acquisition failed; inspect the private log")
-            verify_install(game, path, command.parent)
+    games = {}
+    private_directory(log_path.parent)
+    private_write(log_path, b"Steam diagnostics are suppressed; see per-game reports.\n")
+    for game in APPS:
+        destination = workspace / "games" / game
+        acquire_game(game, destination, workspace / "steam-state",
+                     workspace / f"{game}-acquisition.json", environment, timeout,
+                     host=host)
+        games[game] = destination
     return games
+
+
+def private_directory(path: Path) -> None:
+    if path.is_symlink():
+        raise ValueError("Private directory cannot be a symlink")
+    path.mkdir(parents=True, mode=0o700, exist_ok=True)
+    path.chmod(0o700)
+
+
+def private_write(path: Path, content: bytes) -> None:
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "wb") as output:
+        output.write(content)
+
+
+def inventory(directory: Path) -> dict:
+    result = {}
+    for path in sorted(directory.rglob("*")):
+        if path.is_symlink():
+            raise RuntimeError("Baseline contains a symlink")
+        if path.is_file() and "steamapps" not in path.relative_to(directory).parts:
+            digest = hashlib.sha256()
+            with path.open("rb") as source:
+                while chunk := source.read(1024 * 1024):
+                    digest.update(chunk)
+            result[path.relative_to(directory).as_posix()] = {
+                "size": path.stat().st_size, "sha256": digest.hexdigest()}
+    return result
+
+
+def acquire_game(game: str, destination: Path, state_dir: Path, report: Path,
+                 environment: dict[str, str], timeout: int = 3600,
+                 *, host: str | None = None) -> dict:
+    host = host or {"Linux": "linux", "Windows": "windows"}.get(platform.system(), "macos")
+    if game not in APPS or host not in BOOTSTRAPS or timeout <= 0:
+        raise ValueError("Unsupported acquisition options")
+    username = environment.get("STEAM_USERNAME", "")
+    password = environment.get("STEAM_PASSWORD", "")
+    if not username:
+        raise ValueError("Steam acquisition requires STEAM_USERNAME")
+    if destination.exists() or destination.is_symlink():
+        raise ValueError("Destination must not exist")
+    if state_dir.is_symlink():
+        raise ValueError("Private state cannot be a symlink")
+    destination = destination.resolve()
+    state_dir = state_dir.resolve()
+    if state_dir == destination or state_dir in destination.parents or destination in state_dir.parents:
+        raise ValueError("State and destination must be independent")
+    private_directory(state_dir)
+    report = report.absolute()
+    if report == destination or destination in report.parents:
+        raise ValueError("Report must be outside destination")
+    report.parent.mkdir(parents=True, exist_ok=True)
+    if report.exists() or report.is_symlink():
+        raise ValueError("Report must not exist")
+    lock = state_dir / "acquisition.lock"
+    lock.mkdir(mode=0o700)
+    outcome = {"game": game, "app_id": APPS[game], "platform": "windows", "success": False}
+    try:
+        baseline = state_dir / f"baseline-{game}"
+        receipt = state_dir / f"baseline-{game}.json"
+        script_content = script(game, baseline, username, password,
+                                environment.get("STEAM_GUARD_CODE"))
+        steam_home = state_dir / "home"
+        private_directory(steam_home)
+        root = steam_home / "steamcmd"
+        if root.exists():
+            private_directory(root)
+        if not password and not environment.get("STEAM_CONFIG_VDF") and not (root / "config/config.vdf").is_file():
+            raise ValueError("A password or saved Steam configuration is required")
+        command = root / ("steamcmd.sh" if host == "linux" else "steamcmd.exe")
+        if not command.is_file():
+            command = bootstrap(host, root)
+        encoded = environment.get("STEAM_CONFIG_VDF")
+        if encoded:
+            config = root / "config"
+            private_directory(config)
+            target = config / "config.vdf"
+            decoded = base64.b64decode(encoded, validate=True)
+            if not decoded or len(decoded) > 16 * 1024 * 1024:
+                raise ValueError("Invalid saved Steam configuration")
+            temporary_config = config / "config.restore"
+            private_write(temporary_config, decoded)
+            temporary_config.replace(target)
+        if baseline.exists():
+            if not receipt.is_file() or inventory(baseline) != json.loads(receipt.read_text()):
+                raise RuntimeError("Cached baseline differs from its acquisition manifest")
+        else:
+            baseline.mkdir(mode=0o700)
+        clean_env = {key: value for key, value in environment.items()
+                     if key.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "LANG"}}
+        clean_env.update(HOME=str(steam_home), USERPROFILE=str(steam_home),
+                         TMPDIR=str(steam_home), TEMP=str(steam_home), TMP=str(steam_home))
+        with tempfile.TemporaryDirectory(prefix="request-", dir=state_dir) as temporary:
+            script_path = Path(temporary) / "acquire.script"
+            private_write(script_path, script_content.encode("utf-8"))
+            with open(os.devnull, "wb") as discarded:
+                code = run_steam(command, script_path, discarded, clean_env, timeout)
+            if code:
+                raise RuntimeError("SteamCMD failed")
+        verify_install(game, baseline, root)
+        files = inventory(baseline)
+        receipt.unlink(missing_ok=True)
+        private_write(receipt, json.dumps(files, sort_keys=True).encode())
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix="steam-copy-", dir=destination.parent) as temporary:
+            staged = Path(temporary) / "game"
+            shutil.copytree(baseline, staged, ignore=shutil.ignore_patterns("steamapps"))
+            if inventory(staged) != files:
+                raise RuntimeError("Workspace copy verification failed")
+            staged.rename(destination)
+        outcome.update(success=True, files=files)
+    except Exception:
+        outcome["error"] = "Acquisition failed; check ownership, Steam Guard, disk space and private state."
+        raise
+    finally:
+        try:
+            private_write(report, (json.dumps(outcome, indent=2, sort_keys=True) + "\n").encode())
+            descriptor = os.open(state_dir / "events.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND |
+                                 getattr(os, "O_NOFOLLOW", 0), 0o600)
+            with os.fdopen(descriptor, "w", encoding="utf-8") as log:
+                os.chmod(log.name, 0o600)
+                log.write(f"{game}: {'verified' if outcome['success'] else 'failed'}\n")
+        finally:
+            lock.rmdir()
+    return outcome
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--workspace", required=True, type=Path)
     parser.add_argument("--private-log", required=True, type=Path)
+    parser.add_argument("--timeout", type=int, default=3600)
     args = parser.parse_args()
     host = {"Linux": "linux", "Windows": "windows"}.get(platform.system(), "macos")
     try:
-        acquire(args.workspace, args.private_log, host, dict(os.environ))
+        acquire(args.workspace, args.private_log, host, dict(os.environ), args.timeout)
     except Exception:
         print("Steam acquisition failed. Inspect private diagnostics; ownership and Steam Guard authorization are required.")
         return 1
