@@ -39,14 +39,22 @@ All roots must be disjoint. The work directory, logs, snapshots and report are
 private (0700/0600). Report must be outside game/archives and not preexist.
 Snapshots copy every regular file, including empty directories; symlinks and
 special files are rejected. Manifests cover paths, kinds, modes, sizes and SHA256.
-Every step gets one deadline (default 1800 seconds). Failure/interrupt restores
-and verifies its pre-step tree, then halts. Recovery has no timeout. A hard kill,
+Every step gets one deadline (default 1800 seconds). Extraction is bounded to
+64 GiB and 100000 entries and reserves space for a full staged rollback on the
+game filesystem. Snapshot admission budgets a full copy plus rollback space.
+Only the last successful checkpoint's snapshot is retained by default
+(--keep-snapshots); failed checkpoints are always preserved. Failure/interrupt
+reclaims extraction scratch, then verifies a staged pre-step tree before an
+atomic same-filesystem directory exchange (requires renameat2 support). If
+staging cannot fit, live state and snapshot remain intact. Recovery has no
+timeout. A hard kill,
 power loss, uncooperative process or external tree writer needs operator recovery;
 the pending report and retained snapshot are the recovery evidence, not success.
 Exit 0: complete; 1: failed/blocked (consult private report). No resume or commit.
 """
 
 import argparse
+import ctypes
 import hashlib
 import json
 import math
@@ -62,6 +70,58 @@ import tarfile
 import tempfile
 import time
 import zipfile
+
+
+SPACE_MARGIN = 16 * 1024 * 1024
+EXTRACT_BYTES = 64 * 1024 ** 3
+EXTRACT_ENTRIES = 100000
+
+
+def tree_capacity(entries, destination):
+    block = max(4096, os.statvfs(destination).f_frsize)
+    return sum(((entry[2] + block - 1) // block * block if entry[0] == "file" else 0)
+               + block for entry in entries.values())
+
+
+def admit_capacity(path, needed, purpose):
+    require(shutil.disk_usage(path).free >= needed + SPACE_MARGIN,
+            "insufficient capacity for " + purpose)
+
+
+def extraction_reserve(path, rollback_reserve):
+    if rollback_reserve is not None:
+        game_parent, needed = rollback_reserve
+        if path.stat().st_dev == game_parent.stat().st_dev:
+            return SPACE_MARGIN + needed
+    return SPACE_MARGIN
+
+
+def restore_snapshot(snapshot, game, before):
+    require(manifest(snapshot) == before, "snapshot damaged; cannot restore")
+    admit_capacity(game.parent, tree_capacity(before, game.parent), "staged restore; cannot restore")
+    with tempfile.TemporaryDirectory(prefix=".manual-restore-", dir=game.parent) as temporary:
+        staging = Path(temporary) / "game"
+        copy_tree(snapshot, staging)
+        require(manifest(staging) == before, "staged restore verification failed; cannot restore")
+        require(game.stat().st_dev == staging.stat().st_dev, "restore requires same filesystem")
+        exchange = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
+        require(exchange is not None, "atomic directory exchange unavailable; cannot restore")
+        exchange.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p,
+                             ctypes.c_uint]
+        exchange.restype = ctypes.c_int
+        if exchange(-100, os.fsencode(staging), -100, os.fsencode(game), 2) != 0:
+            error = ctypes.get_errno()
+            raise Blocked("atomic restore failed; cannot restore: " + os.strerror(error))
+        require(manifest(game) == before, "restored tree verification failed")
+        remove_for_restore(staging)
+
+
+def prune_snapshots(successful, keep, game, after):
+    require(manifest(game) == after, "live tree changed; snapshots retained")
+    for snapshot, receipt in successful[:-keep]:
+        if snapshot.exists():
+            remove_for_restore(snapshot)
+            receipt["snapshot_retained"] = False
 
 
 class Blocked(Exception):
@@ -347,12 +407,12 @@ def validate_operation(operation, roots):
         raise Blocked("unsupported operation")
 
 
-def extract_7z(source, destination, deadline):
+def extract_7z(source, destination, deadline, rollback_reserve=None):
     executable = shutil.which("7z")
     require(executable is not None, "7z executable missing")
     deadline = min(deadline, time.monotonic() + 1800) if deadline is not None else time.monotonic() + 1800
-    reserve = 16 * 1024 * 1024
-    byte_limit = min(64 * 1024 ** 3, max(0, shutil.disk_usage(destination.parent).free - reserve))
+    reserve = extraction_reserve(destination.parent, rollback_reserve)
+    byte_limit = min(EXTRACT_BYTES, max(0, shutil.disk_usage(destination.parent).free - reserve))
     require(byte_limit > 0, "insufficient extraction space")
 
     def run(arguments, cwd, output, limit):
@@ -365,9 +425,12 @@ def extract_7z(source, destination, deadline):
                 require(os.fstat(output.fileno()).st_size <= limit, "7z output limit exceeded")
                 require(shutil.disk_usage(cwd).free >= reserve, "insufficient extraction space")
                 expanded = 0
+                entries = 0
                 for root, directories, files in os.walk(payload, followlinks=False):
                     check_deadline(deadline)
                     for name in directories + files:
+                        entries += 1
+                        require(entries <= EXTRACT_ENTRIES, "7z entry limit exceeded")
                         metadata = (Path(root) / name).lstat()
                         require(stat.S_ISDIR(metadata.st_mode) or stat.S_ISREG(metadata.st_mode),
                                 "extracted link or special file")
@@ -426,10 +489,20 @@ def extract_7z(source, destination, deadline):
             total += size
             require(total <= byte_limit, "7z expanded byte limit exceeded")
             expected[name] = (directory, size)
-        for name in expected:
+            require(len(expected) <= EXTRACT_ENTRIES, "7z entry limit exceeded")
+        allocated_paths = set()
+        block = max(4096, os.statvfs(staging).f_frsize)
+        allocation = 0
+        for name, (directory, size) in expected.items():
+            allocated_paths.add(Path(name))
+            allocation += (size + block - 1) // block * block
             for parent in Path(name).parents:
                 if parent != Path("."):
+                    allocated_paths.add(parent)
                     require(expected.get(parent.as_posix(), (True, 0))[0], "7z member type conflict")
+            require(len(allocated_paths) <= EXTRACT_ENTRIES, "7z entry limit exceeded")
+        require(shutil.disk_usage(staging).free >= reserve + allocation + block * len(allocated_paths),
+                "insufficient extraction space (rollback reserve protected)")
         with tempfile.TemporaryFile(dir=staging) as output:
             run(["x", "-y", "-p", "-o" + str(payload), "--", str(source.resolve())],
                 staging, output, 8 * 1024 * 1024)
@@ -457,16 +530,34 @@ def extract_7z(source, destination, deadline):
         payload.rename(destination)
 
 
-def extract(source, destination, deadline):
+def extract(source, destination, deadline, rollback_reserve=None):
     require(not destination.exists(), "extraction destination must be fresh")
+    destination.parent.mkdir(parents=True, exist_ok=True)
     with source.open("rb") as incoming:
         signature = incoming.read(8)
     if signature.startswith((b"7z\xbc\xaf\x27\x1c", b"Rar!\x1a\x07")):
-        destination.parent.mkdir(parents=True, exist_ok=True)
-        extract_7z(source, destination, deadline)
+        extract_7z(source, destination, deadline, rollback_reserve)
         return
-    destination.mkdir(parents=True)
+    with tempfile.TemporaryDirectory(prefix=".manual-unpack-", dir=destination.parent) as temporary:
+        payload = Path(temporary) / "payload"
+        payload.mkdir(mode=0o700)
+        extract_payload(source, payload, deadline, rollback_reserve)
+        payload.rename(destination)
+
+
+def extract_payload(source, destination, deadline, rollback_reserve=None):
+    reserve = extraction_reserve(destination, rollback_reserve)
+    byte_limit = min(EXTRACT_BYTES, max(0, shutil.disk_usage(destination).free - reserve))
+    require(byte_limit > 0, "insufficient extraction space")
     seen = set()
+    allocated_paths = set()
+    block = max(4096, os.statvfs(destination).f_frsize)
+    expanded = 0
+    declared = 0
+
+    def capacity(needed=0):
+        require(shutil.disk_usage(destination).free >= reserve + needed,
+                "insufficient extraction space (rollback reserve protected)")
 
     def target(name):
         require("\\" not in name and not re.match(r"^[A-Za-z]:", name), "unsafe archive path")
@@ -477,23 +568,39 @@ def extract(source, destination, deadline):
                 "invalid archive member")
         require(result not in seen, "duplicate archive member")
         seen.add(result)
+        relative = result.relative_to(destination)
+        allocated_paths.update([relative, *relative.parents])
+        require(len(allocated_paths) <= EXTRACT_ENTRIES, "archive entry limit exceeded")
         return result
 
-    def unpack(name, directory, incoming, mode):
+    def unpack(name, directory, incoming, mode, size):
+        nonlocal expanded, declared
         check_deadline(deadline)
+        require(size >= 0 and (not directory or size == 0), "invalid archive member size")
+        declared += size
+        require(declared <= byte_limit, "archive expanded byte limit exceeded")
         output = target(name.rstrip("/"))
+        capacity((size + block - 1) // block * block
+                 + block * (len(output.relative_to(destination).parts) + 1))
         if directory:
             require(not output.exists() or output.is_dir(), "archive member type conflict")
             output.mkdir(parents=True, exist_ok=True)
             return
         output.parent.mkdir(parents=True, exist_ok=True)
         with output.open("xb") as outgoing:
+            written = 0
             while True:
                 check_deadline(deadline)
                 chunk = incoming.read(1024 * 1024)
                 if not chunk:
                     break
+                written += len(chunk)
+                expanded += len(chunk)
+                require(written <= size and expanded <= byte_limit,
+                        "archive expanded byte limit exceeded")
+                capacity(len(chunk) + block)
                 outgoing.write(chunk)
+            require(written == size, "archive member size mismatch")
         output.chmod(0o700 if mode & 0o111 else 0o600)
 
     if zipfile.is_zipfile(source):
@@ -502,16 +609,17 @@ def extract(source, destination, deadline):
                 mode = member.external_attr >> 16
                 require(stat.S_IFMT(mode) in (0, stat.S_IFREG, stat.S_IFDIR), "special ZIP member")
                 with archive.open(member) as incoming:
-                    unpack(member.filename, member.is_dir(), incoming, mode)
+                    unpack(member.filename, member.is_dir(), incoming, mode, member.file_size)
     else:
         with tarfile.open(source, "r:*") as archive:
             for member in archive:
                 require(member.isfile() or member.isdir(), "special tar member")
                 if member.isdir():
-                    unpack(member.name, True, None, member.mode)
+                    unpack(member.name, True, None, member.mode, member.size)
                 else:
                     with archive.extractfile(member) as incoming:
-                        unpack(member.name, False, incoming, member.mode)
+                        unpack(member.name, False, incoming, member.mode, member.size)
+    capacity()
 
 
 def run_patcher(operation, roots, log, deadline):
@@ -553,7 +661,7 @@ def run_patcher(operation, roots, log, deadline):
     check_deadline(deadline)
 
 
-def execute(operation, roots, log, deadline):
+def execute(operation, roots, log, deadline, rollback_reserve=None):
     validate_operation(operation, roots)
     check_deadline(deadline)
     kind = operation["type"]
@@ -571,7 +679,7 @@ def execute(operation, roots, log, deadline):
         source = path_token(operation["source"], roots, ("archives", "extract"))
         destination = path_token(operation["destination"], roots, ("extract", "game"))
         if kind == "extract":
-            extract(source, destination, deadline)
+            extract(source, destination, deadline, rollback_reserve)
         else:
             copy_tree(source, destination, deadline)
     check_deadline(deadline)
@@ -586,6 +694,8 @@ def main():
     for name in ("guide", "plan", "game-dir", "archives", "work-dir", "report"):
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--step-timeout", type=float, default=1800)
+    parser.add_argument("--keep-snapshots", type=int, default=1,
+                        help="successful checkpoints to retain (minimum 1); failed checkpoints always retained")
     args = parser.parse_args()
     os.umask(0o077)
     report = {"status": "blocked", "steps": []}
@@ -593,6 +703,7 @@ def main():
     try:
         require(os.name == "posix", "POSIX host required; use explicit Wine argv for Windows patchers")
         timeout_value(args.step_timeout)
+        require(args.keep_snapshots >= 1, "keep-snapshots must be at least 1")
         require(not args.game_dir.is_symlink() and not args.archives.is_symlink()
                 and not args.work_dir.is_symlink(), "symlink root")
         roots = {"game": args.game_dir.resolve(), "archives": args.archives.resolve(),
@@ -622,6 +733,7 @@ def main():
         write_json(work / "reviewed-plan.json", plan)
         write_json(report_path, report)
         signal.signal(signal.SIGTERM, interrupted)
+        successful = []
         for index, step in enumerate(plan["steps"], 1):
             require(sha256(args.plan) == plan_hash and sha256(args.guide) == plan["guide_sha256"],
                     "immutable plan or guide changed")
@@ -632,10 +744,19 @@ def main():
             report["steps"].append(receipt)
             write_json(report_path, report)
             before = manifest(roots["game"])
+            restore_bytes = tree_capacity(before, roots["game"].parent)
+            snapshot_bytes = tree_capacity(before, checkpoint)
+            shared = checkpoint.stat().st_dev == roots["game"].parent.stat().st_dev
+            admit_capacity(checkpoint, snapshot_bytes + (restore_bytes if shared else 0),
+                           "snapshot and rollback reserve")
+            if not shared:
+                admit_capacity(roots["game"].parent, restore_bytes, "rollback reserve")
             copy_tree(roots["game"], snapshot)
             require(manifest(snapshot) == before == manifest(roots["game"]), "snapshot verification failed")
+            admit_capacity(roots["game"].parent, restore_bytes, "rollback reserve")
             write_json(checkpoint / "before.json", before)
             receipt["status"] = "pending"
+            receipt["snapshot_retained"] = True
             write_json(report_path, report)
             deadline = time.monotonic() + step.get("timeout_seconds", args.step_timeout)
             try:
@@ -644,7 +765,8 @@ def main():
                         log.write((json.dumps(operation) + "\n").encode())
                         log.flush()
                         verify_archive_inputs(plan, roots, deadline)
-                        execute(operation, roots, log, deadline)
+                        execute(operation, roots, log, deadline,
+                                (roots["game"].parent, restore_bytes))
                 after = manifest(roots["game"], deadline)
                 check_deadline(deadline)
                 require(sha256(args.plan) == plan_hash and sha256(args.guide) == plan["guide_sha256"],
@@ -657,17 +779,20 @@ def main():
                 signal.signal(signal.SIGINT, signal.SIG_IGN)
                 signal.signal(signal.SIGTERM, signal.SIG_IGN)
                 try:
-                    require(manifest(snapshot) == before, "snapshot damaged; cannot restore")
-                    remove_for_restore(roots["game"])
-                    copy_tree(snapshot, roots["game"])
-                    require(manifest(roots["game"]) == before, "restored tree verification failed")
+                    remove_for_restore(roots["extract"])
+                    roots["extract"].mkdir(mode=0o700)
+                    restore_snapshot(snapshot, roots["game"], before)
                     receipt["status"] = "rolled_back"
-                except BaseException:
+                except BaseException as restore_error:
                     receipt["status"] = "restore_failed"
+                    receipt["restore_error"] = "cannot restore: " + str(restore_error)
                     raise
                 finally:
                     write_json(report_path, report)
                 raise
+            successful.append((snapshot, receipt))
+            prune_snapshots(successful, args.keep_snapshots, roots["game"], after)
+            write_json(report_path, report)
         report["status"] = "complete"
         write_json(report_path, report)
         return 0
