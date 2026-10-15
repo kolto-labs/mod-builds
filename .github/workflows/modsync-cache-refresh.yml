@@ -288,6 +288,57 @@ jobs:
                     'private_backend': int(os.environ['PRIVATE_BACKEND'] == 'true'),
                     'persistence_succeeded': int(os.environ['PERSIST_RESULT'] == 'success')}
           print(json.dumps(totals, sort_keys=True))
+          providers = ('deadlystream', 'nexus', 'mega', 'google-drive', 'gamefront', 'http', 'unknown')
+          def classify_reason(reason):
+              if not isinstance(reason, str):
+                  return 'other', None
+              adapters = (
+                  'landing page has no unique archive endpoint; attachment selection/provider adapter required',
+                  'landing URL has no explicit archive endpoint',
+                  'archive endpoint returned HTML; provider adapter required',
+                  'download endpoint did not resolve to an attachment; provider adapter required',
+              )
+              if reason in adapters or reason in tuple(
+                  provider + ' requires an authenticated/provider adapter'
+                  for provider in ('nexus', 'mega', 'google-drive', 'gamefront')
+              ):
+                  return 'adapter-required', None
+              if reason == 'provider challenge/CAPTCHA; blocked-pending-user-action':
+                  return 'captcha-user-action', None
+              match = re.fullmatch(r'HTTP ([1-5][0-9]{2})', reason)
+              if match and int(match[1]) in (
+                  400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 411,
+                  412, 413, 414, 415, 416, 417, 418, 421, 422, 423, 424, 425,
+                  426, 428, 429, 431, 451, 500, 501, 502, 503, 504, 505,
+                  506, 507, 508, 510, 511,
+              ):
+                  return 'http-status', int(match[1])
+              if reason in ('network request failed', 'total download timeout', 'TimeoutError', 'URLError', 'HTTPException'):
+                  return 'network', None
+              if reason in (
+                  'not a supported archive (HTML and unknown payloads rejected)',
+                  'truncated archive', 'invalid manifest SHA256',
+                  'restore SHA256 mismatch', 'cache object conflict',
+                  'expected complete HTTP 200 archive',
+              ):
+                  return 'integrity', None
+              return 'other', None
+          unresolved = Counter()
+          for entry in entries:
+              if entry.get('status') != 'unresolved':
+                  continue
+              provider = entry.get('provider')
+              provider = provider if isinstance(provider, str) and provider in providers else 'unknown'
+              reason_class, http_status = classify_reason(entry.get('reason'))
+              unresolved[(provider, reason_class, http_status)] += 1
+          unresolved_totals = []
+          for (provider, reason_class, http_status), count in sorted(unresolved.items()):
+              diagnostic = {'unresolved_provider': provider, 'reason_class': reason_class, 'count': count}
+              if http_status is not None:
+                  diagnostic['http_status'] = http_status
+              unresolved_totals.append(json.dumps(diagnostic, sort_keys=True))
+          for diagnostic in unresolved_totals:
+              print(diagnostic)
           categories = Counter(entry.get('exception_category') for entry in entries)
           for stage in ('attempt-manifest', 'restore', 'refresh', 'persist-object', 'persist-manifest', 'evict'):
               failures = [entry for entry in entries if entry.get('stage') == stage]
@@ -309,6 +360,8 @@ jobs:
               if hidden_count:
                   print(f'private_exception_category={category} count={hidden_count}')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              for diagnostic in unresolved_totals:
+                  summary.write('Unresolved classification: ' + diagnostic + '\n\n')
               summary.write(f'Refresh complete: {complete}; state: {stop}.\n\n')
               summary.write(f'Due-link limit: {os.environ["MAX_ITEMS"]}. Completion applies only to selected links; fresh and authoritatively verified remote references are retained for 14 days.\n\n')
               summary.write(f'Final report available: {bool(data)}; reported entries: {len(entries)}; fresh: {counts["fresh"]}; verified: {counts["verified"]}; stale-unknown: {counts["stale-unknown"]}; unresolved: {counts["unresolved"]}.\n\n')
