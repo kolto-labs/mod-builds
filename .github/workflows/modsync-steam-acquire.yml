@@ -236,6 +236,28 @@ jobs:
                   output.write('steam_code=' + steam_code + '\n')
           raise SystemExit(0 if verified else 1)
           PY
+      - name: Check critical acquisition output
+        id: critical
+        if: always() && steps.gate.outputs.due == 'true'
+        shell: python
+        env:
+          GAME: ${{ matrix.game }}
+          ACQUISITION_OUTCOME: ${{ steps.acquisition.outcome }}
+        run: |
+          import os
+          from pathlib import Path
+
+          temporary = Path(os.environ['RUNNER_TEMP'])
+          game = os.environ['GAME']
+          outcome = os.environ['ACQUISITION_OUTCOME']
+          game_root = temporary / 'game'
+          receipt = temporary / 'steam-state' / ('baseline-' + game + '.json')
+          ok = outcome == 'success' and game_root.is_dir() and receipt.is_file()
+          reason = 'verified' if ok else 'acquisition did not produce a validated game directory and receipt'
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('ok=' + ('true' if ok else 'false') + '\n')
+              output.write('reason=' + reason + '\n')
+          print('Critical acquisition output: ' + reason)
       - name: Persist successful SteamCMD authentication
         if: success() && steps.acquisition.outcome == 'success'
         shell: python
@@ -341,7 +363,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Seal clean game and inventory only
-        if: steps.gate.outputs.due == 'true'
+        if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true'
         shell: bash
         env:
           GAME: ${{ matrix.game }}
@@ -410,7 +432,7 @@ jobs:
           python tools/modsync-ci/seal.py seal --source "$RUNNER_TEMP/clean" --destination "$RUNNER_TEMP/sealed/baseline.seal"
       - name: Enforce shared 10 GB cache budget
         id: budget
-        if: steps.gate.outputs.due == 'true'
+        if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true'
         shell: python
         env:
           GAME: ${{ matrix.game }}
@@ -425,10 +447,16 @@ jobs:
           print('Sealed baseline fits its budget (9 GB for both games; 1 GB nominal headroom). Older cache entries may cause LRU eviction despite daily access.')
       - uses: actions/cache/save@v4
         id: cache_save
-        if: steps.gate.outputs.due == 'true'
+        if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true'
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: steam-sealed-v3-excludingmovies-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+      - name: Hard-fail incomplete critical acquisition
+        if: always() && steps.gate.outputs.due == 'true' && steps.critical.outputs.ok != 'true'
+        shell: bash
+        run: |
+          echo "Critical Steam acquisition failed: no validated game directory and receipt were produced." >&2
+          exit 1
       - name: Publish sanitized status only
         if: always()
         shell: python
