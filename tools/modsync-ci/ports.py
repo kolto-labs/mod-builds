@@ -46,19 +46,44 @@ def run(command, source, private, stage, report, env):
         raise Blocked(stage + "_failed")
 
 
-def coverage(guide, converted):
+def coverage(guide, converted, report=None):
     text = guide.read_text(encoding="utf-8")
-    if "## Mod List\n" not in text:
+    allowed_sections = {
+        "Mod List",
+        "Optional Widescreen & Extended Widescreen Support Mods",
+        "Enhanced Widescreen Support Mods",
+    }
+    section = None
+    headings = []
+    sections = {}
+    for line in text.splitlines():
+        if line.startswith("# "):
+            section = None
+        elif line.startswith("## "):
+            section = line[3:].strip()
+            if section in allowed_sections:
+                sections.setdefault(section, 0)
+        elif line.startswith("### ") and section in allowed_sections:
+            headings.append(line[4:].strip())
+            sections[section] += 1
+    if "Mod List" not in sections:
         raise Blocked("unsupported_guide_structure")
-    section = text.split("## Mod List\n", 1)[1]
-    headings = re.findall(r"(?m)^### .+", section)
     document = tomllib.loads(converted.read_text(encoding="utf-8"))
     components = document.get("thisMod", document.get("Components", []))
+    if report is not None:
+        report["source_component_count"] = len(headings)
+        report["source_section_counts"] = sections
+        report["converted_component_count"] = (
+            len(components) if isinstance(components, list) else None
+        )
     if not headings or not isinstance(components, list) or len(components) != len(headings):
         raise Blocked("guide_component_coverage_mismatch")
     if any(not isinstance(component, dict) or not component.get("Instructions")
            for component in components):
         raise Blocked("guide_steps_without_instructions")
+    if any(component.get("Heading", component.get("Name")) != heading
+           for component, heading in zip(components, headings)):
+        raise Blocked("guide_component_order_or_heading_mismatch")
     return len(components)
 
 
@@ -192,7 +217,7 @@ def execute(args, report):
         raise Blocked("guide_changed_during_conversion")
     report["converted_sha256"] = digest(converted)
     report["stage"] = "coverage"
-    report["component_count"] = coverage(guide, converted)
+    report["component_count"] = coverage(guide, converted, report)
     if args.implementation == "typescript":
         report["stage"] = "review"
         choices = review_manifest(args.review_manifest, guide, converted)
