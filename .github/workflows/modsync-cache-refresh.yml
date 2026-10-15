@@ -1,0 +1,244 @@
+name: ModSync archive cache refresh
+on:
+  workflow_dispatch:
+    inputs:
+      max-items:
+        description: 'Due links to attempt (1–10)'
+        type: number
+        default: 10
+  schedule:
+    - cron: '41 2 * * *'
+permissions:
+  contents: read
+concurrency:
+  group: modsync-archive-cache
+  cancel-in-progress: false
+jobs:
+  refresh:
+    if: github.repository == 'kolto-labs/mod-builds' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    runs-on: ubuntu-latest
+    timeout-minutes: 55
+    env:
+      RCLONE_CONFIG_MODCACHE_TYPE: s3
+      RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
+      RCLONE_CONFIG_MODCACHE_REGION: auto
+      RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_ACCESS_KEY_ID }}
+      RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_SECRET_ACCESS_KEY }}
+      RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
+      MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Install archive and private backend tools
+        run: sudo apt-get update -qq && sudo apt-get install -y p7zip-full rclone
+      - name: Configure optional R2 and restore manifest only
+        id: backend
+        timeout-minutes: 3
+        shell: bash
+        run: |
+          umask 077
+          mkdir -p "$RUNNER_TEMP/mod-cache/objects"
+          if [[ -n "$RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID$RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY$RCLONE_CONFIG_MODCACHE_ENDPOINT" ]]; then
+            if [[ -z "$MOD_CACHE_BUCKET" || -z "$RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID" || -z "$RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY" || -z "$RCLONE_CONFIG_MODCACHE_ENDPOINT" ]]; then
+              echo 'Incomplete private backend configuration.' >&2
+              exit 1
+            fi
+            rclone copy "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives" "$RUNNER_TEMP/mod-cache" \
+              --include /manifest.json --exclude '**' --max-transfer 16M --cutoff-mode hard \
+              --retries 1 --contimeout 20s --timeout 60s > "$RUNNER_TEMP/cache-backend-private.log" 2>&1
+            echo 'enabled=true' >> "$GITHUB_OUTPUT"
+          fi
+      - name: Download and verify provider archives with bounded storage
+        timeout-minutes: 38
+        env:
+          MAX_ITEMS: ${{ github.event_name == 'schedule' && 20 || inputs.max-items }}
+          PRIVATE_BACKEND: ${{ steps.backend.outputs.enabled }}
+        shell: python
+        run: |
+          import importlib.util, json, os, shutil, signal, subprocess, sys, time
+          from pathlib import Path
+          os.umask(0o077)
+          root = Path(os.environ['RUNNER_TEMP'])
+          limit = int(os.environ['MAX_ITEMS'])
+          maximum = 20 if os.environ['GITHUB_EVENT_NAME'] == 'schedule' else 10
+          if not 1 <= limit <= maximum:
+              raise SystemExit('max-items outside allowed range')
+          started = time.time()
+          state = {'started_at': started, 'stop': 'running', 'exit_code': None}
+          progress = root / 'cache-progress.json'
+          progress.write_text(json.dumps(state))
+          script = '''import importlib.util, json, os, shutil, subprocess, sys, time
+          from pathlib import Path
+          spec = importlib.util.spec_from_file_location('cache', 'tools/modsync-ci/cache.py')
+          cache = importlib.util.module_from_spec(spec)
+          spec.loader.exec_module(cache)
+          limit = int(sys.argv[1])
+          root = Path(os.environ['RUNNER_TEMP']) / 'mod-cache'
+          manifest_path = root / 'manifest.json'
+          manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {'schema': 1, 'entries': {}}
+          if manifest.get('schema') != 1 or not isinstance(manifest.get('entries'), dict):
+              raise ValueError('unsupported manifest schema')
+          attempts = manifest.setdefault('refresh_attempts', {})
+          if not isinstance(attempts, dict):
+              raise ValueError('invalid refresh attempt history')
+          now = time.time()
+          items = cache.discover(['content/k1/full.md', 'content/k2/full.md'])
+          def priority(item):
+              old = manifest['entries'].get(item['id'], {})
+              checked = old.get('checked_at', 0)
+              attempted = attempts.get(item['id'], checked)
+              return (bool(attempted), attempted, item['id'])
+          def due(item):
+              old = manifest['entries'].get(item['id'], {})
+              age = now - old.get('checked_at', 0)
+              return not (old.get('status') == 'fresh' and 0 <= age < 14 * 86400)
+          selected = sorted(filter(due, items), key=priority)[:limit]
+          remote = ('MODCACHE:' + os.environ['MOD_CACHE_BUCKET'] + '/modsync-archives') if os.environ['PRIVATE_BACKEND'] == 'true' else None
+          report = {'schema': 1, 'command': 'refresh', 'entries': [], 'ok': True}
+          reserve = 3 * 1024 ** 3
+          def transfer(source, destination, immutable=False):
+              command = ['rclone', 'copyto', str(source), str(destination), '--retries', '1', '--contimeout', '20s', '--timeout', '60s']
+              if immutable:
+                  command.append('--immutable')
+              subprocess.run(command, check=True, timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+          for item in selected:
+              manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else manifest
+              manifest.setdefault('refresh_attempts', {})[item['id']] = time.time()
+              cache.atomic_json(manifest_path, manifest)
+              old = manifest['entries'].get(item['id'], {})
+              try:
+                  if remote and old.get('sha256'):
+                      path = cache.object_path(root, old)
+                      size = old['size']
+                      if not isinstance(size, int) or size < 0 or size + reserve >= shutil.disk_usage(root).free:
+                          raise ValueError('insufficient disk to restore selected object')
+                      temporary = root / 'objects' / '.download-restore'
+                      try:
+                          transfer(remote + '/objects/' + path.name, temporary)
+                      except subprocess.CalledProcessError as error:
+                          if error.returncode not in (3, 4):
+                              raise
+                      else:
+                          if temporary.stat().st_size != size or cache.digest(temporary) != old['sha256']:
+                              raise ValueError('restored object failed size/SHA256 verification')
+                          cache.validate(temporary, 300)
+                          os.replace(temporary, path)
+                      finally:
+                          temporary.unlink(missing_ok=True)
+                  available = shutil.disk_usage(root).free - reserve
+                  if available <= 0:
+                      raise ValueError('insufficient download disk')
+                  cache.discover = lambda guides, item=item: [item]
+                  item_report = root.parent / 'cache-item-report.json'
+                  cache.main(['refresh', '--cache-dir', str(root), '--max-age-days', '14',
+                              '--max-bytes', str(available), '--download-timeout', '600',
+                              '--integrity-timeout', '300', '--timeout', '20', '--retries', '1',
+                              '--report', str(item_report)])
+                  result = json.loads(item_report.read_text())
+                  report['entries'].extend(result['entries'])
+                  report['ok'] = report['ok'] and result['ok']
+              except (ValueError, KeyError, OSError, subprocess.SubprocessError):
+                  report['ok'] = False
+                  report['entries'].append({'id': item['id'], 'status': 'unresolved', 'reason': 'restore or refresh failed; private diagnostics withheld'})
+              finally:
+                  if remote:
+                      current = json.loads(manifest_path.read_text())
+                      uploaded = set()
+                      for entry in current['entries'].values():
+                          if entry.get('sha256') in uploaded:
+                              continue
+                          if cache.local_valid(root, entry):
+                              path = cache.object_path(root, entry)
+                              transfer(path, remote + '/objects/' + path.name, immutable=True)
+                              uploaded.add(entry['sha256'])
+                      transfer(manifest_path, remote + '/manifest.json')
+                      for path in (root / 'objects').iterdir():
+                          if path.is_file():
+                              path.unlink()
+                  cache.atomic_json(root.parent / 'cache-report.json', report)
+          cache.atomic_json(root.parent / 'cache-report.json', report)
+          sys.exit(0 if report['ok'] else 1)
+          '''
+          command = [sys.executable, '-c', script, str(limit)]
+          with (root / 'cache-private.log').open('w') as log:
+              process = subprocess.Popen(command, stdout=log, stderr=log, start_new_session=True)
+              try:
+                  while process.poll() is None:
+                      if time.time() - started >= 2100:
+                          state['stop'] = 'time limit; partial progress'
+                          break
+                      if shutil.disk_usage(root).free < 3 * 1024 ** 3:
+                          state['stop'] = 'disk limit; partial progress'
+                          break
+                      time.sleep(2)
+                  else:
+                      state['stop'] = 'finished'
+              finally:
+                  if process.poll() is None:
+                      os.killpg(process.pid, signal.SIGTERM)
+                      try:
+                          process.wait(timeout=10)
+                      except subprocess.TimeoutExpired:
+                          os.killpg(process.pid, signal.SIGKILL)
+                  state['exit_code'] = process.wait()
+                  progress.write_text(json.dumps(state))
+          raise SystemExit(0 if state['exit_code'] == 0 else 1)
+      - name: Preserve private objects even after refresh failure
+        id: persist
+        if: always() && steps.backend.outputs.enabled == 'true'
+        timeout-minutes: 8
+        shell: bash
+        run: |
+          umask 077
+          rclone copy "$RUNNER_TEMP/mod-cache/objects" "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives/objects" \
+            --exclude '.download-*' --immutable --retries 2 --contimeout 20s --timeout 60s \
+            > "$RUNNER_TEMP/cache-persist-private.log" 2>&1
+          if [[ -f "$RUNNER_TEMP/mod-cache/manifest.json" ]]; then
+            rclone copyto "$RUNNER_TEMP/mod-cache/manifest.json" "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives/manifest.json" \
+              --retries 2 --contimeout 20s --timeout 60s >> "$RUNNER_TEMP/cache-persist-private.log" 2>&1
+          fi
+      - name: Publish sanitized totals only
+        if: always()
+        env:
+          PRIVATE_BACKEND: ${{ steps.backend.outputs.enabled }}
+          PERSIST_RESULT: ${{ steps.persist.outcome }}
+          MAX_ITEMS: ${{ github.event_name == 'schedule' && 20 || inputs.max-items }}
+        shell: python
+        run: |
+          import json, os
+          from collections import Counter
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          def read(name):
+              try:
+                  return json.loads((root / name).read_text())
+              except (OSError, ValueError):
+                  return {}
+          data = read('cache-report.json')
+          progress = read('cache-progress.json')
+          entries = data.get('entries', [])
+          counts = Counter(entry.get('status') for entry in entries)
+          manifest = read('mod-cache/manifest.json').get('entries', {})
+          updated = sum(entry.get('checked_at', 0) >= progress.get('started_at', float('inf')) for entry in manifest.values())
+          verified = [entry for entry in manifest.values() if entry.get('checked_at', 0) >= progress.get('started_at', float('inf')) and entry.get('evidence') in ('download-200', 'download-without-upstream-metadata')]
+          stop = progress.get('stop', 'not started')
+          complete = data.get('ok') is True and progress.get('exit_code') == 0
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(f'Refresh complete: {complete}; state: {stop}.\n\n')
+              summary.write(f'Due-link limit: {os.environ["MAX_ITEMS"]}. Completion applies only to selected links; fresh remote references are retained.\n\n')
+              summary.write(f'Final report available: {bool(data)}; reported entries: {len(entries)}; fresh: {counts["fresh"]}; stale-unknown: {counts["stale-unknown"]}; unresolved: {counts["unresolved"]}.\n\n')
+              summary.write(f'Manifest entries checked this run: {updated}. Missing final report means unresolved and unprocessed totals are unknown; manifest counts are partial progress only.\n\n')
+              summary.write(f'Actual integrity-verified downloads: {len(verified)}; bytes: {sum(entry.get("size", 0) for entry in verified)}.\n\n')
+              saved = os.environ['PERSIST_RESULT'] == 'success'
+              summary.write(f'Private backend configured: {os.environ["PRIVATE_BACKEND"] == "true"}; persistence succeeded: {saved}. Without R2, downloads are runner-local only.\n\n')
+              summary.write('Selected due objects are restored individually and size/SHA256/archive verified before conditional refresh. Each object and the complete manifest are persisted before local eviction. Attempts rotate oldest first, including failures. Download cap follows available disk with a 3 GiB reserve; no corpus bulk pull. No public archive artifact is created.\n')
+      - name: Remove private diagnostics
+        if: always()
+        shell: python
+        run: |
+          import os
+          from pathlib import Path
+          root = Path(os.environ['RUNNER_TEMP'])
+          for name in ('cache-private.log', 'cache-backend-private.log', 'cache-persist-private.log', 'cache-report.json', 'cache-item-report.json', 'cache-progress.json'):
+              (root / name).unlink(missing_ok=True)
