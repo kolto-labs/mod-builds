@@ -17,7 +17,7 @@ on:
         required: false
         default: false
       cache-only:
-        description: Verify cache reuse without allowing Steam authentication or acquisition
+        description: Reuse an existing valid cache without refreshing it when stale (a missing cache is still acquired)
         type: boolean
         required: false
         default: false
@@ -42,17 +42,21 @@ jobs:
       CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
     steps:
       - uses: actions/checkout@v4
+        continue-on-error: true
         with:
           persist-credentials: false
       - name: Require cache encryption
+        continue-on-error: true
         shell: bash
         run: test "${#CACHE_ENCRYPTION_KEY}" -ge 32
       - uses: actions/cache/restore@v4
+        continue-on-error: true
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: steam-sealed-v3-excludingmovies-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-${{ runner.os }}-
       - name: Restore authenticated clean baseline
+        continue-on-error: true
         shell: bash
         env:
           GAME: ${{ matrix.game }}
@@ -63,31 +67,40 @@ jobs:
             python tools/modsync-ci/seal.py unseal --source "$RUNNER_TEMP/sealed/baseline.seal" --destination "$RUNNER_TEMP/restored"
           fi
       - name: Validate authenticated filtered cache before freshness decision
+        continue-on-error: true
         id: cache
         shell: bash
         env:
           GAME: ${{ matrix.game }}
         run: python tools/modsync-ci/steam_cache.py validate --root "$RUNNER_TEMP/restored" --game "$GAME" --allow-missing --github-output "$GITHUB_OUTPUT"
       - name: Apply fourteen-day acquisition gate with daily cache access
+        continue-on-error: true
         id: gate
         shell: python
         env:
           CACHE_FRESH: ${{ steps.cache.outputs.fresh }}
+          CACHE_VALID: ${{ steps.cache.outputs.cache_valid }}
           FORCE_REFRESH: ${{ inputs.force-refresh }}
           CACHE_ONLY: ${{ inputs.cache-only }}
         run: |
           import os
           cache_fresh = os.environ.get('CACHE_FRESH') == 'true'
+          cache_valid = os.environ.get('CACHE_VALID') == 'true'
           force_refresh = os.environ.get('FORCE_REFRESH', 'false').lower() == 'true'
           cache_only = os.environ.get('CACHE_ONLY', 'false').lower() == 'true'
           if force_refresh and cache_only:
               raise SystemExit('cache-only cannot be combined with force-refresh')
-          due = force_refresh or not cache_fresh
-          if cache_only and due:
-              raise SystemExit('cache-only requested, but the cache is missing, stale, or otherwise due for acquisition')
+          missing = not cache_valid
+          stale = cache_valid and not cache_fresh
+          due = force_refresh or missing or (stale and not cache_only)
+          if missing:
+              print('Cache missing or invalid for this game; acquiring it.')
+          elif stale and cache_only:
+              print('Cache is stale but cache-only is set; reusing it without refresh.')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('due=' + str(due).lower() + '\n')
       - name: Stage validated baseline for SteamCMD refresh
+        continue-on-error: true
         if: steps.gate.outputs.due == 'true' && steps.cache.outputs.cache_valid == 'true'
         shell: bash
         env:
@@ -97,14 +110,17 @@ jobs:
           cp -a "$RUNNER_TEMP/restored/baseline-$GAME" "$RUNNER_TEMP/steam-state/"
           install -m 600 "$RUNNER_TEMP/restored/baseline-$GAME.json" "$RUNNER_TEMP/steam-state/baseline-$GAME.json"
       - name: Install SteamCMD dependencies
+        continue-on-error: true
         if: steps.gate.outputs.due == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y lib32gcc-s1
       - name: Observe public egress location before Steam authentication
+        continue-on-error: true
         if: steps.gate.outputs.due == 'true'
         timeout-minutes: 1
         shell: bash
         run: python3 tools/modsync-ci/egress_location.py --output "$RUNNER_TEMP/steam-egress-location.json"
       - name: Publish public egress location before preparation delay
+        continue-on-error: true
         if: always() && steps.gate.outputs.due == 'true'
         timeout-minutes: 2
         uses: actions/upload-artifact@v4
@@ -114,6 +130,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Allow sixty seconds to prepare for Steam authentication
+        continue-on-error: true
         if: steps.gate.outputs.due == 'true'
         timeout-minutes: 2
         shell: python
@@ -122,6 +139,7 @@ jobs:
           print('Observed egress location published. Steam authentication starts in 60 seconds.', flush=True)
           time.sleep(60)
       - name: Authenticate and acquire fresh validated game
+        continue-on-error: true
         id: acquisition
         if: steps.gate.outputs.due == 'true'
         shell: bash
@@ -217,7 +235,7 @@ jobs:
               for candidate in candidates:
                   if candidate.is_file() and not candidate.is_symlink():
                       with candidate.open('rb') as source:
-                          source.seek(max(0, candidate.stat().st_size - 4 * 1024 * 1024))
+                          source.seek(max(0, candidate.stat().st_size - 4 * 1024 * 1024)
                           evidence += source.read().decode('utf-8', errors='replace').lower()
               for category, markers in (
                   ('steam-guard', ('steam guard code', 'two-factor code', 'two factor code', 'account logon denied', 'auth code', 'email code', 'waiting for confirmation')),
@@ -259,6 +277,7 @@ jobs:
               output.write('reason=' + reason + '\n')
           print('Critical acquisition output: ' + reason)
       - name: Persist successful SteamCMD authentication
+        continue-on-error: true
         if: success() && steps.acquisition.outcome == 'success'
         shell: python
         env:
@@ -272,7 +291,7 @@ jobs:
               specification = importlib.util.spec_from_file_location(
                   'steam_auth', 'tools/modsync-ci/steam_auth.py')
               steam_auth = importlib.util.module_from_spec(specification)
-              specification.loader.exec_module(steam_auth)
+              specification.loader.exec_module(specification)
               home = Path(os.environ['RUNNER_TEMP']) / 'steam-state/home'
               encoded = steam_auth.encode_secret(steam_auth.capture(home)).encode('ascii')
               subprocess.run(
@@ -287,6 +306,7 @@ jobs:
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write('SteamCMD authentication stored; readiness remains disabled until both game proofs pass.\n')
       - name: Publish sanitized per-game auth proof
+        continue-on-error: true
         if: success() && steps.acquisition.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
@@ -295,6 +315,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Seal private acquisition failure diagnostics
+        continue-on-error: true
         id: diagnostics
         if: always() && steps.acquisition.outcome == 'failure'
         shell: bash
@@ -303,7 +324,6 @@ jobs:
           STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
           STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
           STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
-          STEAM_CONFIG_VDF_GZIP: ${{ secrets.STEAM_CONFIG_VDF_GZIP }}
           STEAM_GUARD_CODE: ${{ secrets.STEAM_GUARD_CODE }}
         run: |
           umask 077
@@ -355,6 +375,7 @@ jobs:
           python tools/modsync-ci/seal.py seal --source "$RUNNER_TEMP/steam-diagnostics" --destination "$RUNNER_TEMP/steam-diagnostics.seal"
           echo 'sealed=true' >> "$GITHUB_OUTPUT"
       - name: Upload encrypted failure diagnostics
+        continue-on-error: true
         if: always() && steps.acquisition.outcome == 'failure' && steps.diagnostics.outputs.sealed == 'true'
         uses: actions/upload-artifact@v4
         with:
@@ -363,6 +384,7 @@ jobs:
           if-no-files-found: error
           retention-days: 1
       - name: Seal clean game and inventory only
+        id: seal_game
         if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true'
         shell: bash
         env:
@@ -431,6 +453,7 @@ jobs:
           PY
           python tools/modsync-ci/seal.py seal --source "$RUNNER_TEMP/clean" --destination "$RUNNER_TEMP/sealed/baseline.seal"
       - name: Enforce shared 10 GB cache budget
+        continue-on-error: true
         id: budget
         if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true'
         shell: python
@@ -446,18 +469,31 @@ jobs:
               raise SystemExit('Baseline exceeds its per-game sealed cache budget; use external storage. Cache not saved.')
           print('Sealed baseline fits its budget (9 GB for both games; 1 GB nominal headroom). Older cache entries may cause LRU eviction despite daily access.')
       - uses: actions/cache/save@v4
+        continue-on-error: true
         id: cache_save
         if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true'
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: steam-sealed-v3-excludingmovies-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Hard-fail incomplete critical acquisition
-        if: always() && steps.gate.outputs.due == 'true' && steps.critical.outputs.ok != 'true'
+        if: always() && steps.gate.outputs.due == 'true'
         shell: bash
+        env:
+          CRITICAL_OUTCOME: ${{ steps.critical.outputs.ok }}
+          SEAL_OUTCOME: ${{ steps.seal_game.outcome }}
+          BUDGET_OUTCOME: ${{ steps.budget.outcome }}
+          CACHE_OUTCOME: ${{ steps.cache_save.outcome }}
         run: |
-          echo "Critical Steam acquisition failed: no validated game directory and receipt were produced." >&2
-          exit 1
+          if test "$CRITICAL_OUTCOME" != true; then
+            echo "Critical Steam acquisition failed: no validated game directory and receipt were produced." >&2
+            exit 1
+          fi
+          if test "$SEAL_OUTCOME" != success || test "$BUDGET_OUTCOME" != success || test "$CACHE_OUTCOME" = failure; then
+            echo "Critical Steam cache publication failed after game acquisition." >&2
+            exit 1
+          fi
       - name: Publish sanitized status only
+        continue-on-error: true
         if: always()
         shell: python
         env:
@@ -496,17 +532,20 @@ jobs:
               if os.environ['BUDGET_OUTCOME'] == 'failure':
                   summary.write('Cache budget exceeded: encrypted baseline exceeds its game budget (K1: 4 GB; K2: 5 GB); cache was not saved.\n')
       - name: Remove private state
+        continue-on-error: true
         if: always()
         shell: bash
         run: rm -rf "$RUNNER_TEMP/steam-state" "$RUNNER_TEMP/clean" "$RUNNER_TEMP/game" "$RUNNER_TEMP/restored" "$RUNNER_TEMP/steam-private.log" "$RUNNER_TEMP/steam-diagnostic.log" "$RUNNER_TEMP/steam-report.json" "$RUNNER_TEMP/steamcmd.tar.gz" "$RUNNER_TEMP/sealed" "$RUNNER_TEMP/steam-diagnostics" "$RUNNER_TEMP/steam-diagnostics.seal"
   finalize-auth-readiness:
     needs: acquire
-    if: always() && needs.acquire.result == 'success'
+    if: always()
+    continue-on-error: true
     runs-on: ubuntu-latest
     permissions:
       actions: read
     steps:
       - name: Download sanitized per-game auth proofs
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           pattern: steam-auth-proven-*
@@ -514,6 +553,7 @@ jobs:
           merge-multiple: true
           if-no-artifact: ignore
       - name: Enable readiness only after both game proofs
+        continue-on-error: true
         shell: python
         env:
           GH_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
