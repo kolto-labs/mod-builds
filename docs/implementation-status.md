@@ -1,0 +1,31 @@
+# Implementation status
+
+Updated 2026-10-15. This ledger separates source checks, cache receipts, and
+actual full-install acceptance. None of the cache or production-gate evidence
+below proves a completed manual or Rust/TypeScript K1/K2 full install.
+
+## Verified
+
+- **K1 game cache:** In [run 38773654509](https://github.com/kolto-labs/mod-builds/actions/runs/38773654509), the K1 matrix job passed acquisition, auth-state save, movie-free cache sealing, budget check, and cache save. The overall matrix failed because K2 acquisition failed.
+- **Archive cache:** [run 38779960888](https://github.com/kolto-labs/mod-builds/actions/runs/38779960888) is a green single refresh. Later batches reported partial uploads of 9/10 and 3/10; [run 38780468602](https://github.com/kolto-labs/mod-builds/actions/runs/38780468602) and [run 38782060668](https://github.com/kolto-labs/mod-builds/actions/runs/38782060668) are not green. The latest failed during provider archive download/verification.
+- **R2 sample integrity:** An independent check covered a 25-entry manifest (19,890 bytes) and a sample object (10,465,786 bytes) whose object hash and archive integrity passed. This validates that sample, not full guide coverage or all referenced objects.
+- **Archive import dry run:** The latest operator receipt found 233 exact-URL-matched candidates: 98 planned, 115 ambiguous variants, and 20 unresolved; 124 candidates were unmatched. No preview directory was created. An earlier 115 stat-only eligible count is not the stricter import acceptance count.
+- **Archive import implementation:** Published source commit [e8608bb](https://github.com/kolto-labs/mod-builds/commit/e8608bb) passed independent review. A real application import copied one existing 1,193-byte archive at matched offset 23 and exited successfully; the record is `stale-unknown/local-import`. Independent post-read SHA-256 checks matched the original and private cached object to the manifest. The cache is `/home/brunner56/modsync-hot/ci-import-seed`; no `checked_at` or validators were recorded. This proves importing and verifying an existing source, not upstream freshness or whole-corpus caching.
+- **Rust production gates:** Formatting plus production build and strict Clippy with and without default features passed at [ccc4317](https://github.com/bodencrouch/ModSync.rs/commit/ccc4317c0738d9e39a017511eb74add7f71c209d). No separate Qt runtime or full-install acceptance was established.
+- **Rust install work:** Archive-aware method generation is still in progress; the production-gate pass does not complete it or establish a full install.
+- **Steam source changes:** [3df2c8c](https://github.com/kolto-labs/mod-builds/commit/3df2c8cf3884b15fa6ccf43024cce22c2e1265a9) adds egress-location reporting; [dda3bff](https://github.com/kolto-labs/mod-builds/commit/dda3bfff2ea6e58aac000f821d69afa777df456b) adds the bounded, backward-compatible auth bundle. Neither has a live auth run.
+
+## Open work
+
+- **R2 coverage:** The corpus remains partial. Reconcile the 115 ambiguous variants and 20 unresolved matched candidates against exact URL, payload identity, hash, and archive integrity; resolve the 124 unmatched candidates. The single-object import receipt is not corpus-wide cache or freshness proof. Continue bounded batches and independently verify stored objects; these remain implementation and evidence tasks.
+- **Manual full install:** `manual.py` has execution infrastructure but no accepted full-guide run. Original-installer unattended compatibility remains unverified: inspect each required original installer, implement any missing control, and verify patcher identity, target selection, output checks, snapshots, rollback, and per-step records. A reviewed plan alone is insufficient. This unfinished implementation and validation is not a request for external approval.
+- **TypeScript physical install:** Not implemented; do not mark complete or substitute Rust results. `installer.ts:227` refuses every physical run, `store.ts:652` explicitly forbids physical restore, and native patcher preimages are absent from `predictTouched`. Implement Node-owned physical execution, complete preimage prediction and checkpoint restore, then verify ordered K1/K2 runs against clean baselines. The Node ownership capability is in progress; guards must remain until recovery and subprocess quiescence are verified.
+- **Rust/TypeScript CLI and GUI full installs:** Still unverified. The available synthetic Linux successes ([CLI](https://github.com/bodencrouch/ModSync.rs/actions/runs/38509232684), [GUI](https://github.com/bodencrouch/ModSync.rs/actions/runs/38509549581)) ran at older source and are not real-game evidence. Close the Rust archive-aware method-generation work and other native review/selection gaps; separately implement the TypeScript physical-run and restore path above. Then run each lane against clean K1/K2 baselines and complete verified archive sets, recording ordered phase/step receipts and comparison to the manual reference. These are coding and validation tasks, not reasons to route TypeScript completion through Rust.
+- **Steam/K2:** Latest auth run [38777805330](https://github.com/kolto-labs/mod-builds/actions/runs/38777805330) failed on K2 and predates both source changes. There is no K2 success or post-bundle auth run. Fresh-run portability remains unproven. Wait for user readiness before any new auth request; then inspect the published egress artifact and handle any Steam mobile approval before judging the login result.
+
+## Next actions
+
+1. Integrate existing imports with cache refresh/restore while preserving unknown freshness; resolve candidate identity/provider handling, then independently verify bounded private-cache batches.
+2. Verify original-installer unattended support, implement missing adapters, and produce a real ordered manual reference run with verified snapshots and receipts.
+3. Implement TypeScript-owned physical execution, preimage prediction, and physical restore; continue Rust archive-aware generation and native review-gate work. Run clean K1/K2 lanes separately and compare with the manual reference.
+4. Resume Steam auth only after the user says they are ready; treat a successful bundle upload or K1 run as no proof of K2 saved-login portability.
