@@ -129,8 +129,17 @@ dispatch accepts 1–10, default 10. Never-attempted links come first, then olde
 attempt. Persisted `refresh_attempts` rotate failures too, preventing unresolved
 providers from monopolizing each batch.
 
+Manual dispatch may optionally set `candidate-id` to one exact ID from the
+`discover` report (64 lowercase hexadecimal characters), for example:
+`gh workflow run modsync-cache-refresh.yml -f candidate-id=<id>`. A selected ID
+must match exactly one currently discovered item; malformed or unknown IDs fail
+before provider downloads. This refreshes only that item, even if it was already
+attempted or is inside the freshness window. Leave the input empty for the normal
+due/oldest batch. URLs, guide replacements, and other selector values are not
+accepted.
+
 With private R2 configured, it pulls only `manifest.json` (16 MiB cap), then
-fetches the selected due entry's previous object individually. Size, SHA256 and
+fetches the selected entry's previous object individually. Size, SHA256 and
 archive integrity must pass before conditional upstream refresh. A missing
 object can trigger a new upstream download; corrupt restored bytes fail the item.
 Before publishing an object, it verifies content-hash identity and fetches any

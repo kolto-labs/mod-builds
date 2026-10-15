@@ -6,6 +6,10 @@ on:
         description: 'Due links to attempt (1–10)'
         type: number
         default: 10
+      candidate-id:
+        description: 'Optional exact discovered candidate ID (64 lowercase hex); retries that item only'
+        type: string
+        required: false
   schedule:
     - cron: '41 2 * * *'
 permissions:
@@ -56,6 +60,7 @@ jobs:
         timeout-minutes: 38
         env:
           MAX_ITEMS: ${{ github.event_name == 'schedule' && 20 || inputs.max-items }}
+          CANDIDATE_ID: ${{ inputs.candidate-id }}
           PRIVATE_BACKEND: ${{ steps.backend.outputs.enabled }}
         shell: python
         run: |
@@ -77,6 +82,9 @@ jobs:
           cache = importlib.util.module_from_spec(spec)
           spec.loader.exec_module(cache)
           limit = int(sys.argv[1])
+          candidate_id = os.environ.get('CANDIDATE_ID', '')
+          if candidate_id and not re.fullmatch(r'[0-9a-f]{64}', candidate_id):
+              raise SystemExit('candidate-id must be exactly 64 lowercase hexadecimal characters')
           root = Path(os.environ['RUNNER_TEMP']) / 'mod-cache'
           manifest_path = root / 'manifest.json'
           manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {'schema': 1, 'entries': {}}
@@ -87,6 +95,12 @@ jobs:
               raise ValueError('invalid refresh attempt history')
           now = time.time()
           items = cache.discover(['content/k1/full.md', 'content/k2/full.md'])
+          if candidate_id:
+              selected = [item for item in items if item.get('id') == candidate_id]
+              if len(selected) != 1:
+                  raise SystemExit('candidate-id does not match exactly one discovered item')
+          else:
+              selected = None
           def priority(item):
               old = manifest['entries'].get(item['id'], {})
               checked = old.get('checked_at', 0)
@@ -99,7 +113,8 @@ jobs:
                   old.get('status') == 'verified' and
                   old.get('evidence') == 'download-without-upstream-metadata')
               return not (upstream_checked and 0 <= age < 14 * 86400)
-          selected = sorted(filter(due, items), key=priority)[:limit]
+          if selected is None:
+              selected = sorted(filter(due, items), key=priority)[:limit]
           remote = ('MODCACHE:' + os.environ['MOD_CACHE_BUCKET'] + '/modsync-archives') if os.environ['PRIVATE_BACKEND'] == 'true' else None
           report = {'schema': 1, 'command': 'refresh', 'entries': [], 'ok': True}
           reserve = 3 * 1024 ** 3
@@ -173,10 +188,13 @@ jobs:
                   cache.discover = lambda guides, item=item: [item]
                   item_report = root.parent / 'cache-item-report.json'
                   item_report.unlink(missing_ok=True)
-                  cache.main(['refresh', '--cache-dir', str(root), '--max-age-days', '14',
-                              '--max-bytes', str(available), '--download-timeout', '600',
-                              '--integrity-timeout', '300', '--timeout', '20', '--retries', '1',
-                              '--report', str(item_report)])
+                  refresh_args = ['refresh', '--cache-dir', str(root), '--max-age-days', '14',
+                                  '--max-bytes', str(available), '--download-timeout', '600',
+                                  '--integrity-timeout', '300', '--timeout', '20', '--retries', '1',
+                                  '--report', str(item_report)]
+                  if candidate_id:
+                      refresh_args.append('--force')
+                  cache.main(refresh_args)
                   result = json.loads(item_report.read_text())
                   if remote:
                       stage = 'persist-object'
