@@ -206,10 +206,10 @@ def page_endpoint(response, item):
     origin = urlsplit(item["url"])
     if item["provider"] == "deadlystream":
         canonical = urlsplit(checked_url(response.geturl()))
-        for parsed in (origin, canonical):
+        for parsed, ports in ((origin, {"http": 80, "https": 443}), (canonical, {"https": 443})):
             checked_url(parsed.geturl())
-            if (parsed.scheme != "https" or parsed.hostname not in ("deadlystream.com", "www.deadlystream.com")
-                    or parsed.port not in (None, 443)):
+            if (parsed.scheme not in ports or parsed.hostname not in ("deadlystream.com", "www.deadlystream.com")
+                    or parsed.port not in (None, ports[parsed.scheme])):
                 raise ValueError("unsupported provider redirect")
         original_file = re.match(r"^/files/file/([0-9]+)(?:[-/]|$)", origin.path)
         canonical_file = re.match(r"^/files/file/([0-9]+)(?:[-/]|$)", canonical.path)
