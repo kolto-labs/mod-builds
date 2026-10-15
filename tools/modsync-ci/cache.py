@@ -344,17 +344,19 @@ def refresh_one(item, old, root, args, endpoint=None, depth=0):
                 raise ValueError("truncated archive")
             kind = validate(path, args.integrity_timeout)
             sha = digest(path)
-            os.replace(path, root / "objects" / sha)
+            if not (valid and old.get("sha256") == sha):
+                os.replace(path, root / "objects" / sha)
             etag = response.headers.get("ETag")
             modified = response.headers.get("Last-Modified")
             version = version_id(response.geturl())
-            known = bool(etag or modified or version)
+            known = bool(etag or modified)
             return {"sha256": sha, "size": size, "extension": kind,
                     "archive_name": archive_name(item, kind, response.geturl(),
                                                  response.headers.get("Content-Disposition")),
                     "endpoint_id": endpoint_key, "endpoint": clean_url(response.geturl()),
                     "etag": etag, "last_modified": modified, "version_id": version,
-                    "checked_at": now, "status": "fresh" if known else "stale-unknown",
+                    "checked_at": time.time(), "status": "fresh" if known else "verified",
+                    "metadata_unknown": not known,
                     "evidence": "download-200" if known else "download-without-upstream-metadata"}
         finally:
             path.unlink(missing_ok=True)
@@ -418,7 +420,10 @@ def main(argv=None):
             try:
                 valid = local_valid(root, old)
                 age = time.time() - old.get("checked_at", 0)
-                fresh = valid and old.get("status") == "fresh" and 0 <= age < args.max_age_days * 86400
+                upstream_checked = old.get("status") == "fresh" or (
+                    old.get("status") == "verified" and
+                    old.get("evidence") == "download-without-upstream-metadata")
+                fresh = valid and upstream_checked and 0 <= age < args.max_age_days * 86400
                 if args.command == "refresh":
                     cached = old if fresh and not args.force else refresh_one(item, old, root, args)
                     manifest["entries"][item["id"]] = cached
@@ -426,7 +431,7 @@ def main(argv=None):
                     atomic_json(manifest_path, manifest)
                 else:
                     if not fresh:
-                        raise ValueError("cache missing, corrupt, stale or metadata unknown; run refresh")
+                        raise ValueError("cache missing, corrupt, stale or upstream verification failed; run refresh")
                     source = object_path(root, old)
                     validate(source, args.integrity_timeout)
                     args.destination.mkdir(parents=True, exist_ok=True)
@@ -460,7 +465,9 @@ def main(argv=None):
                             os.link(temporary, args.destination / filename)
                     finally:
                         Path(temporary).unlink(missing_ok=True)
-                    entry.update(status="restored", sha256=old["sha256"], file=filename)
+                    entry.update(status="restored", sha256=old["sha256"], file=filename,
+                                 metadata_unknown=old.get("metadata_unknown", not bool(
+                                     old.get("etag") or old.get("last_modified"))))
             except (ValueError, OSError, HTTPException, subprocess.SubprocessError, zipfile.BadZipFile) as error:
                 entry.update(status="unresolved", reason=safe_reason(error))
                 if args.command == "refresh" and old:
@@ -469,7 +476,7 @@ def main(argv=None):
             report["entries"].append(entry)
         if args.command == "refresh":
             rclone(args, "push", root)
-    report["ok"] = all(entry.get("status") in ("fresh", "restored") for entry in report["entries"]) if args.command != "discover" else True
+    report["ok"] = all(entry.get("status") in ("fresh", "verified", "restored") for entry in report["entries"]) if args.command != "discover" else True
     if args.report:
         atomic_json(args.report, report)
     print(json.dumps(report, indent=2, sort_keys=True))
