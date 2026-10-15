@@ -127,13 +127,19 @@ class SteamAcquireTests(unittest.TestCase):
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group ownership")
     def test_timeout_stops_owned_process_group(self):
-        process = Mock(pid=123456, stdout=io.BytesIO(b"Controlled output\n"))
-        process.wait.return_value = 0
+        process = Mock(pid=123456, stdout=io.BytesIO(b"Controlled output\n"), returncode=None)
+        def wait():
+            process.returncode = -steam.signal.SIGKILL
+            return process.returncode
+        process.wait.side_effect = wait
         process.poll.return_value = None
         log = io.BytesIO()
         with patch.object(steam.subprocess, "Popen", return_value=process) as popen, patch.object(steam.os, "killpg") as killpg, patch("time.monotonic", side_effect=[0, 2]):
-            with self.assertRaises(subprocess.TimeoutExpired):
+            with self.assertRaises(steam.SteamProcessError) as raised:
                 steam.run_steam(Path("steamcmd.sh"), Path("private.script"), log, {"PATH":"safe"}, 1)
+            self.assertEqual(raised.exception.reason, "timeout")
+            self.assertEqual(raised.exception.category, "timeout")
+            self.assertEqual(raised.exception.returncode, -steam.signal.SIGKILL)
             self.assertTrue(popen.call_args.kwargs["start_new_session"])
             self.assertEqual(popen.call_args.kwargs["stdout"], subprocess.PIPE)
             self.assertEqual(popen.call_args.kwargs["stderr"], subprocess.STDOUT)
@@ -153,12 +159,19 @@ class SteamAcquireTests(unittest.TestCase):
             (b"No subscription", "no_subscription"),
         ):
             with self.subTest(category=category):
-                process = Mock(pid=123456, stdout=io.BytesIO(output))
+                process = Mock(pid=123456, stdout=io.BytesIO(output), returncode=None)
+                def wait():
+                    process.returncode = -steam.signal.SIGKILL
+                    return process.returncode
+                process.wait.side_effect = wait
                 process.poll.return_value = None
                 log = io.BytesIO()
                 with patch.object(steam.subprocess, "Popen", return_value=process), patch.object(steam.os, "killpg") as killpg:
-                    with self.assertRaisesRegex(RuntimeError, f"^SteamCMD: {category}$"):
+                    with self.assertRaisesRegex(steam.SteamProcessError, rf"^SteamCMD: {category} \(returncode={-steam.signal.SIGKILL}\)$") as raised:
                         steam.run_steam(Path("steamcmd.sh"), Path("private.script"), log, {"PATH":"safe"}, 1)
+                self.assertEqual(raised.exception.reason, category)
+                self.assertEqual(raised.exception.category, category)
+                self.assertEqual(raised.exception.returncode, -steam.signal.SIGKILL)
                 killpg.assert_called_once_with(123456, steam.signal.SIGKILL)
                 process.kill.assert_called_once()
                 process.wait.assert_called_once()
