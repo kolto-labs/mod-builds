@@ -227,23 +227,27 @@ def acquire_game(game: str, destination: Path, state_dir: Path, report: Path,
         raise ValueError("Report must not exist")
     lock = state_dir / "acquisition.lock"
     lock.mkdir(mode=0o700)
-    outcome = {"game": game, "app_id": APPS[game], "platform": "windows", "success": False}
+    outcome = {"game": game, "app_id": APPS[game], "platform": "windows", "success": False,
+               "used_saved_state": False}
     try:
         baseline = state_dir / f"baseline-{game}"
         receipt = state_dir / f"baseline-{game}.json"
-        script_content = script(game, baseline, username, password,
-                                environment.get("STEAM_GUARD_CODE"))
         steam_home = state_dir / "home"
         private_directory(steam_home)
         root = steam_home / "steamcmd"
         if root.exists():
             private_directory(root)
-        if not password and not environment.get("STEAM_CONFIG_VDF") and not (root / "config/config.vdf").is_file():
+        encoded = environment.get("STEAM_CONFIG_VDF")
+        used_saved_state = bool(encoded or (root / "config/config.vdf").is_file())
+        outcome["used_saved_state"] = used_saved_state
+        if not password and not used_saved_state:
             raise ValueError("A password or saved Steam configuration is required")
+        script_content = script(game, baseline, username,
+                                "" if used_saved_state else password,
+                                None if used_saved_state else environment.get("STEAM_GUARD_CODE"))
         command = root / ("steamcmd.sh" if host == "linux" else "steamcmd.exe")
         if not command.is_file():
             command = bootstrap(host, root)
-        encoded = environment.get("STEAM_CONFIG_VDF")
         if encoded:
             config = root / "config"
             private_directory(config)
