@@ -13,8 +13,8 @@ python3 tools/modsync-ci/cache.py restore --cache-dir .modsync-cache --destinati
 
 Use repeated `--guide content/k1/full.md` / `--guide content/k2/full.md` to select
 guides. Inline links, reference definitions and URL autolinks are recognized;
-fenced and inline code are excluded. All HTTP links are inventoried, including
-documentation links: unsupported or ambiguous links are reported unresolved.
+fenced and inline code are excluded. Only recognized archive URLs and provider
+file-page shapes are inventoried; ordinary documentation links are excluded.
 Discovery is an inventory, not a claim that every link is an archive.
 
 ## Providers and freshness
@@ -23,24 +23,31 @@ Direct `.zip`, `.7z`, `.rar` URLs and explicit DeadlyStream download/attachment
 endpoints are requested as archives. Landing pages are read with a 2 MiB limit;
 only a unique explicit archive/download link can resolve automatically. Multiple
 file options require an adapter. MEGA client-side decryption and Nexus authenticated
-downloads are unresolved and require a provider adapter. There is no CAPTCHA
-interaction, JavaScript execution, cookie scraping or arbitrary command hook.
+downloads are unresolved and require a provider adapter. Google Drive and
+GameFront also require adapters. R2 stores acquired bytes; it cannot resolve
+these provider requirements. The client maintains an in-memory cookie jar and
+sends a DeadlyStream Referer, without importing browser cookies, executing
+JavaScript, interacting with CAPTCHAs or running arbitrary command hooks.
 
 Refresh resolves landing pages again when due, then sends conditional GET to the
 actual archive endpoint using its saved ETag and/or Last-Modified. A verified local
 object plus endpoint HTTP 304 establishes freshness. A full HTTP 200 must pass
 archive integrity checks before publication; upstream ETag, Last-Modified or a
 provider version/file ID is recorded. Version IDs alone never suppress a due GET.
-Objects with no upstream metadata are retained as `stale-unknown` and the command
-fails. A local SHA256 match alone cannot establish or renew freshness. Any failed
-refresh invalidates the old freshness status while preserving the old bytes.
+With ETag or Last-Modified, a validated HTTP 200 produces `fresh`. Without either,
+it produces accepted status `verified`, `metadata_unknown=true` and evidence
+`download-without-upstream-metadata`: a complete integrity-checked download, but
+no validator for conditional reuse. Both statuses are reusable within the age
+window. A local SHA256 match alone cannot establish or renew freshness. An item
+refresh failure marks an existing entry `stale-unknown` while preserving its bytes.
+Workflow transfer failures are reported separately and do not prove an upstream check.
 
 Successful checks remain reusable for at most 14 days (`--max-age-days` may shorten
 this). `--force` checks immediately. Restore is offline and refuses expired,
-unknown or corrupt entries. Run refresh on an every-other-week schedule and before
-installation when restore is stale; scheduling belongs to the workflows. GitHub
-cron has no biweekly primitive: a weekly trigger with this 14-day gate is suitable,
-or an explicit alternating-week workflow gate. Preserve the cache between runs.
+unknown or corrupt entries. With `--remote`, restore transfers backend data first
+but never contacts providers. The implemented refresh workflow runs daily at
+02:41 UTC and attempts only due entries using the 14-day gate. Access alone does
+not renew `checked_at`; negative ages and ages of 14 days or more are rejected.
 
 ## Storage and installer contract
 
@@ -53,10 +60,13 @@ query parameters, fragments and credentials; errors omit network exception text.
 Raw guide URLs are used only in memory. Treat cached upstream validators as
 untrusted metadata and keep reports/cache private where appropriate.
 
-Restore copies archives atomically to `<URL-id>.<zip|7z|rar>` and reports each
-`id`, sanitized `url`, `file`, and `sha256`. Both Rust and TypeScript adapters must
-map the exact guide URL through SHA256 to these filenames; the names are deliberately
-independent of HTTP filenames. They should refuse an unsuccessful report before
+Restore preserves sanitized original archive names from Content-Disposition,
+then endpoint basenames, with a URL-ID-based fallback. The manifest stores
+`archive_name`; legacy entries derive a name. It reports `id`, sanitized `url`,
+`file`, and `sha256`. Adapters must use that mapping, not assume URL-ID filenames.
+Invalid names, case-insensitive collisions and conflicting destination contents
+fail closed; exact-name hash matches are accepted. Copied bytes are SHA256-checked
+before publication. Adapters should refuse an unsuccessful report before
 installing. Restore may produce a partial directory on failure: never treat directory
 presence as success. No extraction or install is performed here.
 
@@ -73,11 +83,110 @@ cache key and restore prefix (GitHub cache keys are immutable). Both installer j
 can read the same saved directory. Never run multiple concurrent writers.
 
 Optional `--remote remote:path` uses an already configured `rclone copy` backend:
-pull before refresh/restore and push after refresh. Only manifest/objects transfer;
+bulk pull of manifest and all objects before refresh/restore, push after refresh.
+Only manifest/objects transfer;
 temporary download files are excluded. Configure credentials outside the guide and
 CLI reports. `rclone` is optional for local/action-cache use. Backend transfer
 failure fails the command. Use a dedicated remote prefix and serialize all remote
 writers; rclone copy is not a distributed lock or transactional snapshot.
+
+## Implemented daily archive refresh
+
+Source: [archive workflow](../.github/workflows/modsync-cache-refresh.yml) and
+[`cache.py`](../tools/modsync-ci/cache.py). The workflow serializes writers in
+`kolto-labs/mod-builds`. Scheduled batches attempt up to 20 due links; manual
+dispatch accepts 1–10, default 10. Never-attempted links come first, then oldest
+attempt. Persisted `refresh_attempts` rotate failures too, preventing unresolved
+providers from monopolizing each batch.
+
+With private R2 configured, it pulls only `manifest.json` (16 MiB cap), then
+fetches the selected due entry's previous object individually. Size, SHA256 and
+archive integrity must pass before conditional upstream refresh. A missing
+object can trigger a new upstream download; corrupt restored bytes fail the item.
+Before publishing an object, it verifies content-hash identity and fetches any
+existing remote copy to check size/SHA256. It persists objects before the complete
+manifest, then evicts local objects. An always-run persistence step also attempts
+to preserve completed objects and the manifest after failure.
+
+The worker reserves 3 GiB of disk, caps downloads by available space, and stops
+after about 35 minutes or on low disk. Per-item download/backend transfers are
+bounded at 600 seconds, integrity at 300 seconds, with a 20-second socket timeout
+and one request retry. Only sanitized totals/failure stages are published; private
+diagnostics are removed. No public archive artifact is created. Without R2,
+downloads are runner-local only: this workflow does not save an Actions fallback.
+
+This incremental per-object pull is workflow behavior, not generic CLI behavior.
+The [automated](../.github/workflows/modsync-install.yml) and
+[manual](../.github/workflows/modsync-manual.yml) consumers currently use the CLI's
+bulk restore with read-only R2 credentials, or unseal an existing
+`modsync-archives-sealed-v1-` Actions-cache fallback when no remote is configured.
+
+## Why GitHub cache for games and R2 for mod archives?
+
+The stores serve different payloads. The
+[Steam workflow](../.github/workflows/modsync-steam-acquire.yml) keeps authenticated
+encrypted clean-game baselines in Actions cache, enforcing 4 GB for K1 and 5 GB
+for K2: 9 GB combined with nominal 1 GB headroom in the default shared 10 GB
+repository cache allowance. Over-budget baselines fail before save. Private R2
+holds the larger mod archive object corpus. A roughly 61 GB measured local
+archive corpus exceeds that default allowance; it is neither a current R2
+occupancy measurement nor the exact set required by both guides. Not all local
+archives need to be uploaded or downloaded for each install. External storage
+could also hold game baselines; the current split is an implementation choice.
+
+GitHub currently documents a **default 10 GB per repository**, eviction after
+**more than seven days without access**, and oldest-access eviction at capacity.
+Additional paid cache storage can be configured; 10 GB is not a fixed platform
+maximum. Steam acquisition runs daily at 03:17 UTC when `STEAM_AUTH_READY=true`:
+daily restore refreshes access, while acquisition normally waits 14 days. Manual
+dispatch forces acquisition. Access does not renew the acquisition timestamp or
+prevent capacity eviction, particularly while old immutable keys coexist with
+replacement baselines.
+
+Artifacts and Git LFS are not free unlimited alternatives. Artifact retention
+and plan-dependent storage billing apply; LFS meters storage and download
+bandwidth. R2 also charges beyond its free storage/operation allowance; Standard
+storage includes 10 GB-month monthly and has no egress bandwidth charges.
+Current official references:
+
+- [GitHub cache limits and eviction](https://docs.github.com/en/actions/using-workflows/caching-dependencies-to-speed-up-workflows#usage-limits-and-eviction-policy)
+- [Actions billing and artifact storage](https://docs.github.com/en/billing/concepts/product-billing/github-actions)
+- [Git LFS billing](https://docs.github.com/en/billing/concepts/product-billing/git-lfs)
+- [Cloudflare R2 pricing](https://developers.cloudflare.com/r2/pricing/)
+
+## Movie-free encrypted game cache: v3 scope
+
+Before sealing, acquisition verifies its complete staging copy against the source
+inventory, then removes every case-insensitive `*.bik` file at every depth from
+the generated cache copy. The canonical acquired baseline remains intact. This
+saves cache space, not the initial Steam download, and does not filter mod archives.
+
+Only encrypted `sealed/*.seal` is saved under
+`steam-sealed-v3-excludingmovies-<game>-<OS>-...`; authentication/configuration
+state is outside that clean-game tree. The envelope includes the preserved source
+inventory, filtered inventory, `refreshed-at`, and `cache-scope.json` containing
+schema, game, excluded pattern/count/bytes and source-receipt SHA256.
+
+Both install consumers require this v3 scope and an age strictly below 14 days.
+They verify the original receipt hash, derive the exact filtered inventory by
+excluding BIK paths, check exclusion totals, reject remaining BIK paths, and
+verify both restored tree and independent install copy. This proves a filtered
+baseline, not a complete playable installation. See [Steam cache scope](steam.md#encrypted-game-cache-scope).
+
+## Completion evidence
+
+As of 2026-10-15, R2 has partial actual archive objects; manifest references and
+discovery counts do not prove that every object exists or every required archive
+is available. The latest inspected refresh
+[run 38770674881](https://github.com/kolto-labs/mod-builds/actions/runs/38770674881)
+failed at `persist-manifest`. Final totals reported zero new verified downloads,
+one unresolved entry and `refresh_complete=0`, despite final persistence reporting
+success. These per-run totals are not a bucket inventory.
+
+Neither this state nor a successful bounded batch establishes that all 357
+candidates were downloaded, that Nexus/MEGA requirements are resolved, or that a
+full install is green. Confirm actual objects and unexpired accepted entries for
+every required guide choice; installation needs its own successful receipts.
 
 ## Limits and exit codes
 
