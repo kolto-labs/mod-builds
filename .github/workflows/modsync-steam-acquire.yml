@@ -7,7 +7,7 @@ permissions:
   contents: read
 jobs:
   acquire:
-    if: github.repository == 'kolto-labs/mod-builds' && (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    if: github.repository == 'kolto-labs/mod-builds' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'schedule' && vars.STEAM_AUTH_READY == 'true'))
     runs-on: ubuntu-latest
     timeout-minutes: 60
     concurrency:
@@ -164,6 +164,37 @@ jobs:
                   output.write('steam_code=' + steam_code + '\n')
           raise SystemExit(0 if verified else 1)
           PY
+      - name: Persist successful SteamCMD authentication
+        if: success() && steps.acquisition.outcome == 'success'
+        shell: python
+        env:
+          GH_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+        run: |
+          import base64, gzip, os, subprocess
+          from pathlib import Path
+
+          try:
+              configuration = Path(os.environ['RUNNER_TEMP']) / 'steam-state/home/steamcmd/config/config.vdf'
+              content = configuration.read_bytes()
+              if not content:
+                  raise ValueError()
+              encoded = base64.b64encode(gzip.compress(content))
+              if len(encoded) > 48 * 1024:
+                  raise ValueError()
+              subprocess.run(
+                  ['gh', 'secret', 'set', 'STEAM_CONFIG_VDF_GZIP', '-R', os.environ['GITHUB_REPOSITORY']],
+                  input=encoded, capture_output=True, check=True,
+              )
+              subprocess.run(
+                  ['gh', 'variable', 'set', 'STEAM_AUTH_READY', '--body', 'true',
+                   '-R', os.environ['GITHUB_REPOSITORY']],
+                  capture_output=True, check=True,
+              )
+          except Exception:
+              raise SystemExit('SteamCMD authentication persistence failed; private details suppressed.') from None
+          print('SteamCMD authentication stored; scheduled acquisition enabled.')
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write('SteamCMD authentication stored; scheduled acquisition enabled.\n')
       - name: Seal private acquisition failure diagnostics
         id: diagnostics
         if: always() && steps.acquisition.outcome == 'failure'
