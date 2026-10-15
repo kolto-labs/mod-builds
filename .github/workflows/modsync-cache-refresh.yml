@@ -93,7 +93,10 @@ jobs:
           def due(item):
               old = manifest['entries'].get(item['id'], {})
               age = now - old.get('checked_at', 0)
-              return not (old.get('status') == 'fresh' and 0 <= age < 14 * 86400)
+              upstream_checked = old.get('status') == 'fresh' or (
+                  old.get('status') == 'verified' and
+                  old.get('evidence') == 'download-without-upstream-metadata')
+              return not (upstream_checked and 0 <= age < 14 * 86400)
           selected = sorted(filter(due, items), key=priority)[:limit]
           remote = ('MODCACHE:' + os.environ['MOD_CACHE_BUCKET'] + '/modsync-archives') if os.environ['PRIVATE_BACKEND'] == 'true' else None
           report = {'schema': 1, 'command': 'refresh', 'entries': [], 'ok': True}
@@ -101,7 +104,10 @@ jobs:
           def transfer(source, destination, immutable=False):
               command = ['rclone', 'copyto', str(source), str(destination), '--retries', '1', '--contimeout', '20s', '--timeout', '60s']
               if immutable:
-                  command.append('--immutable')
+                  source = Path(source)
+                  command = ['rclone', 'copy', str(source.parent), str(destination).rsplit('/', 1)[0],
+                             '--include', '/' + source.name, '--exclude', '**', '--checksum', '--immutable',
+                             '--retries', '1', '--contimeout', '20s', '--timeout', '60s']
               subprocess.run(command, check=True, timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
           for item in selected:
               stage = 'attempt-manifest'
@@ -160,7 +166,7 @@ jobs:
                           if path.is_file():
                               path.unlink()
                   report['entries'].extend(result['entries'])
-                  report['ok'] = report['ok'] and result['ok'] and all(entry.get('status') == 'fresh' for entry in result['entries'])
+                  report['ok'] = report['ok'] and result['ok'] and all(entry.get('status') in ('fresh', 'verified') for entry in result['entries'])
               except Exception as error:
                   report['ok'] = False
                   failure = {'id': item['id'], 'status': 'unresolved', 'reason': 'item operation failed; private diagnostics withheld', 'stage': stage, 'exception_category': type(error).__name__}
@@ -204,7 +210,7 @@ jobs:
         run: |
           umask 077
           rclone copy "$RUNNER_TEMP/mod-cache/objects" "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives/objects" \
-            --exclude '.download-*' --immutable --retries 2 --contimeout 20s --timeout 60s \
+            --exclude '.download-*' --checksum --immutable --retries 2 --contimeout 20s --timeout 60s \
             > "$RUNNER_TEMP/cache-persist-private.log" 2>&1
           if [[ -f "$RUNNER_TEMP/mod-cache/manifest.json" ]]; then
             rclone copyto "$RUNNER_TEMP/mod-cache/manifest.json" "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives/manifest.json" \
@@ -235,8 +241,10 @@ jobs:
           updated = sum(entry.get('checked_at', 0) >= progress.get('started_at', float('inf')) for entry in manifest.values())
           verified = [entry for entry in manifest.values() if entry.get('checked_at', 0) >= progress.get('started_at', float('inf')) and entry.get('evidence') in ('download-200', 'download-without-upstream-metadata')]
           stop = progress.get('stop', 'not started')
-          complete = data.get('ok') is True and progress.get('exit_code') == 0
+          complete = data.get('ok') is True and progress.get('exit_code') == 0 and (
+              os.environ['PRIVATE_BACKEND'] != 'true' or os.environ['PERSIST_RESULT'] == 'success')
           totals = {'reported_entries': len(entries), 'fresh': counts['fresh'],
+                    'verified': counts['verified'],
                     'stale_unknown': counts['stale-unknown'], 'unresolved': counts['unresolved'],
                     'manifest_checked': updated, 'verified_downloads': len(verified),
                     'verified_bytes': sum(entry.get('size', 0) for entry in verified),
@@ -262,8 +270,8 @@ jobs:
                   print(f'private_exception_category={category} count={hidden_count}')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               summary.write(f'Refresh complete: {complete}; state: {stop}.\n\n')
-              summary.write(f'Due-link limit: {os.environ["MAX_ITEMS"]}. Completion applies only to selected links; fresh remote references are retained.\n\n')
-              summary.write(f'Final report available: {bool(data)}; reported entries: {len(entries)}; fresh: {counts["fresh"]}; stale-unknown: {counts["stale-unknown"]}; unresolved: {counts["unresolved"]}.\n\n')
+              summary.write(f'Due-link limit: {os.environ["MAX_ITEMS"]}. Completion applies only to selected links; fresh and authoritatively verified remote references are retained for 14 days.\n\n')
+              summary.write(f'Final report available: {bool(data)}; reported entries: {len(entries)}; fresh: {counts["fresh"]}; verified: {counts["verified"]}; stale-unknown: {counts["stale-unknown"]}; unresolved: {counts["unresolved"]}.\n\n')
               summary.write(f'Manifest entries checked this run: {updated}. Missing final report means unresolved and unprocessed totals are unknown; manifest counts are partial progress only.\n\n')
               summary.write(f'Actual integrity-verified downloads: {len(verified)}; bytes: {sum(entry.get("size", 0) for entry in verified)}.\n\n')
               saved = os.environ['PERSIST_RESULT'] == 'success'
