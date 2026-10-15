@@ -69,7 +69,7 @@ jobs:
           state = {'started_at': started, 'stop': 'running', 'exit_code': None}
           progress = root / 'cache-progress.json'
           progress.write_text(json.dumps(state))
-          script = '''import importlib.util, json, os, re, shutil, subprocess, sys, tempfile, time
+          script = '''import copy, importlib.util, json, os, re, shutil, subprocess, sys, tempfile, time, traceback
           from pathlib import Path
           spec = importlib.util.spec_from_file_location('cache', 'tools/modsync-ci/cache.py')
           cache = importlib.util.module_from_spec(spec)
@@ -116,7 +116,7 @@ jobs:
                           if error.returncode not in (3, 4):
                               raise
                       else:
-                          if existing.stat().st_size != original_size or cache.digest(existing).lower() != source.name.lower():
+                          if existing.is_file() and (existing.stat().st_size != original_size or cache.digest(existing).lower() != source.name.lower()):
                               raise ValueError('existing remote object failed size/SHA256 verification')
                   if source.stat().st_size != original_size or cache.digest(source).lower() != source.name.lower():
                       raise ValueError('object source changed before upload')
@@ -179,8 +179,9 @@ jobs:
                   if remote:
                       stage = 'persist-object'
                       current = json.loads(manifest_path.read_text())
+                      pending_metadata = copy.deepcopy(current['entries'])
                       uploaded = set()
-                      for entry in current['entries'].values():
+                      for entry in pending_metadata.values():
                           if entry.get('sha256') in uploaded:
                               continue
                           if cache.local_valid(root, entry):
@@ -198,6 +199,10 @@ jobs:
               except Exception as error:
                   report['ok'] = False
                   failure = {'id': item['id'], 'status': 'unresolved', 'reason': 'item operation failed; private diagnostics withheld', 'stage': stage, 'exception_category': type(error).__name__}
+                  failure['source_frames'] = [
+                      {'file': Path(frame.filename).name[:80], 'line': frame.lineno, 'function': frame.name[:80]}
+                      for frame in traceback.extract_tb(error.__traceback__)[-6:]
+                  ]
                   if isinstance(error, subprocess.CalledProcessError):
                       failure['returncode'] = error.returncode
                       failure['failure_category'] = getattr(error, 'failure_category', 'unclassified')
@@ -287,6 +292,9 @@ jobs:
               if failures:
                   codes = Counter(entry['returncode'] for entry in failures if isinstance(entry.get('returncode'), int))
                   print(json.dumps({'failure_stage': stage, 'count': len(failures), 'returncodes': dict(codes)}, sort_keys=True))
+                  for failure in failures[:10]:
+                      print(json.dumps({'failure_stage': stage, 'exception_category': failure.get('exception_category'),
+                                        'source_frames': failure.get('source_frames', [])}, sort_keys=True))
           try:
               private_log = (root / 'cache-private.log').read_text(errors='replace')
           except OSError:
