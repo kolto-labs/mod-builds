@@ -29,6 +29,26 @@ BOOTSTRAPS = {
     "windows": "https://steamcdn-a.akamaihd.net/client/installer/steamcmd.zip",
 }
 MAX_BOOTSTRAP = 64 * 1024 * 1024
+LOGIN_RESULTS = {
+    "InvalidPassword": "invalid_login",
+    "LoggedInElsewhere": "invalid_login",
+    "AccountLogonDenied": "guard_challenge",
+    "RateLimitExceeded": "rate_limit",
+    "TryAnotherCM": "service_unavailable",
+    "ServiceUnavailable": "service_unavailable",
+    "InvalidLoginAuthCode": "guard_challenge",
+}
+
+
+class SteamProcessError(RuntimeError):
+    def __init__(self, returncode: int, reason: str):
+        allowed = {"guard_challenge", "confirmation_required", "invalid_login",
+                   "no_subscription", "dependency", "output_capture_failed",
+                   "timeout", "failed"}
+        self.returncode = int(returncode)
+        self.reason = reason if reason in LOGIN_RESULTS or reason in allowed else "failed"
+        self.category = LOGIN_RESULTS.get(self.reason, self.reason)
+        super().__init__(f"SteamCMD: {self.reason} (returncode={self.returncode})")
 
 
 def token(value: str, *, path: bool = False) -> str:
@@ -140,6 +160,8 @@ def run_steam(command: Path, script_path: Path, log, environment: dict[str, str]
     import time
 
     markers = (
+        *((name, rb"\b" + name.encode("ascii") + rb"\b") for name in LOGIN_RESULTS),
+        ("dependency", rb"(?:libc\.so\.6|libstdc\+\+\.so\.6|ld-linux\.so\.2)[^\r\n]{0,160}(?:cannot open shared object|not found|no such file)|(?:missing|requires?|install)[^\r\n]{0,80}32.bit[^\r\n]{0,80}(?:libraries|libs|libc|libstdc)|error while loading shared libraries|linux32/steamcmd[^\r\n]{0,80}(?:not found|cannot execute|required file not found)"),
         ("guard_challenge", rb"(?:enter|provide|input|type)[^\r\n]{0,100}(?:steam guard|two.factor|authenticator|authentication|access code)"),
         ("guard_challenge", rb"(?:enter|provide|input|type)[^\r\n]{0,60}\bcode\b|(?:steam guard|two.factor|authenticator) code\s*:"),
         ("guard_challenge", rb"(?:steam guard|two.factor|authenticator)[^\r\n]{0,100}(?:code required|enter.*code|waiting for|approval required)"),
@@ -185,16 +207,18 @@ def run_steam(command: Path, script_path: Path, log, environment: dict[str, str]
         deadline = time.monotonic() + timeout
         while True:
             if failures:
-                raise RuntimeError("SteamCMD: " + failures[0])
+                raise SteamProcessError(process.poll() or -1, failures[0])
             code = process.poll()
             if code is not None and finished.is_set():
+                if code:
+                    raise SteamProcessError(code, "dependency" if code in (126, 127) else "failed")
                 return code
             remaining = deadline - time.monotonic()
             if remaining <= 0:
-                raise subprocess.TimeoutExpired(process.args, timeout)
+                raise SteamProcessError(process.poll() or -1, "timeout")
             ready.wait(min(0.1, remaining))
             ready.clear()
-    except BaseException:
+    except BaseException as error:
         # Never leave a credential-bearing Steam child running after timeout/interrupt.
         if os.name == "nt":
             subprocess.run(["taskkill", "/pid", str(process.pid), "/t", "/f"],
@@ -209,6 +233,8 @@ def run_steam(command: Path, script_path: Path, log, environment: dict[str, str]
         process.wait()
         if reader.ident is not None:
             reader.join(timeout=2)
+        if isinstance(error, SteamProcessError):
+            raise SteamProcessError(process.returncode, error.reason) from None
         raise
 
 
@@ -331,7 +357,7 @@ def acquire_game(game: str, destination: Path, state_dir: Path, report: Path,
             with open(os.devnull, "wb") as discarded:
                 code = run_steam(command, script_path, discarded, clean_env, timeout)
             if code:
-                raise RuntimeError("SteamCMD failed")
+                raise SteamProcessError(code, "dependency" if code in (126, 127) else "failed")
         verify_install(game, baseline, root)
         files = inventory(baseline)
         receipt.unlink(missing_ok=True)
