@@ -1,6 +1,16 @@
 name: ModSync Steam acquisition
 on:
   workflow_dispatch:
+    inputs:
+      game:
+        description: Game to acquire
+        type: choice
+        required: true
+        default: k1
+        options:
+          - k1
+          - k2
+          - both
   schedule:
     - cron: '17 3 * * *'
 permissions:
@@ -17,7 +27,7 @@ jobs:
       fail-fast: false
       max-parallel: 1
       matrix:
-        game: [k1, k2]
+        game: ${{ fromJSON((github.event_name == 'schedule' || inputs.game == 'both') && '["k1","k2"]' || (inputs.game == 'k2' && '["k2"]' || '["k1"]')) }}
     env:
       CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
     steps:
