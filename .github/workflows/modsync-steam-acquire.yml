@@ -42,21 +42,17 @@ jobs:
       CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
     steps:
       - uses: actions/checkout@v4
-        continue-on-error: true
         with:
           persist-credentials: false
       - name: Require cache encryption
-        continue-on-error: true
         shell: bash
         run: test "${#CACHE_ENCRYPTION_KEY}" -ge 32
       - uses: actions/cache/restore@v4
-        continue-on-error: true
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: steam-sealed-v3-excludingmovies-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
           restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-${{ runner.os }}-
       - name: Restore authenticated clean baseline
-        continue-on-error: true
         shell: bash
         env:
           GAME: ${{ matrix.game }}
@@ -67,14 +63,12 @@ jobs:
             python tools/modsync-ci/seal.py unseal --source "$RUNNER_TEMP/sealed/baseline.seal" --destination "$RUNNER_TEMP/restored"
           fi
       - name: Validate authenticated filtered cache before freshness decision
-        continue-on-error: true
         id: cache
         shell: bash
         env:
           GAME: ${{ matrix.game }}
         run: python tools/modsync-ci/steam_cache.py validate --root "$RUNNER_TEMP/restored" --game "$GAME" --allow-missing --github-output "$GITHUB_OUTPUT"
       - name: Apply fourteen-day acquisition gate with daily cache access
-        continue-on-error: true
         id: gate
         shell: python
         env:
@@ -102,7 +96,6 @@ jobs:
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('due=' + str(due).lower() + '\n')
       - name: Stage validated baseline for SteamCMD refresh
-        continue-on-error: true
         if: steps.gate.outputs.due == 'true' && steps.cache.outputs.cache_valid == 'true'
         shell: bash
         env:
@@ -112,7 +105,6 @@ jobs:
           cp -a "$RUNNER_TEMP/restored/baseline-$GAME" "$RUNNER_TEMP/steam-state/"
           install -m 600 "$RUNNER_TEMP/restored/baseline-$GAME.json" "$RUNNER_TEMP/steam-state/baseline-$GAME.json"
       - name: Install SteamCMD dependencies
-        continue-on-error: true
         if: steps.gate.outputs.due == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y lib32gcc-s1
       - name: Observe public egress location before Steam authentication
@@ -279,8 +271,9 @@ jobs:
               output.write('reason=' + reason + '\n')
           print('Critical acquisition output: ' + reason)
       - name: Persist successful SteamCMD authentication
+        id: persist_auth
         continue-on-error: true
-        if: success() && steps.acquisition.outcome == 'success'
+        if: always() && steps.acquisition.outcome == 'success' && steps.critical.outputs.ok == 'true'
         shell: python
         env:
           GH_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
@@ -293,7 +286,7 @@ jobs:
               specification = importlib.util.spec_from_file_location(
                   'steam_auth', 'tools/modsync-ci/steam_auth.py')
               steam_auth = importlib.util.module_from_spec(specification)
-              specification.loader.exec_module(specification)
+              specification.loader.exec_module(steam_auth)
               home = Path(os.environ['RUNNER_TEMP']) / 'steam-state/home'
               encoded = steam_auth.encode_secret(steam_auth.capture(home)).encode('ascii')
               subprocess.run(
@@ -309,7 +302,7 @@ jobs:
               summary.write('SteamCMD authentication stored; readiness remains disabled until both game proofs pass.\n')
       - name: Publish sanitized per-game auth proof
         continue-on-error: true
-        if: success() && steps.acquisition.outcome == 'success'
+        if: always() && steps.persist_auth.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: steam-auth-proven-${{ matrix.game }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -393,8 +386,12 @@ jobs:
           GAME: ${{ matrix.game }}
         run: |
           umask 077
+          if test ! -d "$RUNNER_TEMP/game" || test ! -f "$RUNNER_TEMP/steam-state/baseline-$GAME.json"; then
+            echo "Critical acquisition output is absent; refusing to seal a nonexistent game." >&2
+            exit 1
+          fi
           mkdir -p "$RUNNER_TEMP/clean" "$RUNNER_TEMP/sealed"
-          mv "$RUNNER_TEMP/game" "$RUNNER_TEMP/clean/baseline-$GAME"
+          mv -- "$RUNNER_TEMP/game" "$RUNNER_TEMP/clean/baseline-$GAME"
           cp "$RUNNER_TEMP/steam-state/baseline-$GAME.json" "$RUNNER_TEMP/clean/"
           python -c 'import time; print(time.time())' > "$RUNNER_TEMP/clean/refreshed-at"
           python - <<'PY'
@@ -457,7 +454,7 @@ jobs:
       - name: Enforce shared 10 GB cache budget
         continue-on-error: true
         id: budget
-        if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true'
+        if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true' && steps.seal_game.outcome == 'success'
         shell: python
         env:
           GAME: ${{ matrix.game }}
@@ -473,7 +470,7 @@ jobs:
       - uses: actions/cache/save@v4
         continue-on-error: true
         id: cache_save
-        if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true'
+        if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true' && steps.seal_game.outcome == 'success' && steps.budget.outcome == 'success'
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: steam-sealed-v3-excludingmovies-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -487,6 +484,7 @@ jobs:
           SEAL_OUTCOME: ${{ steps.seal_game.outcome }}
           BUDGET_OUTCOME: ${{ steps.budget.outcome }}
           CACHE_OUTCOME: ${{ steps.cache_save.outcome }}
+          PERSIST_OUTCOME: ${{ steps.persist_auth.outcome }}
         run: |
           if test "$GATE_OUTCOME" != success; then
             echo "Critical Steam workflow gate failed; no acquisition result is trustworthy." >&2
@@ -497,6 +495,10 @@ jobs:
           fi
           if test "$CRITICAL_OUTCOME" != true; then
             echo "Critical Steam acquisition failed: no validated game directory and receipt were produced." >&2
+            exit 1
+          fi
+          if test "$PERSIST_OUTCOME" != success; then
+            echo "Critical Steam authentication persistence failed after game acquisition." >&2
             exit 1
           fi
           if test "$SEAL_OUTCOME" != success || test "$BUDGET_OUTCOME" != success || test "$CACHE_OUTCOME" = failure; then
