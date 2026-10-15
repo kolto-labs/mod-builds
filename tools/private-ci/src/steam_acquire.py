@@ -173,6 +173,11 @@ def run_steam(command: Path, script_path: Path, log, environment: dict[str, str]
         ("no_cached_credentials", b"no cached credentials"),
     )
     patterns = [(category, re.compile(pattern, re.IGNORECASE)) for category, pattern in markers]
+    login_success = re.compile(
+        rb"Logging in[^\r\n]* to Steam Public\.\.\.OK|Waiting for user info\.\.\.OK|Logged in OK|Update state \([^\r\n]+\)[^\r\n]*progress:",
+        re.IGNORECASE,
+    )
+    confirmation_started = None
     ready = threading.Event()
     finished = threading.Event()
     failures = []
@@ -183,6 +188,7 @@ def run_steam(command: Path, script_path: Path, log, environment: dict[str, str]
                                cwd=command.parent, env=environment, **options)
 
     def capture() -> None:
+        nonlocal confirmation_started
         pending = b""
         try:
             while chunk := process.stdout.read(4096):
@@ -192,9 +198,19 @@ def run_steam(command: Path, script_path: Path, log, environment: dict[str, str]
                 if not failures:
                     for category, pattern in patterns:
                         if pattern.search(pending):
+                            if category == "confirmation_required":
+                                if confirmation_started is None:
+                                    confirmation_started = time.monotonic()
+                                pending = pending[pattern.search(pending).end():]
+                                ready.set()
+                                continue
                             failures.append(category)
                             ready.set()
                             break
+                if login_success.search(pending):
+                    confirmation_started = None
+                    pending = b""
+                    ready.set()
         except Exception:
             failures.append("output_capture_failed")
             ready.set()
@@ -212,12 +228,17 @@ def run_steam(command: Path, script_path: Path, log, environment: dict[str, str]
                 raise SteamProcessError(process.poll() or -1, failures[0])
             code = process.poll()
             if code is not None and finished.is_set():
+                if confirmation_started is not None:
+                    raise SteamProcessError(code, "confirmation_required")
                 if code:
                     raise SteamProcessError(code, "dependency" if code in (126, 127) else "failed")
                 return code
             remaining = deadline - time.monotonic()
+            if confirmation_started is not None:
+                remaining = min(remaining, confirmation_started + 300 - time.monotonic())
             if remaining <= 0:
-                raise SteamProcessError(process.poll() or -1, "timeout")
+                raise SteamProcessError(process.poll() or -1,
+                                        "confirmation_required" if confirmation_started is not None else "timeout")
             ready.wait(min(0.1, remaining))
             ready.clear()
     except BaseException as error:
