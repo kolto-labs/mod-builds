@@ -31,8 +31,10 @@ jobs:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
           persist-credentials: false
-      - name: Install archive and private backend tools
-        run: sudo apt-get update -qq && sudo apt-get install -y p7zip-full rclone
+      - name: Install archive tools
+        run: sudo apt-get update -qq && sudo apt-get install -y p7zip-full
+      - name: Install checksum-pinned rclone
+        run: python3 tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone-bin"
       - name: Configure optional R2 and restore manifest only
         id: backend
         timeout-minutes: 3
