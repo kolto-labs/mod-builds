@@ -370,9 +370,14 @@ def validate_operation(operation, roots):
     require(isinstance(operation, dict), "operation must be an object")
     kind = operation.get("type")
     if kind in ("extract", "copy"):
-        fields(operation, ("type", "source", "destination"))
+        fields(operation, ("type", "source", "destination"), ("expected_files",))
         path_token(operation["source"], roots, ("archives",) if kind == "extract" else ("archives", "extract"))
         path_token(operation["destination"], roots, ("extract",) if kind == "extract" else ("game",))
+        expected = operation.get("expected_files", {})
+        require(isinstance(expected, dict), "expected_files must be a mapping")
+        for token, digest in expected.items():
+            path_token(token, roots, ("game",))
+            validate_digest(digest)
     elif kind == "delete":
         fields(operation, ("type", "path"), ("missing_ok",))
         path_token(operation["path"], roots, ("game",))
@@ -682,6 +687,10 @@ def execute(operation, roots, log, deadline, rollback_reserve=None):
             extract(source, destination, deadline, rollback_reserve)
         else:
             copy_tree(source, destination, deadline)
+        for token, digest in operation.get("expected_files", {}).items():
+            target = path_token(token, roots, ("game",))
+            require(target.is_file() and sha256(target, deadline) == digest,
+                    "non-patcher expected file SHA256 mismatch")
     check_deadline(deadline)
 
 
