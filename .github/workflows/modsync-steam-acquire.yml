@@ -164,6 +164,74 @@ jobs:
                   output.write('steam_code=' + steam_code + '\n')
           raise SystemExit(0 if verified else 1)
           PY
+      - name: Seal private acquisition failure diagnostics
+        id: diagnostics
+        if: always() && steps.acquisition.outcome == 'failure'
+        shell: bash
+        env:
+          CACHE_ENCRYPTION_KEY: ${{ secrets.DIAGNOSTICS_ENCRYPTION_KEY }}
+          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+          STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+          STEAM_CONFIG_VDF_GZIP: ${{ secrets.STEAM_CONFIG_VDF_GZIP }}
+          STEAM_GUARD_CODE: ${{ secrets.STEAM_GUARD_CODE }}
+        run: |
+          umask 077
+          if test -z "$CACHE_ENCRYPTION_KEY"; then
+            exit 0
+          fi
+          python - <<'PY'
+          import base64, gzip, os, stat
+          from pathlib import Path
+
+          temporary = Path(os.environ['RUNNER_TEMP'])
+          destination = temporary / 'steam-diagnostics'
+          destination.mkdir(mode=0o700)
+          secrets = [value.encode() for name, value in os.environ.items()
+                     if name.startswith('STEAM_') and value]
+          for name in ('STEAM_CONFIG_VDF', 'STEAM_CONFIG_VDF_GZIP'):
+              value = os.environ.get(name, '')
+              if value:
+                  decoded = base64.b64decode(value, validate=True)
+                  if name.endswith('_GZIP'):
+                      decoded = gzip.decompress(decoded)
+                  if decoded:
+                      secrets.append(decoded)
+          logs = temporary / 'steam-state/home/steamcmd/logs'
+          candidates = [(temporary / name, Path(name)) for name in
+                        ('steam-private.log', 'steam-diagnostic.log')]
+          if logs.resolve() == logs.absolute() and logs.is_dir():
+              candidates += [(source, Path('steamcmd/logs') / source.name)
+                             for source in logs.glob('*.txt')]
+          for source, relative in candidates:
+              if source.resolve() != source.absolute():
+                  continue
+              try:
+                  descriptor = os.open(source, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+              except FileNotFoundError:
+                  continue
+              with os.fdopen(descriptor, 'rb') as incoming:
+                  metadata = os.fstat(incoming.fileno())
+                  if not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1:
+                      continue
+                  content = incoming.read()
+              for secret in sorted(set(secrets), key=len, reverse=True):
+                  content = content.replace(secret, b'[REDACTED]')
+              target = destination / relative
+              target.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+              with target.open('xb') as outgoing:
+                  outgoing.write(content)
+          PY
+          python tools/modsync-ci/seal.py seal --source "$RUNNER_TEMP/steam-diagnostics" --destination "$RUNNER_TEMP/steam-diagnostics.seal"
+          echo 'sealed=true' >> "$GITHUB_OUTPUT"
+      - name: Upload encrypted failure diagnostics
+        if: always() && steps.acquisition.outcome == 'failure' && steps.diagnostics.outputs.sealed == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: steam-diagnostics-${{ matrix.game }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/steam-diagnostics.seal
+          if-no-files-found: error
+          retention-days: 1
       - name: Seal clean game and inventory only
         if: steps.gate.outputs.due == 'true'
         shell: bash
@@ -234,4 +302,4 @@ jobs:
       - name: Remove private state
         if: always()
         shell: bash
-        run: rm -rf "$RUNNER_TEMP/steam-state" "$RUNNER_TEMP/clean" "$RUNNER_TEMP/game" "$RUNNER_TEMP/restored" "$RUNNER_TEMP/steam-private.log" "$RUNNER_TEMP/steam-diagnostic.log" "$RUNNER_TEMP/steam-report.json" "$RUNNER_TEMP/steamcmd.tar.gz" "$RUNNER_TEMP/sealed"
+        run: rm -rf "$RUNNER_TEMP/steam-state" "$RUNNER_TEMP/clean" "$RUNNER_TEMP/game" "$RUNNER_TEMP/restored" "$RUNNER_TEMP/steam-private.log" "$RUNNER_TEMP/steam-diagnostic.log" "$RUNNER_TEMP/steam-report.json" "$RUNNER_TEMP/steamcmd.tar.gz" "$RUNNER_TEMP/sealed" "$RUNNER_TEMP/steam-diagnostics" "$RUNNER_TEMP/steam-diagnostics.seal"
