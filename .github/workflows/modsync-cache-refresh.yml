@@ -69,7 +69,7 @@ jobs:
           state = {'started_at': started, 'stop': 'running', 'exit_code': None}
           progress = root / 'cache-progress.json'
           progress.write_text(json.dumps(state))
-          script = '''import importlib.util, json, os, shutil, subprocess, sys, time
+          script = '''import importlib.util, json, os, re, shutil, subprocess, sys, tempfile, time
           from pathlib import Path
           spec = importlib.util.spec_from_file_location('cache', 'tools/modsync-ci/cache.py')
           cache = importlib.util.module_from_spec(spec)
@@ -105,10 +105,38 @@ jobs:
               command = ['rclone', 'copyto', str(source), str(destination), '--retries', '1', '--contimeout', '20s', '--timeout', '60s']
               if immutable:
                   source = Path(source)
-                  command = ['rclone', 'copy', str(source.parent), str(destination).rsplit('/', 1)[0],
-                             '--include', '/' + source.name, '--exclude', '**', '--checksum', '--immutable',
-                             '--retries', '1', '--contimeout', '20s', '--timeout', '60s']
-              subprocess.run(command, check=True, timeout=600, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                  if not re.fullmatch('[0-9a-fA-F]{64}', source.name) or cache.digest(source).lower() != source.name.lower():
+                      raise ValueError('object source failed SHA256 identity verification')
+                  original_size = source.stat().st_size
+                  with tempfile.TemporaryDirectory(prefix='cache-object-', dir=root.parent) as directory:
+                      existing = Path(directory) / 'existing'
+                      try:
+                          transfer(destination, existing)
+                      except subprocess.CalledProcessError as error:
+                          if error.returncode not in (3, 4):
+                              raise
+                      else:
+                          if existing.stat().st_size != original_size or cache.digest(existing).lower() != source.name.lower():
+                              raise ValueError('existing remote object failed size/SHA256 verification')
+                  if source.stat().st_size != original_size or cache.digest(source).lower() != source.name.lower():
+                      raise ValueError('object source changed before upload')
+                  command.append('--checksum')
+              with tempfile.TemporaryFile() as diagnostics:
+                  try:
+                      subprocess.run(command, check=True, timeout=600, stdout=subprocess.DEVNULL, stderr=diagnostics)
+                  except subprocess.CalledProcessError as error:
+                      diagnostics.seek(0)
+                      message = diagnostics.read(65536).decode('utf-8', errors='replace').lower()
+                      categories = (
+                          ('permission', ('access denied', 'accessdenied', 'permission denied', 'forbidden', 'unauthorized', 'status code: 403')),
+                          ('flag', ('unknown flag', 'unknown shorthand flag', 'flag needs an argument', 'invalid argument')),
+                          ('immutable', ('immutable',)),
+                          ('network', ('timeout', 'timed out', 'connection', 'no such host', 'network', 'tls handshake')),
+                      )
+                      error.failure_category = next((category for category, markers in categories if any(marker in message for marker in markers)), 'unclassified')
+                      raise
+              if immutable and (source.stat().st_size != original_size or cache.digest(source).lower() != source.name.lower()):
+                  raise ValueError('object source changed during upload')
           for item in selected:
               stage = 'attempt-manifest'
               result = None
@@ -172,6 +200,7 @@ jobs:
                   failure = {'id': item['id'], 'status': 'unresolved', 'reason': 'item operation failed; private diagnostics withheld', 'stage': stage, 'exception_category': type(error).__name__}
                   if isinstance(error, subprocess.CalledProcessError):
                       failure['returncode'] = error.returncode
+                      failure['failure_category'] = getattr(error, 'failure_category', 'unclassified')
                   report['entries'].append(failure)
               finally:
                   cache.atomic_json(root.parent / 'cache-report.json', report)
