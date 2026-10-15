@@ -92,6 +92,8 @@ jobs:
               raise SystemExit('cache-only cannot be combined with force-refresh')
           missing = not cache_valid
           stale = cache_valid and not cache_fresh
+          if cache_only and missing:
+              raise SystemExit('cache-only requested, but the cache is missing or invalid; Steam authentication is forbidden')
           due = force_refresh or missing or (stale and not cache_only)
           if missing:
               print('Cache missing or invalid for this game; acquiring it.')
