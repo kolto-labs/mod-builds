@@ -189,15 +189,23 @@ jobs:
         env:
           ACQUISITION_DUE: ${{ steps.gate.outputs.due }}
           ACQUISITION_REASON: ${{ steps.acquisition.outputs.reason }}
+          ACQUISITION_EXCEPTION: ${{ steps.acquisition.outputs.exception_class }}
+          ACQUISITION_FRAMES: ${{ steps.acquisition.outputs.exception_frames }}
           CACHE_SAVE_OUTCOME: ${{ steps.cache_save.outcome }}
           JOB_STATUS: ${{ job.status }}
           BUDGET_OUTCOME: ${{ steps.budget.outcome }}
         run: |
-          import os
+          import os, re
           reason = os.environ.get('ACQUISITION_REASON', '')
           allowed = {'verified', 'steam-guard', 'auth', 'ownership', 'network-or-timeout', 'adapter-error', 'unknown'}
           reason = reason if reason in allowed else 'setup-or-cache-failure'
           print('Steam acquisition status: ' + reason)
+          category = os.environ.get('ACQUISITION_EXCEPTION', '')
+          frames = os.environ.get('ACQUISITION_FRAMES', '')
+          if re.fullmatch(r'[A-Za-z]{1,40}', category):
+              print('Steam exception category: ' + category)
+          if re.fullmatch(r'[A-Za-z0-9_.:,<>-]{1,600}', frames):
+              print('Steam failure frames: ' + frames)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               if os.environ['ACQUISITION_DUE'] == 'false':
                   summary.write('Authenticated baseline is younger than fourteen days; acquisition skipped. Daily cache restore refreshes access within the seven-day eviction window.\n')
