@@ -136,12 +136,64 @@ def verify_install(game: str, directory: Path, steam_root: Path) -> None:
 
 
 def run_steam(command: Path, script_path: Path, log, environment: dict[str, str], timeout: int) -> int:
+    import threading
+    import time
+
+    markers = (
+        ("guard_challenge", rb"(?:enter|provide|input|type)[^\r\n]{0,100}(?:steam guard|two.factor|authenticator|authentication|access code)"),
+        ("guard_challenge", rb"(?:enter|provide|input|type)[^\r\n]{0,60}\bcode\b|(?:steam guard|two.factor|authenticator) code\s*:"),
+        ("guard_challenge", rb"(?:steam guard|two.factor|authenticator)[^\r\n]{0,100}(?:code required|enter.*code|waiting for|approval required)"),
+        ("confirmation_required", rb"(?:please\s+)?(?:confirm|approve)[^\r\n]{0,100}(?:login|log.on|sign.in|steam mobile|steam app)"),
+        ("confirmation_required", rb"waiting for[^\r\n]{0,100}(?:confirmation|approval)"),
+        ("invalid_login", rb"invalid (?:password|login|credentials)|invalidpassword|accountlogondenied|incorrect (?:password|login|credentials)|login failure|logon failure"),
+        ("no_subscription", rb"no subscription|nosubscription|no licenses|missing subscription"),
+    )
+    patterns = [(category, re.compile(pattern, re.IGNORECASE)) for category, pattern in markers]
+    ready = threading.Event()
+    finished = threading.Event()
+    failures = []
     options = {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP} if os.name == "nt" else {"start_new_session": True, "umask": 0o077}
     process = subprocess.Popen([str(command), "+runscript", str(script_path)],
-                               stdin=subprocess.DEVNULL, stdout=log, stderr=log,
+                               stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                               bufsize=0,
                                cwd=command.parent, env=environment, **options)
+
+    def capture() -> None:
+        pending = b""
+        try:
+            while chunk := process.stdout.read(4096):
+                log.write(chunk)
+                log.flush()
+                pending = (pending + chunk)[-8192:]
+                if not failures:
+                    for category, pattern in patterns:
+                        if pattern.search(pending):
+                            failures.append(category)
+                            ready.set()
+                            break
+        except Exception:
+            failures.append("output_capture_failed")
+            ready.set()
+        finally:
+            process.stdout.close()
+            finished.set()
+            ready.set()
+
+    reader = threading.Thread(target=capture, daemon=True)
     try:
-        return process.wait(timeout=timeout)
+        reader.start()
+        deadline = time.monotonic() + timeout
+        while True:
+            if failures:
+                raise RuntimeError("SteamCMD: " + failures[0])
+            code = process.poll()
+            if code is not None and finished.is_set():
+                return code
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise subprocess.TimeoutExpired(process.args, timeout)
+            ready.wait(min(0.1, remaining))
+            ready.clear()
     except BaseException:
         # Never leave a credential-bearing Steam child running after timeout/interrupt.
         if os.name == "nt":
@@ -155,6 +207,8 @@ def run_steam(command: Path, script_path: Path, log, environment: dict[str, str]
         if process.poll() is None:
             process.kill()
         process.wait()
+        if reader.ident is not None:
+            reader.join(timeout=2)
         raise
 
 
