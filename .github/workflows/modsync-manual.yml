@@ -141,11 +141,11 @@ jobs:
         uses: actions/cache/restore@5a3ec84eff668545956fd18022155c47e93e2684
         with:
           path: ${{ runner.temp }}/sealed/baseline.seal
-          key: steam-sealed-v2-${{ inputs.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: steam-sealed-v2-${{ inputs.game }}-${{ runner.os }}-
+          key: steam-sealed-v3-excludingmovies-${{ inputs.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: steam-sealed-v3-excludingmovies-${{ inputs.game }}-${{ runner.os }}-
           fail-on-cache-miss: true
 
-      - name: Authenticate baseline and create independent install copy
+      - name: Authenticate filtered game cache and create independent install copy
         env:
           CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
         run: |
@@ -153,7 +153,7 @@ jobs:
           umask 077
           python tools/modsync-ci/seal.py unseal --source "$RUNNER_TEMP/sealed/baseline.seal" --destination "$RUNNER_TEMP/modsync-manual-private/baseline" > "$RUNNER_TEMP/modsync-manual-private/baseline.log" 2>&1
           python - <<'PY'
-          import json, os, runpy, shutil, time
+          import hashlib, json, os, re, runpy, shutil, time
           from pathlib import Path
           private = Path(os.environ['RUNNER_TEMP']) / 'modsync-manual-private'
           restored = private / 'baseline'
@@ -163,9 +163,38 @@ jobs:
               raise SystemExit('Baseline expired; run Steam acquisition first.')
           contract = runpy.run_path('tools/private-ci/src/steam_acquire.py')
           baseline = restored / ('baseline-' + os.environ['GAME'])
+          scope = json.loads((restored / 'cache-scope.json').read_text())
+          required = {'schema', 'game', 'excluded_pattern', 'excluded_count', 'excluded_bytes', 'source_receipt_sha256'}
+          if not isinstance(scope, dict) or not required <= scope.keys():
+              raise SystemExit('Filtered cache scope is missing required fields.')
+          if (type(scope['schema']) is not int or scope['schema'] != 1
+                  or scope['game'] not in ('k1', 'k2') or scope['game'] != os.environ['GAME']
+                  or scope['excluded_pattern'] != '*.bik'
+                  or any(type(scope[key]) is not int or scope[key] < 0
+                         for key in ('excluded_count', 'excluded_bytes'))
+                  or not isinstance(scope['source_receipt_sha256'], str)
+                  or re.fullmatch(r'[0-9a-fA-F]{64}', scope['source_receipt_sha256']) is None):
+              raise SystemExit('Filtered cache scope is invalid.')
+          source_bytes = (restored / ('source-baseline-' + os.environ['GAME'] + '.json')).read_bytes()
+          if hashlib.sha256(source_bytes).hexdigest() != scope['source_receipt_sha256'].lower():
+              raise SystemExit('Source acquisition receipt SHA256 verification failed.')
+          source_receipt = json.loads(source_bytes)
           receipt = json.loads((restored / ('baseline-' + os.environ['GAME'] + '.json')).read_text())
-          if not receipt or contract['inventory'](baseline) != receipt:
-              raise SystemExit('Baseline inventory verification failed.')
+          if not isinstance(source_receipt, dict) or not source_receipt or not isinstance(receipt, dict) or not receipt:
+              raise SystemExit('Filtered cache inventories must be nonempty objects.')
+          excluded = {path: metadata for path, metadata in source_receipt.items()
+                      if path.lower().endswith('.bik')}
+          expected = {path: metadata for path, metadata in source_receipt.items()
+                      if not path.lower().endswith('.bik')}
+          if (receipt != expected or len(excluded) != scope['excluded_count']
+                  or any(not isinstance(metadata, dict) or type(metadata.get('size')) is not int
+                         or metadata['size'] < 0 for metadata in excluded.values())
+                  or sum(metadata['size'] for metadata in excluded.values()) != scope['excluded_bytes']):
+              raise SystemExit('Filtered inventory does not match source receipt and exclusion scope.')
+          if any(path.name.lower().endswith('.bik') for path in baseline.rglob('*')):
+              raise SystemExit('Filtered game cache contains an excluded BIK path.')
+          if contract['inventory'](baseline) != receipt:
+              raise SystemExit('Filtered game inventory verification failed.')
           shutil.copytree(baseline, private / 'game', ignore=shutil.ignore_patterns('steamapps'))
           if contract['inventory'](private / 'game') != receipt:
               raise SystemExit('Independent game copy verification failed.')

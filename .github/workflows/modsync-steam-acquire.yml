@@ -30,8 +30,8 @@ jobs:
       - uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/sealed/*.seal
-          key: steam-sealed-v2-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
-          restore-keys: steam-sealed-v2-${{ matrix.game }}-${{ runner.os }}-
+          key: steam-sealed-v3-excludingmovies-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-${{ runner.os }}-
       - name: Restore authenticated clean baseline
         shell: bash
         env:
@@ -243,24 +243,84 @@ jobs:
           mv "$RUNNER_TEMP/game" "$RUNNER_TEMP/clean/baseline-$GAME"
           cp "$RUNNER_TEMP/steam-state/baseline-$GAME.json" "$RUNNER_TEMP/clean/"
           python -c 'import time; print(time.time())' > "$RUNNER_TEMP/clean/refreshed-at"
+          python - <<'PY'
+          import hashlib, importlib.util, json, os, shutil, stat
+          from pathlib import Path
+
+          temporary = Path(os.environ['RUNNER_TEMP'])
+          game = os.environ['GAME']
+          if game not in ('k1', 'k2') or not temporary.is_absolute() or temporary.resolve() != temporary or temporary == Path('/'):
+              raise SystemExit('Unsafe runner temporary path or game.')
+          baseline = temporary / 'steam-state' / ('baseline-' + game)
+          clean = temporary / 'clean'
+          for directory in (baseline, clean, clean / ('baseline-' + game)):
+              if directory.resolve() != directory or not directory.is_dir():
+                  raise SystemExit('Unsafe generated game directory.')
+          tree_bytes = 0
+          for entry in clean.rglob('*'):
+              metadata = entry.lstat()
+              if stat.S_ISREG(metadata.st_mode) and metadata.st_nlink == 1:
+                  tree_bytes += metadata.st_size
+              elif not stat.S_ISDIR(metadata.st_mode):
+                  raise SystemExit('Clean game must contain independent regular files only.')
+          receipt = clean / ('baseline-' + game + '.json')
+          if not receipt.is_file() or receipt.is_symlink():
+              raise SystemExit('Clean acquisition receipt is missing.')
+          specification = importlib.util.spec_from_file_location('steam_acquire', 'tools/private-ci/src/steam_acquire.py')
+          module = importlib.util.module_from_spec(specification)
+          specification.loader.exec_module(module)
+          source_receipt = receipt.read_bytes()
+          source_inventory = json.loads(source_receipt)
+          cache_tree = clean / ('baseline-' + game)
+          if module.inventory(cache_tree) != source_inventory:
+              raise SystemExit('Full source copy does not match Steam acquisition receipt.')
+          (clean / ('source-baseline-' + game + '.json')).write_bytes(source_receipt)
+          excluded_count = 0
+          excluded_bytes = 0
+          for entry in cache_tree.rglob('*'):
+              if entry.is_file() and entry.name.lower().endswith('.bik'):
+                  excluded_bytes += entry.stat().st_size
+                  excluded_count += 1
+                  entry.unlink()
+          receipt.write_text(json.dumps(module.inventory(cache_tree), sort_keys=True))
+          (clean / 'cache-scope.json').write_text(json.dumps({
+              'schema': 1,
+              'game': game,
+              'source_receipt_sha256': hashlib.sha256(source_receipt).hexdigest(),
+              'excluded_pattern': '*.bik',
+              'excluded_count': excluded_count,
+              'excluded_bytes': excluded_bytes,
+          }, sort_keys=True))
+          tree_bytes = sum(entry.stat().st_size for entry in clean.rglob('*') if entry.is_file())
+          reserve = 1_000_000_000
+          required = 2 * tree_bytes + reserve
+          available = shutil.disk_usage(temporary).free
+          print(f'Seal disk preflight: tree={tree_bytes} bytes, free={available} bytes, required={required} bytes.')
+          if available < required:
+              raise SystemExit('Insufficient free disk space to seal the clean game with reserve.')
+          PY
           python tools/modsync-ci/seal.py seal --source "$RUNNER_TEMP/clean" --destination "$RUNNER_TEMP/sealed/baseline.seal"
       - name: Enforce shared 10 GB cache budget
         id: budget
         if: steps.gate.outputs.due == 'true'
         shell: python
+        env:
+          GAME: ${{ matrix.game }}
         run: |
           import os
           from pathlib import Path
+          budget = {'k1': 4_000_000_000, 'k2': 5_000_000_000}[os.environ['GAME']]
           size = (Path(os.environ['RUNNER_TEMP']) / 'sealed/baseline.seal').stat().st_size
-          if size > 4_000_000_000:
-              raise SystemExit('Baseline exceeds the 4 GB per-game sealed cache budget; use external storage. Cache not saved.')
-          print('Sealed baseline fits the 4 GB per-game budget (8 GB for both games; 2 GB headroom).')
+          print(f'Encrypted baseline: {size} bytes; game budget: {budget} bytes.')
+          if size > budget:
+              raise SystemExit('Baseline exceeds its per-game sealed cache budget; use external storage. Cache not saved.')
+          print('Sealed baseline fits its budget (9 GB for both games; 1 GB nominal headroom). Older cache entries may cause LRU eviction despite daily access.')
       - uses: actions/cache/save@v4
         id: cache_save
         if: steps.gate.outputs.due == 'true'
         with:
           path: ${{ runner.temp }}/sealed/*.seal
-          key: steam-sealed-v2-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          key: steam-sealed-v3-excludingmovies-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Publish sanitized status only
         if: always()
         shell: python
@@ -298,7 +358,7 @@ jobs:
                   summary.write('Cache save outcome: ' + os.environ['CACHE_SAVE_OUTCOME'] + '.\n')
               summary.write('Job status: ' + os.environ['JOB_STATUS'] + '.\n')
               if os.environ['BUDGET_OUTCOME'] == 'failure':
-                  summary.write('Cache budget exceeded: sealed baseline is larger than 4 GB; cache was not saved.\n')
+                  summary.write('Cache budget exceeded: encrypted baseline exceeds its game budget (K1: 4 GB; K2: 5 GB); cache was not saved.\n')
       - name: Remove private state
         if: always()
         shell: bash
