@@ -97,7 +97,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - run: sudo apt-get install -y -qq p7zip-full rclone >/dev/null
+      - name: Install archive tools
+        run: |
+          sudo apt-get install -y -qq p7zip-full >/dev/null
+          python3 tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone"
       - name: Download new or changed mod archives into the cache
         run: python tools/modsync-ci/refresh_archives.py --max-items 20
 
@@ -139,7 +142,8 @@ jobs:
       - name: Install tools and free disk space
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
-          packages=(p7zip-full rclone pkg-config libssl-dev)
+          python3 tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone"
+          packages=(p7zip-full pkg-config libssl-dev)
           if [[ '${{ matrix.mode }}' == gui ]]; then
             packages+=(xvfb xauth tesseract-ocr tesseract-ocr-eng libxkbcommon-x11-dev
               libx11-dev libxcursor-dev libxrandr-dev libxi-dev libgl1-mesa-dev libwayland-dev)
@@ -221,7 +225,8 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo dpkg --add-architecture i386
           sudo apt-get update -qq
-          sudo apt-get install -y -qq --no-install-recommends wine wine64 wine32:i386 xvfb xauth p7zip-full rclone >/dev/null
+          sudo apt-get install -y -qq --no-install-recommends wine wine64 wine32:i386 xvfb xauth p7zip-full >/dev/null
+          python3 tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone"
       - name: Restore game cache
         uses: actions/cache/restore@v4
         with:

@@ -74,6 +74,7 @@ def rclone(*args, timeout=600):
             message = diagnostics.read(65536).decode("utf-8", errors="replace").lower()
             error.failure_category = next((name for name, markers in FAILURE_MARKERS
                                            if any(marker in message for marker in markers)), "unclassified")
+            print("rclone", args[0], "failed:", message.strip().splitlines()[-1:] or "", file=sys.stderr)
             raise
 
 
