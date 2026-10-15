@@ -476,14 +476,23 @@ jobs:
           path: ${{ runner.temp }}/sealed/*.seal
           key: steam-sealed-v3-excludingmovies-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Hard-fail incomplete critical acquisition
-        if: always() && steps.gate.outputs.due == 'true'
+        if: always()
         shell: bash
         env:
+          GATE_OUTCOME: ${{ steps.gate.outcome }}
+          ACQUISITION_DUE: ${{ steps.gate.outputs.due }}
           CRITICAL_OUTCOME: ${{ steps.critical.outputs.ok }}
           SEAL_OUTCOME: ${{ steps.seal_game.outcome }}
           BUDGET_OUTCOME: ${{ steps.budget.outcome }}
           CACHE_OUTCOME: ${{ steps.cache_save.outcome }}
         run: |
+          if test "$GATE_OUTCOME" != success; then
+            echo "Critical Steam workflow gate failed; no acquisition result is trustworthy." >&2
+            exit 1
+          fi
+          if test "$ACQUISITION_DUE" != true; then
+            exit 0
+          fi
           if test "$CRITICAL_OUTCOME" != true; then
             echo "Critical Steam acquisition failed: no validated game directory and receipt were produced." >&2
             exit 1
