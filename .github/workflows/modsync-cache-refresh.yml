@@ -294,6 +294,7 @@ jobs:
                   print(json.dumps({'failure_stage': stage, 'count': len(failures), 'returncodes': dict(codes)}, sort_keys=True))
                   for failure in failures[:10]:
                       print(json.dumps({'failure_stage': stage, 'exception_category': failure.get('exception_category'),
+                                        'failure_category': failure.get('failure_category', 'none'),
                                         'source_frames': failure.get('source_frames', [])}, sort_keys=True))
           try:
               private_log = (root / 'cache-private.log').read_text(errors='replace')
