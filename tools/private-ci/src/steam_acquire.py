@@ -20,6 +20,7 @@ import shutil
 import subprocess
 import tarfile
 import tempfile
+import time
 import urllib.request
 import zipfile
 
@@ -44,7 +45,7 @@ class SteamProcessError(RuntimeError):
     def __init__(self, returncode: int, reason: str):
         allowed = {"guard_challenge", "confirmation_required", "invalid_login",
                    "no_subscription", "dependency", "output_capture_failed",
-                   "timeout", "failed"}
+                   "timeout", "failed", "no_cached_credentials"}
         self.returncode = int(returncode)
         self.reason = reason if reason in LOGIN_RESULTS or reason in allowed else "failed"
         self.category = LOGIN_RESULTS.get(self.reason, self.reason)
@@ -169,6 +170,7 @@ def run_steam(command: Path, script_path: Path, log, environment: dict[str, str]
         ("confirmation_required", rb"waiting for[^\r\n]{0,100}(?:confirmation|approval)"),
         ("invalid_login", rb"invalid (?:password|login|credentials)|invalidpassword|accountlogondenied|incorrect (?:password|login|credentials)|login failure|logon failure"),
         ("no_subscription", rb"no subscription|nosubscription|no licenses|missing subscription"),
+        ("no_cached_credentials", b"no cached credentials"),
     )
     patterns = [(category, re.compile(pattern, re.IGNORECASE)) for category, pattern in markers]
     ready = threading.Event()
@@ -312,7 +314,7 @@ def acquire_game(game: str, destination: Path, state_dir: Path, report: Path,
     lock = state_dir / "acquisition.lock"
     lock.mkdir(mode=0o700)
     outcome = {"game": game, "app_id": APPS[game], "platform": "windows", "success": False,
-               "used_saved_state": False}
+               "used_saved_state": False, "password_fallback_used": False}
     try:
         baseline = state_dir / f"baseline-{game}"
         receipt = state_dir / f"baseline-{game}.json"
@@ -351,13 +353,28 @@ def acquire_game(game: str, destination: Path, state_dir: Path, report: Path,
                      if key.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "LANG"}}
         clean_env.update(HOME=str(steam_home), USERPROFILE=str(steam_home),
                          TMPDIR=str(steam_home), TEMP=str(steam_home), TMP=str(steam_home))
-        with tempfile.TemporaryDirectory(prefix="request-", dir=state_dir) as temporary:
-            script_path = Path(temporary) / "acquire.script"
-            private_write(script_path, script_content.encode("utf-8"))
-            with open(os.devnull, "wb") as discarded:
-                code = run_steam(command, script_path, discarded, clean_env, timeout)
-            if code:
-                raise SteamProcessError(code, "dependency" if code in (126, 127) else "failed")
+        deadline = time.monotonic() + timeout
+        for attempt in range(2):
+            with tempfile.TemporaryDirectory(prefix="request-", dir=state_dir) as temporary:
+                script_path = Path(temporary) / "acquire.script"
+                private_write(script_path, script_content.encode("utf-8"))
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise SteamProcessError(-1, "timeout")
+                try:
+                    with open(os.devnull, "wb") as discarded:
+                        code = run_steam(command, script_path, discarded, clean_env, remaining)
+                    if code:
+                        raise SteamProcessError(code, "dependency" if code in (126, 127) else "failed")
+                except SteamProcessError as error:
+                    if (attempt != 0 or not used_saved_state or not password
+                            or error.reason != "no_cached_credentials"):
+                        raise
+                    script_content = script(game, baseline, username, password,
+                                            environment.get("STEAM_GUARD_CODE"))
+                    outcome["password_fallback_used"] = True
+                    continue
+                break
         verify_install(game, baseline, root)
         files = inventory(baseline)
         receipt.unlink(missing_ok=True)
