@@ -76,11 +76,14 @@ jobs:
         run: |
           set -euo pipefail
           umask 077
-          mkdir -p "$RUNNER_TEMP/restored" "$RUNNER_TEMP/steam-state"
+          mkdir -p "$RUNNER_TEMP/steam-state"
           if test -f "$RUNNER_TEMP/sealed/baseline.seal"; then
             python tools/modsync-ci/seal.py unseal \
               --source "$RUNNER_TEMP/sealed/baseline.seal" \
-              --destination "$RUNNER_TEMP/restored"
+              --destination "$RUNNER_TEMP/restored" >/dev/null 2>&1 \
+              || echo 'Restored cache could not be unsealed; it will be reacquired.'
+          else
+            echo 'No cached game was restored; it will be acquired.'
           fi
 
       - name: Validate restored game cache
@@ -133,8 +136,9 @@ jobs:
           GAME: ${{ matrix.game }}
         run: |
           set -euo pipefail
-          test -d "$RUNNER_TEMP/game"
-          test -f "$RUNNER_TEMP/steam-state/baseline-$GAME.json"
+          python tools/modsync-ci/steam_cache.py verify-game \
+            --root "$RUNNER_TEMP/game" --game "$GAME" \
+            --receipt "$RUNNER_TEMP/steam-state/baseline-$GAME.json"
 
       - name: Seal validated game without movies
         if: steps.cache.outputs.cache_valid != 'true' || steps.cache.outputs.fresh != 'true'

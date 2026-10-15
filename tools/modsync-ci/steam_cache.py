@@ -11,6 +11,7 @@ import time
 
 
 FRESHNESS_SECONDS = 14 * 86400
+EXECUTABLES = {'k1': 'swkotor.exe', 'k2': 'swkotor2.exe'}
 
 
 class CacheValidationError(ValueError):
@@ -32,6 +33,23 @@ def _inventory_contract():
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)
     return module.inventory
+
+
+def require_game(game, directory, receipt=None):
+    directory = Path(directory)
+    if game not in EXECUTABLES or directory.is_symlink() or not directory.is_dir():
+        raise CacheValidationError('game directory is missing')
+    for name in (EXECUTABLES[game], 'chitin.key', 'dialog.tlk'):
+        path = directory / name
+        if path.is_symlink() or not path.is_file() or path.stat().st_size == 0:
+            raise CacheValidationError(f'game is incomplete: {name} is missing')
+    modules = directory / 'modules'
+    if modules.is_symlink() or not modules.is_dir() or not any(modules.iterdir()):
+        raise CacheValidationError('game is incomplete: modules/ is missing or empty')
+    if receipt is not None:
+        inventory = json.loads(_regular_file(Path(receipt)))
+        if not isinstance(inventory, dict) or not inventory:
+            raise CacheValidationError('game receipt is missing or empty')
 
 
 def validate_baseline(root, game, now=None, copy_to=None, require_fresh=False):
@@ -80,6 +98,7 @@ def validate_baseline(root, game, now=None, copy_to=None, require_fresh=False):
     inventory = _inventory_contract()
     if inventory(baseline) != receipt:
         raise CacheValidationError('filtered baseline inventory verification failed')
+    require_game(game, baseline)
     stamp = _regular_file(root / 'refreshed-at').decode('ascii').strip()
     try:
         refreshed_at = float(stamp)
@@ -114,8 +133,21 @@ def main():
     validate.add_argument('--require-fresh', action='store_true')
     validate.add_argument('--copy-to', type=Path)
     validate.add_argument('--github-output', type=Path)
+    verify = commands.add_parser('verify-game')
+    verify.add_argument('--root', type=Path, required=True)
+    verify.add_argument('--game', choices=('k1', 'k2'), required=True)
+    verify.add_argument('--receipt', type=Path, required=True)
     args = parser.parse_args()
     os.umask(0o077)
+    if args.command == 'verify-game':
+        try:
+            require_game(args.game, args.root, args.receipt)
+        except CacheValidationError as error:
+            parser.exit(1, f'Acquired game verification failed: {error}.\n')
+        except (OSError, ValueError):
+            parser.exit(1, 'Acquired game verification failed: game receipt is unreadable.\n')
+        print(f'Acquired {args.game} game verified.')
+        return
     try:
         if args.allow_missing and not args.root.exists() and not args.root.is_symlink():
             result = {'cache_valid': False, 'fresh': False, 'age_seconds': None}
@@ -126,7 +158,10 @@ def main():
             raise CacheValidationError('authenticated baseline is stale')
     except (OSError, RuntimeError, ValueError, json.JSONDecodeError, UnicodeDecodeError,
             ImportError, AttributeError, TypeError):
-        parser.exit(1, 'Authenticated baseline validation failed; cache cannot be reused.\n')
+        if not args.allow_missing:
+            parser.exit(1, 'Authenticated baseline validation failed; cache cannot be reused.\n')
+        print('Cached game is unavailable or invalid; it will be reacquired.')
+        result = {'cache_valid': False, 'fresh': False, 'age_seconds': None}
     if args.github_output:
         with args.github_output.open('a', encoding='utf-8') as output:
             output.write(f"cache_valid={str(result['cache_valid']).lower()}\n")
