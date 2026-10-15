@@ -1,5 +1,7 @@
 """Credential-free admission and controlled SteamCMD process tests."""
 import importlib.util
+import io
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -17,7 +19,8 @@ def installed(directory, app_id, flags="4"):
     (directory / "steamapps").mkdir(exist_ok=True)
     (directory / "steamapps" / f"appmanifest_{app_id}.acf").write_text(
         f'"AppState" {{ "appid" "{app_id}" "StateFlags" "{flags}" }}')
-    for name in ("chitin.key", "dialog.tlk"):
+    executable = "swkotor.exe" if app_id == steam.APPS["k1"] else "swkotor2.exe"
+    for name in ("chitin.key", "dialog.tlk", executable):
         (directory / name).write_bytes(b"controlled-resource")
     (directory / "modules").mkdir(exist_ok=True)
     (directory / "modules" / "controlled.mod").write_bytes(b"controlled-resource")
@@ -66,33 +69,46 @@ class SteamAcquireTests(unittest.TestCase):
             root = Path(temporary)
             calls = []
             def bootstrap(host, directory):
-                directory.mkdir()
+                directory.mkdir(parents=True)
                 command = directory / "steamcmd.sh"
                 command.write_text("inert")
                 return command
             def run(command, script_path, log, environment, timeout):
                 arguments = [str(command), "+runscript", str(script_path)]
-                kwargs = {"env": environment, "stdin": subprocess.DEVNULL, "stdout": log, "stderr": log}
                 calls.append(arguments)
                 self.assertNotIn("secret-password", str(arguments))
-                self.assertNotIn("secret-password", str(kwargs["env"]))
-                self.assertEqual(kwargs["stdin"], subprocess.DEVNULL)
-                self.assertIs(kwargs["stdout"], kwargs["stderr"])
+                self.assertNotIn("secret-password", str(environment))
+                self.assertNotIn("also-secret", str(environment))
+                self.assertFalse(any(key.startswith("STEAM_") or key == "GH_TOKEN" for key in environment))
+                self.assertEqual(Path(environment["HOME"]), root / "steam-state" / "home")
+                self.assertEqual(log.name, os.devnull)
                 script_path = Path(arguments[-1])
                 if os.name != "nt":
                     self.assertEqual(script_path.stat().st_mode & 0o777, 0o600)
                 content = script_path.read_text()
                 self.assertIn('"secret-password"', content)
                 game = "k1" if "app_update 32370" in content else "k2"
-                installed(root / "games" / game, steam.APPS[game])
+                baseline = root / "steam-state" / f"baseline-{game}"
+                self.assertIn(f"force_install_dir {steam.token(str(baseline.resolve()), path=True)}\n", content)
+                installed(baseline, steam.APPS[game])
                 return 0
             with patch.object(steam, "bootstrap", bootstrap), patch.object(steam, "run_steam", run):
                 result = steam.acquire(root, root / "private.log", "linux",
                                        {"PATH":os.environ.get("PATH", ""), "STEAM_USERNAME":"user", "STEAM_PASSWORD":"secret-password", "GH_TOKEN":"also-secret"})
             self.assertEqual(len(calls), 2)
             self.assertEqual(set(result), {"k1", "k2"})
-            self.assertFalse(list(root.glob("steam-private-*")))
+            self.assertTrue(all(not Path(arguments[-1]).exists() for arguments in calls))
+            self.assertFalse(list((root / "steam-state").glob("request-*")))
             self.assertTrue(all(path.is_dir() for path in result.values()))
+            for game, destination in result.items():
+                report = json.loads((root / f"{game}-acquisition.json").read_text())
+                self.assertTrue(report["success"])
+                self.assertEqual(steam.inventory(destination), report["files"])
+                self.assertFalse((destination / "steamapps").exists())
+            for path in root.rglob("*"):
+                if path.is_file():
+                    self.assertNotIn(b"secret-password", path.read_bytes())
+                    self.assertNotIn(b"also-secret", path.read_bytes())
             if os.name != "nt":
                 self.assertEqual((root / "private.log").stat().st_mode & 0o777, 0o600)
 
@@ -100,28 +116,54 @@ class SteamAcquireTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             def bootstrap(host, directory):
-                directory.mkdir()
+                directory.mkdir(parents=True)
                 return directory / "steamcmd.sh"
             with patch.object(steam, "bootstrap", bootstrap), patch.object(steam, "run_steam", return_value=1), patch.object(steam, "verify_install") as verify:
                 with self.assertRaises(RuntimeError):
                     steam.acquire(root, root / "private.log", "linux", {"STEAM_USERNAME":"user", "STEAM_PASSWORD":"password"})
                 verify.assert_not_called()
-            self.assertFalse(list(root.glob("steam-private-*")))
+            self.assertFalse(list((root / "steam-state").glob("request-*")))
+            self.assertFalse((root / "games").exists())
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group ownership")
     def test_timeout_stops_owned_process_group(self):
-        process = Mock(pid=123456)
-        process.wait.side_effect = [subprocess.TimeoutExpired("steamcmd", 1), 0]
+        process = Mock(pid=123456, stdout=io.BytesIO(b"Controlled output\n"))
+        process.wait.return_value = 0
         process.poll.return_value = None
-        log = Mock()
-        with patch.object(steam.subprocess, "Popen", return_value=process) as popen, patch.object(steam.os, "killpg") as killpg:
+        log = io.BytesIO()
+        with patch.object(steam.subprocess, "Popen", return_value=process) as popen, patch.object(steam.os, "killpg") as killpg, patch("time.monotonic", side_effect=[0, 2]):
             with self.assertRaises(subprocess.TimeoutExpired):
                 steam.run_steam(Path("steamcmd.sh"), Path("private.script"), log, {"PATH":"safe"}, 1)
             self.assertTrue(popen.call_args.kwargs["start_new_session"])
-            self.assertIs(popen.call_args.kwargs["stdout"], log)
+            self.assertEqual(popen.call_args.kwargs["stdout"], subprocess.PIPE)
+            self.assertEqual(popen.call_args.kwargs["stderr"], subprocess.STDOUT)
             self.assertEqual(popen.call_args.kwargs["stdin"], subprocess.DEVNULL)
             killpg.assert_called_once_with(123456, steam.signal.SIGKILL)
             process.kill.assert_called_once()
+            process.wait.assert_called_once()
+            self.assertTrue(process.stdout.closed)
+            self.assertEqual(log.getvalue(), b"Controlled output\n")
+
+    @unittest.skipIf(os.name == "nt", "POSIX process-group ownership")
+    def test_prompts_and_login_failures_stop_owned_process_group(self):
+        for output, category in (
+            (b"Enter Steam Guard code:", "guard_challenge"),
+            (b"Please approve login in the Steam mobile app", "confirmation_required"),
+            (b"Invalid password", "invalid_login"),
+            (b"No subscription", "no_subscription"),
+        ):
+            with self.subTest(category=category):
+                process = Mock(pid=123456, stdout=io.BytesIO(output))
+                process.poll.return_value = None
+                log = io.BytesIO()
+                with patch.object(steam.subprocess, "Popen", return_value=process), patch.object(steam.os, "killpg") as killpg:
+                    with self.assertRaisesRegex(RuntimeError, f"^SteamCMD: {category}$"):
+                        steam.run_steam(Path("steamcmd.sh"), Path("private.script"), log, {"PATH":"safe"}, 1)
+                killpg.assert_called_once_with(123456, steam.signal.SIGKILL)
+                process.kill.assert_called_once()
+                process.wait.assert_called_once()
+                self.assertTrue(process.stdout.closed)
+                self.assertEqual(log.getvalue(), output)
 
     def test_bootstrap_traversal_refused(self):
         for path in ("../secret", "/secret", "linux32/../../secret", "linux32\\secret"):

@@ -214,6 +214,10 @@ def run_steam(command: Path, script_path: Path, log, environment: dict[str, str]
 
 def acquire(workspace: Path, log_path: Path, host: str, environment: dict[str, str],
             timeout: int = 3600) -> dict[str, Path]:
+    if host not in BOOTSTRAPS or timeout <= 0 or not environment.get("STEAM_USERNAME"):
+        raise ValueError("Unsupported acquisition options or missing credentials")
+    if not environment.get("STEAM_PASSWORD") and not environment.get("STEAM_CONFIG_VDF"):
+        raise ValueError("A password or saved Steam configuration is required")
     games = {}
     private_directory(log_path.parent)
     private_write(log_path, b"Steam diagnostics are suppressed; see per-game reports.\n")
