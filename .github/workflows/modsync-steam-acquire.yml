@@ -11,6 +11,16 @@ on:
           - k1
           - k2
           - both
+      force-refresh:
+        description: Force Steam authentication and acquisition even when the verified cache is fresh
+        type: boolean
+        required: false
+        default: false
+      cache-only:
+        description: Verify cache reuse without allowing Steam authentication or acquisition
+        type: boolean
+        required: false
+        default: false
   schedule:
     - cron: '17 3 * * *'
 permissions:
@@ -51,21 +61,41 @@ jobs:
           mkdir -p "$RUNNER_TEMP/steam-state"
           if test -f "$RUNNER_TEMP/sealed/baseline.seal"; then
             python tools/modsync-ci/seal.py unseal --source "$RUNNER_TEMP/sealed/baseline.seal" --destination "$RUNNER_TEMP/restored"
-            mv "$RUNNER_TEMP/restored/baseline-$GAME" "$RUNNER_TEMP/steam-state/"
-            mv "$RUNNER_TEMP/restored/baseline-$GAME.json" "$RUNNER_TEMP/steam-state/"
           fi
+      - name: Validate authenticated filtered cache before freshness decision
+        id: cache
+        shell: bash
+        env:
+          GAME: ${{ matrix.game }}
+        run: python tools/modsync-ci/steam_cache.py validate --root "$RUNNER_TEMP/restored" --game "$GAME" --allow-missing --github-output "$GITHUB_OUTPUT"
       - name: Apply fourteen-day acquisition gate with daily cache access
         id: gate
         shell: python
+        env:
+          CACHE_FRESH: ${{ steps.cache.outputs.fresh }}
+          FORCE_REFRESH: ${{ inputs.force-refresh }}
+          CACHE_ONLY: ${{ inputs.cache-only }}
         run: |
-          import os, time
-          from pathlib import Path
-          interval = 14 * 86400
-          stamp = Path(os.environ['RUNNER_TEMP']) / 'restored/refreshed-at'
-          age = time.time() - float(stamp.read_text()) if stamp.is_file() else interval
-          due = os.environ['GITHUB_EVENT_NAME'] == 'workflow_dispatch' or not 0 <= age < interval
+          import os
+          cache_fresh = os.environ.get('CACHE_FRESH') == 'true'
+          force_refresh = os.environ.get('FORCE_REFRESH', 'false').lower() == 'true'
+          cache_only = os.environ.get('CACHE_ONLY', 'false').lower() == 'true'
+          if force_refresh and cache_only:
+              raise SystemExit('cache-only cannot be combined with force-refresh')
+          due = force_refresh or not cache_fresh
+          if cache_only and due:
+              raise SystemExit('cache-only requested, but the cache is missing, stale, or otherwise due for acquisition')
           with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
               output.write('due=' + str(due).lower() + '\n')
+      - name: Stage validated baseline for SteamCMD refresh
+        if: steps.gate.outputs.due == 'true' && steps.cache.outputs.cache_valid == 'true'
+        shell: bash
+        env:
+          GAME: ${{ matrix.game }}
+        run: |
+          umask 077
+          cp -a "$RUNNER_TEMP/restored/baseline-$GAME" "$RUNNER_TEMP/steam-state/"
+          install -m 600 "$RUNNER_TEMP/restored/baseline-$GAME.json" "$RUNNER_TEMP/steam-state/baseline-$GAME.json"
       - name: Install SteamCMD dependencies
         if: steps.gate.outputs.due == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y lib32gcc-s1
@@ -422,7 +452,7 @@ jobs:
               print('Steam failure frames: ' + frames)
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
               if os.environ['ACQUISITION_DUE'] == 'false':
-                  summary.write('Authenticated baseline is younger than fourteen days; acquisition skipped. Daily cache restore refreshes access within the seven-day eviction window.\n')
+                  summary.write('Authenticated baseline passed scope, source-receipt and filtered-inventory checks and is younger than fourteen days; Steam acquisition skipped. Daily cache restore refreshes access within the seven-day eviction window.\n')
               else:
                   summary.write('Steam acquisition status: ' + reason + '.\n')
                   if reason == 'unknown':
