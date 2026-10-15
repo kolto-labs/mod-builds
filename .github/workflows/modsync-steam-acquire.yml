@@ -467,10 +467,16 @@ jobs:
           if size > budget:
               raise SystemExit('Baseline exceeds its per-game sealed cache budget; use external storage. Cache not saved.')
           print('Sealed baseline fits its budget (9 GB for both games; 1 GB nominal headroom). Older cache entries may cause LRU eviction despite daily access.')
+      - name: Require nonempty sealed cache input
+        continue-on-error: true
+        id: cache_input
+        if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true' && steps.seal_game.outcome == 'success' && steps.budget.outcome == 'success'
+        shell: bash
+        run: test -s "$RUNNER_TEMP/sealed/baseline.seal"
       - uses: actions/cache/save@v4
         continue-on-error: true
         id: cache_save
-        if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true' && steps.seal_game.outcome == 'success' && steps.budget.outcome == 'success'
+        if: steps.gate.outputs.due == 'true' && steps.critical.outputs.ok == 'true' && steps.seal_game.outcome == 'success' && steps.budget.outcome == 'success' && steps.cache_input.outcome == 'success'
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: steam-sealed-v3-excludingmovies-${{ matrix.game }}-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
@@ -483,6 +489,7 @@ jobs:
           CRITICAL_OUTCOME: ${{ steps.critical.outputs.ok }}
           SEAL_OUTCOME: ${{ steps.seal_game.outcome }}
           BUDGET_OUTCOME: ${{ steps.budget.outcome }}
+          CACHE_INPUT_OUTCOME: ${{ steps.cache_input.outcome }}
           CACHE_OUTCOME: ${{ steps.cache_save.outcome }}
           PERSIST_OUTCOME: ${{ steps.persist_auth.outcome }}
         run: |
@@ -501,7 +508,7 @@ jobs:
             echo "Critical Steam authentication persistence failed after game acquisition." >&2
             exit 1
           fi
-          if test "$SEAL_OUTCOME" != success || test "$BUDGET_OUTCOME" != success || test "$CACHE_OUTCOME" = failure; then
+          if test "$SEAL_OUTCOME" != success || test "$BUDGET_OUTCOME" != success || test "$CACHE_INPUT_OUTCOME" != success || test "$CACHE_OUTCOME" != success; then
             echo "Critical Steam cache publication failed after game acquisition." >&2
             exit 1
           fi
