@@ -203,6 +203,19 @@ def request(url, args, headers=None):
 
 
 def page_endpoint(response, item):
+    origin = urlsplit(item["url"])
+    if item["provider"] == "deadlystream":
+        canonical = urlsplit(checked_url(response.geturl()))
+        for parsed in (origin, canonical):
+            checked_url(parsed.geturl())
+            if (parsed.scheme != "https" or parsed.hostname not in ("deadlystream.com", "www.deadlystream.com")
+                    or parsed.port not in (None, 443)):
+                raise ValueError("unsupported provider redirect")
+        original_file = re.match(r"^/files/file/([0-9]+)(?:[-/]|$)", origin.path)
+        canonical_file = re.match(r"^/files/file/([0-9]+)(?:[-/]|$)", canonical.path)
+        if not original_file or not canonical_file or original_file[1] != canonical_file[1]:
+            raise ValueError("provider redirect changed file identity")
+        origin = canonical
     body = response.read(2 * 1024 * 1024 + 1)
     if len(body) > 2 * 1024 * 1024:
         raise ValueError("landing page too large")
@@ -212,14 +225,14 @@ def page_endpoint(response, item):
     parser = Links()
     parser.feed(source)
     candidates = set()
-    origin = urlsplit(item["url"])
     for href in parser.urls:
         url = urljoin(response.geturl(), html.unescape(href))
         parsed = urlsplit(url)
         kind, direct = provider(url)
         if not direct or kind != item["provider"]:
             continue
-        if kind == "deadlystream" and (parsed.hostname != origin.hostname or
+        if kind == "deadlystream" and (parsed.scheme != "https" or parsed.port not in (None, 443)
+                or parsed.hostname != origin.hostname or
                 (not parsed.path.endswith("/attachment.php") and parsed.path.rstrip("/") != origin.path.rstrip("/"))):
             continue
         candidates.add(checked_url(url))
