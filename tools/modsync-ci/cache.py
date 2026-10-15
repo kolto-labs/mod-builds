@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -28,6 +29,7 @@ import zipfile
 ARCHIVE = re.compile(r"\.(zip|7z|rar)$", re.I)
 LINK = re.compile(r'\[[^\]]*\]\(\s*(<[^>]+>|[^\s)]+)(?:\s+[^)]*)?\)|<((?:https?)://[^>]+)>|^\s*\[[^\]]+\]:\s*(\S+)', re.M)
 HTTP = build_opener(HTTPCookieProcessor(CookieJar()))
+DISK_RESERVE_BYTES = 3 * 1024 ** 3
 
 
 def clean_url(url):
@@ -362,6 +364,141 @@ def refresh_one(item, old, root, args, endpoint=None, depth=0):
             path.unlink(missing_ok=True)
 
 
+def existing_archive_path(archive_root, filename):
+    if not isinstance(filename, str) or not filename or Path(filename).name != filename:
+        raise ValueError("unsafe archive path")
+    if "/" in filename or "\\" in filename or filename in (".", ".."):
+        raise ValueError("unsafe archive path")
+    root = archive_root.resolve(strict=True)
+    path = root / filename
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError:
+        raise ValueError("archive missing") from None
+    if path.is_symlink() or not path.is_file() or metadata.st_nlink != 1:
+        raise ValueError("archive must be a regular file without links")
+    return path
+
+
+def import_existing(item, resource_entries, archive_root, root, args):
+    matches = [(key, value) for key, value in resource_entries.items()
+               if isinstance(value, dict)
+               and isinstance(value.get("HandlerMetadata"), dict)
+               and value["HandlerMetadata"].get("PrimaryUrl") == item["url"]]
+    if len(matches) != 1:
+        return {"id": item["id"], "status": "ambiguous-provider-url" if matches else "unmatched"}
+    _, resource_entry = matches[0]
+    files = resource_entry.get("Files")
+    if not isinstance(files, dict) or len(files) != 1:
+        return {"id": item["id"], "status": "ambiguous-variant"}
+    filename = next(iter(files))
+    try:
+        source = existing_archive_path(archive_root, filename)
+        extension = source.suffix.lower().lstrip(".")
+        if safe_archive_name(filename, extension) != filename:
+            raise ValueError("unsafe archive name")
+    except (OSError, ValueError) as error:
+        return {"id": item["id"], "status": "unresolved", "reason": safe_reason(error)}
+    entry = {"id": item["id"], "archive_name": filename, "status": "planned"}
+    manifest_path = root / "manifest.json"
+    manifest = args.import_manifest
+    old = manifest.get(item["id"])
+    if item["id"] in manifest and not args.apply:
+        entry["status"] = "existing-association"
+        return entry
+    if not args.apply:
+        return entry
+    try:
+        expected_size = source.stat().st_size
+        if expected_size < 0 or expected_size > args.max_bytes:
+            raise ValueError("archive exceeds size limit")
+    except OSError as error:
+        return {"id": item["id"], "status": "unresolved", "reason": safe_reason(error)}
+    objects = root / "objects"
+    if objects.is_symlink() or (objects.exists() and not objects.is_dir()):
+        return {"id": item["id"], "status": "unresolved", "reason": "unsafe cache object path"}
+    objects.mkdir(parents=True, exist_ok=True)
+    if expected_size + DISK_RESERVE_BYTES > shutil.disk_usage(objects).free:
+        return {"id": item["id"], "status": "unresolved", "reason": "insufficient disk space"}
+    descriptor, temporary = tempfile.mkstemp(dir=objects, prefix=".import-")
+    staged = Path(temporary)
+    digest_state = hashlib.sha256()
+    size = 0
+    try:
+        flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+        source_fd = os.open(source, flags)
+        try:
+            source_stat = os.fstat(source_fd)
+            if not stat.S_ISREG(source_stat.st_mode) or source_stat.st_nlink != 1:
+                raise ValueError("archive must be a regular file without links")
+            if source_stat.st_size != expected_size:
+                raise ValueError("archive changed before import")
+            with os.fdopen(source_fd, "rb") as incoming, os.fdopen(descriptor, "wb") as output:
+                source_fd = -1
+                descriptor = -1
+                while True:
+                    chunk = incoming.read(min(1024 * 1024, expected_size - size + 1))
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > expected_size or size > args.max_bytes:
+                        raise ValueError("archive exceeds size limit")
+                    digest_state.update(chunk)
+                    output.write(chunk)
+                output.flush()
+                os.fsync(output.fileno())
+        finally:
+            if source_fd >= 0:
+                os.close(source_fd)
+        if size != expected_size:
+            raise ValueError("archive changed during import")
+        kind = validate(staged, args.integrity_timeout)
+        sha = digest_state.hexdigest()
+        object_file = objects / sha
+        if item["id"] in manifest:
+            if not isinstance(old, dict) or old.get("sha256") != sha or old.get("size") != size:
+                entry.update(status="manifest-conflict", sha256=sha, size=size)
+                return entry
+            if object_file.is_symlink():
+                entry.update(status="manifest-conflict", sha256=sha, size=size)
+                return entry
+            if object_file.exists():
+                if not local_valid(root, old):
+                    entry.update(status="manifest-conflict", sha256=sha, size=size)
+                    return entry
+            else:
+                os.link(staged, object_file)
+            entry.update(status="already-present", sha256=sha, size=size)
+            return entry
+        try:
+            os.link(staged, object_file)
+        except FileExistsError:
+            if object_file.is_symlink() or not object_file.is_file() or object_file.stat().st_size != size:
+                raise ValueError("cache object conflict")
+            if digest(object_file) != sha:
+                raise ValueError("cache object conflict")
+            validate(object_file, args.integrity_timeout)
+        imported = {"sha256": sha, "size": size, "extension": kind,
+                    "archive_name": filename, "status": "stale-unknown",
+                    "metadata_unknown": True, "evidence": "local-import",
+                    "imported_at": time.time()}
+        manifest[item["id"]] = imported
+        try:
+            args.import_manifest_document["entries"] = manifest
+            atomic_json(manifest_path, args.import_manifest_document)
+        except OSError:
+            manifest.pop(item["id"], None)
+            raise
+        entry.update({"status": imported["status"], "sha256": sha, "size": size})
+    except (OSError, ValueError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
+        entry.update(status="unresolved", reason=safe_reason(error))
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+        staged.unlink(missing_ok=True)
+    return entry
+
+
 def rclone(args, direction, root):
     if not args.remote:
         return
@@ -376,10 +513,17 @@ def rclone(args, direction, root):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("discover", "refresh", "restore"))
+    parser.add_argument("command", choices=("discover", "refresh", "restore", "import-existing"))
     parser.add_argument("--guide", action="append", help="repeatable full.md path (default both games)")
     parser.add_argument("--cache-dir", type=Path, default=Path(".modsync-cache"))
     parser.add_argument("--destination", type=Path, help="archive directory for either installer")
+    parser.add_argument("--resource-index", type=Path, help="resource index for import-existing")
+    parser.add_argument("--archive-dir", type=Path, help="existing archive directory for import-existing")
+    parser.add_argument("--max-items", type=int, default=20,
+                        help="maximum exact-URL matched candidates to inspect (1..500)")
+    parser.add_argument("--offset", type=int, default=0,
+                        help="start at this exact-URL matched candidate index")
+    parser.add_argument("--apply", action="store_true", help="copy and record import-existing matches")
     parser.add_argument("--report", type=Path, help="also write sanitized JSON report")
     parser.add_argument("--remote", help="optional rclone remote:path; trusted operator input only")
     parser.add_argument("--force", action="store_true", help="refresh even inside freshness interval")
@@ -398,6 +542,17 @@ def main(argv=None):
         parser.error("timeouts and max-bytes must be positive")
     if args.command == "restore" and args.destination is None:
         parser.error("restore requires --destination")
+    if args.command == "import-existing":
+        if args.resource_index is None or args.archive_dir is None:
+            parser.error("import-existing requires --resource-index and --archive-dir")
+        if not 1 <= args.max_items <= 500:
+            parser.error("import-existing --max-items must be 1..500")
+        if args.offset < 0:
+            parser.error("import-existing --offset must be >=0")
+        if args.remote:
+            parser.error("import-existing does not support --remote")
+    elif args.apply:
+        parser.error("--apply is only valid with import-existing")
     guides = args.guide or ["content/k1/full.md", "content/k2/full.md"]
     items = discover(guides)
     if not items:
@@ -405,6 +560,38 @@ def main(argv=None):
     report = {"schema": 1, "command": args.command, "entries": []}
     if args.command == "discover":
         report["entries"] = [{**item, "url": clean_url(item["url"])} for item in items]
+    elif args.command == "import-existing":
+        archive_root = args.archive_dir.resolve(strict=True)
+        resource_index = json.loads(args.resource_index.read_text(encoding="utf-8"))
+        resource_entries = resource_index.get("entries") if isinstance(resource_index, dict) else None
+        if not isinstance(resource_entries, dict):
+            raise ValueError("invalid resource index")
+        root = args.cache_dir.resolve()
+        manifest_path = root / "manifest.json"
+        manifest = {"schema": 1, "entries": {}}
+        if manifest_path.exists():
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("schema") != 1 or not isinstance(manifest.get("entries"), dict):
+            raise ValueError("unsupported manifest schema")
+        manifest.setdefault("entries", {})
+        matched_items = [item for item in items if any(
+            isinstance(value, dict)
+            and isinstance(value.get("HandlerMetadata"), dict)
+            and value["HandlerMetadata"].get("PrimaryUrl") == item["url"]
+            for value in resource_entries.values())]
+        args.import_manifest = manifest["entries"]
+        args.import_manifest_document = manifest
+        start = min(args.offset, len(matched_items))
+        selected = matched_items[start:start + args.max_items]
+        report["entries"] = [import_existing(item, resource_entries, archive_root, root, args)
+                              for item in selected]
+        report["candidate_count"] = len(matched_items)
+        report["next_offset"] = start + len(selected)
+        report["unmatched_urls"] = len(items) - len(matched_items)
+        report["truncated"] = report["next_offset"] < len(matched_items)
+        report["ok"] = all(entry["status"] in (
+            "planned", "existing-association", "already-present", "stale-unknown")
+                           for entry in report["entries"])
     else:
         root = args.cache_dir.resolve()
         (root / "objects").mkdir(parents=True, exist_ok=True)
@@ -476,7 +663,9 @@ def main(argv=None):
             report["entries"].append(entry)
         if args.command == "refresh":
             rclone(args, "push", root)
-    report["ok"] = all(entry.get("status") in ("fresh", "verified", "restored") for entry in report["entries"]) if args.command != "discover" else True
+    if args.command != "import-existing":
+        report["ok"] = all(entry.get("status") in ("fresh", "verified", "restored")
+                           for entry in report["entries"]) if args.command != "discover" else True
     if args.report:
         atomic_json(args.report, report)
     print(json.dumps(report, indent=2, sort_keys=True))

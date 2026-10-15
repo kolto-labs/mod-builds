@@ -9,7 +9,37 @@ and never runs an installer. Workflow and installer adapters consume its JSON.
 python3 tools/modsync-ci/cache.py discover --report discovery.json
 python3 tools/modsync-ci/cache.py refresh --cache-dir .modsync-cache --report refresh.json
 python3 tools/modsync-ci/cache.py restore --cache-dir .modsync-cache --destination downloads --report restore.json
+python3 tools/modsync-ci/cache.py import-existing --resource-index /path/to/resource-index.json --archive-dir /path/to/archive-directory --cache-dir .modsync-cache --max-items 20
 ```
+
+`import-existing` defaults to a dry run. It inspects at most `--max-items` exact
+URL matched candidates (1–500), starting at `--offset` (default 0), joining only
+an exact unique `HandlerMetadata.PrimaryUrl` to exactly one listed archive
+filename. Unmatched guide URLs are counted separately and do not consume the limit. It requires the
+listed filename to be a regular local file with no symlink or hard-link aliases,
+and does not print provider URLs. Multiple index rows, multiple listed variants,
+missing files, and unsafe paths are reported without choosing a variant. Use the
+returned `next_offset` for the next batch; `truncated` indicates that more exact
+URL matches remain. This lets batches cover all matched candidates.
+An existing manifest association appears as `existing-association` in dry-run
+output; that label does not claim the local bytes match it.
+
+Pass `--apply` to check the listed file size against `--max-bytes` and available
+space, preserving a 3 GiB reserve, then copy eligible archives into a temporary
+cache object. Reads are bounded by the initial file size and `--max-bytes`. The
+command calculates SHA256 while copying, runs the existing archive integrity
+check on the staged copy, and links the verified copy atomically into
+`objects/<sha256>`. The original archive is never moved or modified. An existing
+manifest association is reported as `already-present` only when its SHA256 and
+size match the imported file and its cache object verifies; otherwise the command
+reports `manifest-conflict` without replacing the existing entry. The complete
+manifest document, including other top-level fields, is preserved. A new manifest
+entry records `status: stale-unknown`,
+`evidence: local-import`, `metadata_unknown: true`, and a local `imported_at`; it
+has no `checked_at`, endpoint validators, or upstream version claim. Import does
+not use the network or `--remote`. It does not enable restore: restore continues
+to require accepted freshness evidence until a separate integration changes that
+gate. Existing manifest entries are preserved and reported rather than replaced.
 
 Use repeated `--guide content/k1/full.md` / `--guide content/k2/full.md` to select
 guides. Inline links, reference definitions and URL autolinks are recognized;
