@@ -81,7 +81,7 @@ def fetch(remote_path, local_path, *extra):
     """Copy one remote file; return False when it does not exist."""
     try:
         rclone("copyto", remote_path, local_path, "--retries", "1", *extra)
-        return True
+        return Path(local_path).is_file()
     except subprocess.CalledProcessError as error:
         if error.returncode in MISSING:
             return False

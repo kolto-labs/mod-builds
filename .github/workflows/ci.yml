@@ -61,12 +61,15 @@ jobs:
           sudo apt-get install -y -qq lib32gcc-s1 >/dev/null
           mkdir -p "$RUNNER_TEMP/steamcmd"
           curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz | tar -xz -C "$RUNNER_TEMP/steamcmd"
-          "$RUNNER_TEMP/steamcmd/steamcmd.sh" \
-            +@sSteamCmdForcePlatformType windows \
-            +force_install_dir "$RUNNER_TEMP/game" \
-            +login "$STEAM_USERNAME" "$STEAM_PASSWORD" \
-            +app_update "$APP_ID" validate \
-            +quit || true
+          # Each attempt sends a new approval request to the Steam mobile app.
+          for _ in 1 2 3; do
+            "$RUNNER_TEMP/steamcmd/steamcmd.sh" \
+              +@sSteamCmdForcePlatformType windows \
+              +force_install_dir "$RUNNER_TEMP/game" \
+              +login "$STEAM_USERNAME" "$STEAM_PASSWORD" \
+              +app_update "$APP_ID" validate \
+              +quit && test -f "$RUNNER_TEMP/game/chitin.key" && break
+          done
           python tools/modsync-ci/game_cache.py pack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
 
