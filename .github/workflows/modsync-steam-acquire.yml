@@ -69,6 +69,85 @@ jobs:
       - name: Install SteamCMD dependencies
         if: steps.gate.outputs.due == 'true'
         run: sudo apt-get update -qq && sudo apt-get install -y lib32gcc-s1
+      - name: Observe public egress location before Steam authentication
+        if: steps.gate.outputs.due == 'true'
+        timeout-minutes: 1
+        shell: python
+        run: |
+          import ipaddress, json, os, re, subprocess
+
+          notice = 'Observed egress location (approximate IP geolocation; not a Steam-guaranteed location).'
+          try:
+              def locate(url):
+                  response = subprocess.run(
+                      ['curl', '-q', '--fail', '--silent', '--proto', '=https',
+                       '--connect-timeout', '5', '--max-time', '15',
+                       '--max-filesize', '16384', url],
+                      capture_output=True, check=True, timeout=20,
+                  )
+                  return json.loads(response.stdout)
+
+              data = locate('https://ipwho.is/')
+              corroboration = locate('https://ipapi.co/json/')
+              address = ipaddress.ip_address(data['ip'])
+              states = set(('AL AK AZ AR CA CO CT DE FL GA HI ID IL IN IA KS KY LA ME MD '
+                            'MA MI MN MS MO MT NE NV NH NJ NM NY NC ND OH OK OR PA RI '
+                            'SC SD TN TX UT VT VA WA WV WI WY DC').split())
+              state_code = data.get('region_code')
+              if (data.get('success') is not True or not address.is_global
+                      or data.get('country_code') != 'US' or state_code not in states
+                      or corroboration.get('error')
+                      or ipaddress.ip_address(corroboration['ip']) != address
+                      or corroboration.get('country_code') != 'US'
+                      or corroboration.get('region_code') != state_code):
+                  raise ValueError()
+              fields = [data.get(key) for key in ('region', 'city', 'country')]
+              if any(not isinstance(value, str)
+                     or not re.fullmatch(r"[A-Za-z][A-Za-z .,'()-]{0,99}", value)
+                     for value in fields):
+                  raise ValueError()
+              state, city, country = fields
+              message = (f'IP: {address}; state: {state} ({state_code}); city: {city}; country: {country} (US). '
+                         'ipwho.is and ipapi.co agree on public IP and US state; city is reported by ipwho.is.')
+          except Exception:
+              message = 'Public egress IP and US state could not be corroborated; Steam authentication is blocked.'
+              print(notice + '\n' + message, flush=True)
+              with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+                  summary.write(notice + '\n\n' + message + '\n')
+              raise SystemExit(1) from None
+          print(notice + '\n' + message, flush=True)
+          with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
+              summary.write(notice + '\n\n' + message + '\n')
+          location = {
+              'ip': str(address), 'state': state, 'state_code': state_code,
+              'city': city, 'country': country, 'country_code': 'US',
+              'provenance': {
+                  'sources': ['https://ipwho.is/', 'https://ipapi.co/json/'],
+                  'agreement': ['ip', 'state_code', 'country_code'],
+                  'city_source': 'https://ipwho.is/',
+                  'description': notice,
+              },
+          }
+          with open(os.path.join(os.environ['RUNNER_TEMP'], 'steam-egress-location.json'), 'x') as output:
+              json.dump(location, output, sort_keys=True)
+              output.write('\n')
+      - name: Publish public egress location before preparation delay
+        if: steps.gate.outputs.due == 'true'
+        timeout-minutes: 2
+        uses: actions/upload-artifact@v4
+        with:
+          name: steam-egress-location-${{ matrix.game }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/steam-egress-location.json
+          if-no-files-found: error
+          retention-days: 1
+      - name: Allow sixty seconds to prepare for Steam authentication
+        if: steps.gate.outputs.due == 'true'
+        timeout-minutes: 2
+        shell: python
+        run: |
+          import time
+          print('Observed egress location published. Steam authentication starts in 60 seconds.', flush=True)
+          time.sleep(60)
       - name: Authenticate and acquire fresh validated game
         id: acquisition
         if: steps.gate.outputs.due == 'true'
