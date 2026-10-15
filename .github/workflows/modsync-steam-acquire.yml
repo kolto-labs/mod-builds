@@ -241,6 +241,7 @@ jobs:
         shell: python
         env:
           GH_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+          GAME: ${{ matrix.game }}
         run: |
           import importlib.util, os, subprocess
           from pathlib import Path
@@ -256,16 +257,21 @@ jobs:
                   ['gh', 'secret', 'set', 'STEAM_CONFIG_VDF_GZIP', '-R', os.environ['GITHUB_REPOSITORY']],
                   input=encoded, capture_output=True, check=True,
               )
-              subprocess.run(
-                  ['gh', 'variable', 'set', 'STEAM_AUTH_READY', '--body', 'true',
-                   '-R', os.environ['GITHUB_REPOSITORY']],
-                  capture_output=True, check=True,
-              )
+              (Path(os.environ['RUNNER_TEMP']) / ('steam-auth-proven-' + os.environ['GAME'] + '.txt')).write_text(
+                  'game=' + os.environ['GAME'] + '\nportable_auth=verified\n', encoding='ascii')
           except Exception:
               raise SystemExit('SteamCMD authentication persistence failed; private details suppressed.') from None
-          print('SteamCMD authentication stored; scheduled acquisition enabled.')
+          print('SteamCMD authentication stored; awaiting independent proof for both games.')
           with open(os.environ['GITHUB_STEP_SUMMARY'], 'a') as summary:
-              summary.write('SteamCMD authentication stored; scheduled acquisition enabled.\n')
+              summary.write('SteamCMD authentication stored; readiness remains disabled until both game proofs pass.\n')
+      - name: Publish sanitized per-game auth proof
+        if: success() && steps.acquisition.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: steam-auth-proven-${{ matrix.game }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/steam-auth-proven-${{ matrix.game }}.txt
+          if-no-files-found: error
+          retention-days: 1
       - name: Seal private acquisition failure diagnostics
         id: diagnostics
         if: always() && steps.acquisition.outcome == 'failure'
@@ -465,3 +471,44 @@ jobs:
         if: always()
         shell: bash
         run: rm -rf "$RUNNER_TEMP/steam-state" "$RUNNER_TEMP/clean" "$RUNNER_TEMP/game" "$RUNNER_TEMP/restored" "$RUNNER_TEMP/steam-private.log" "$RUNNER_TEMP/steam-diagnostic.log" "$RUNNER_TEMP/steam-report.json" "$RUNNER_TEMP/steamcmd.tar.gz" "$RUNNER_TEMP/sealed" "$RUNNER_TEMP/steam-diagnostics" "$RUNNER_TEMP/steam-diagnostics.seal"
+  finalize-auth-readiness:
+    needs: acquire
+    if: always() && needs.acquire.result == 'success'
+    runs-on: ubuntu-latest
+    permissions:
+      actions: read
+    steps:
+      - name: Download sanitized per-game auth proofs
+        uses: actions/download-artifact@v4
+        with:
+          pattern: steam-auth-proven-*
+          path: ${{ runner.temp }}/steam-auth-proven
+          merge-multiple: true
+          if-no-artifact: ignore
+      - name: Enable readiness only after both game proofs
+        shell: python
+        env:
+          GH_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+        run: |
+          import os, subprocess
+          from pathlib import Path
+
+          proven = set()
+          root = Path(os.environ['RUNNER_TEMP']) / 'steam-auth-proven'
+          for marker in root.glob('steam-auth-proven-*.txt'):
+              fields = {}
+              for line in marker.read_text(encoding='ascii').splitlines():
+                  key, separator, value = line.partition('=')
+                  if separator:
+                      fields[key] = value
+              if set(fields) == {'game', 'portable_auth'} and fields.get('portable_auth') == 'verified' and fields.get('game') in {'k1', 'k2'}:
+                  proven.add(fields['game'])
+          if proven != {'k1', 'k2'}:
+              print('Both-game portable auth proof is absent; scheduled acquisition remains disabled.')
+              raise SystemExit(0)
+          subprocess.run(
+              ['gh', 'variable', 'set', 'STEAM_AUTH_READY', '--body', 'true',
+               '-R', os.environ['GITHUB_REPOSITORY']],
+              check=True,
+          )
+          print('Both-game portable auth proof verified; scheduled acquisition enabled.')
