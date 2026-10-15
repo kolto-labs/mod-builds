@@ -47,113 +47,112 @@ def seal(source, output):
     output.parent.mkdir(parents=True, exist_ok=True)
     salt = os.urandom(32)
     password, authentication = keys(salt)
-    with tempfile.TemporaryFile() as ciphertext:
-        process = openssl(password, subprocess.PIPE, ciphertext)
-        try:
-            with ExitStack() as handles:
-                directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    header = MAGIC + salt
+    descriptor, temporary = tempfile.mkstemp(dir=output.parent)
+    try:
+        with os.fdopen(descriptor, "w+b") as envelope:
+            envelope.write(header)
+            envelope.flush()
+            process = openssl(password, subprocess.PIPE, envelope)
+            try:
+                with ExitStack() as handles:
+                    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
 
-                def open_directory(name, parent=None):
-                    descriptor = os.open(name, directory_flags, dir_fd=parent)
-                    handles.callback(os.close, descriptor)
-                    return descriptor
+                    def open_directory(name, parent=None):
+                        descriptor = os.open(name, directory_flags, dir_fd=parent)
+                        handles.callback(os.close, descriptor)
+                        return descriptor
 
-                def fingerprint(metadata):
-                    return (metadata.st_dev, metadata.st_ino, metadata.st_mode,
-                            metadata.st_nlink, metadata.st_size, metadata.st_mtime_ns,
-                            metadata.st_ctime_ns, metadata.st_uid, metadata.st_gid)
+                    def fingerprint(metadata):
+                        return (metadata.st_dev, metadata.st_ino, metadata.st_mode,
+                                metadata.st_nlink, metadata.st_size, metadata.st_mtime_ns,
+                                metadata.st_ctime_ns, metadata.st_uid, metadata.st_gid)
 
-                def unchanged(expected, actual):
-                    if fingerprint(expected) != fingerprint(actual):
-                        raise ValueError("Source changed while sealing")
-
-                anchors = []
-                parent = open_directory(source.absolute().anchor)
-                for name in source.absolute().parts[1:]:
-                    expected = os.stat(name, dir_fd=parent, follow_symlinks=False)
-                    descriptor = open_directory(name, parent)
-                    unchanged(expected, os.fstat(descriptor))
-                    anchors.append((parent, name, descriptor, expected))
-                    parent = descriptor
-
-                directories = []
-
-                def walk(descriptor, prefix, archive):
-                    expected = os.fstat(descriptor)
-                    names = sorted(os.listdir(descriptor))
-                    entries = []
-                    directories.append((descriptor, expected, names, entries))
-                    for name in names:
-                        metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-                        entries.append((name, metadata))
-                        member = tarfile.TarInfo(prefix + name)
-                        member.mode = stat.S_IMODE(metadata.st_mode)
-                        member.uid = metadata.st_uid
-                        member.gid = metadata.st_gid
-                        member.mtime = metadata.st_mtime
-                        if stat.S_ISDIR(metadata.st_mode):
-                            child = open_directory(name, descriptor)
-                            unchanged(metadata, os.fstat(child))
-                            member.type = tarfile.DIRTYPE
-                            archive.addfile(member)
-                            walk(child, prefix + name + "/", archive)
-                        elif stat.S_ISREG(metadata.st_mode):
-                            flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
-                            incoming_fd = os.open(name, flags, dir_fd=descriptor)
-                            with os.fdopen(incoming_fd, "rb") as incoming:
-                                opened = os.fstat(incoming.fileno())
-                                if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
-                                    raise ValueError("Only single-link regular files may be sealed")
-                                unchanged(metadata, opened)
-                                member.size = opened.st_size
-                                archive.addfile(member, incoming)
-                                unchanged(opened, os.fstat(incoming.fileno()))
-                        else:
-                            raise ValueError("Only regular files and directories may be sealed")
-                        unchanged(metadata, os.stat(name, dir_fd=descriptor,
-                                                    follow_symlinks=False))
-
-                with tarfile.open(fileobj=process.stdin, mode="w|") as archive:
-                    walk(parent, "", archive)
-                    for descriptor, expected, names, entries in directories:
-                        unchanged(expected, os.fstat(descriptor))
-                        if sorted(os.listdir(descriptor)) != names:
+                    def unchanged(expected, actual):
+                        if fingerprint(expected) != fingerprint(actual):
                             raise ValueError("Source changed while sealing")
-                        for name, metadata in entries:
+
+                    anchors = []
+                    parent = open_directory(source.absolute().anchor)
+                    for name in source.absolute().parts[1:]:
+                        expected = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                        descriptor = open_directory(name, parent)
+                        unchanged(expected, os.fstat(descriptor))
+                        anchors.append((parent, name, descriptor, expected))
+                        parent = descriptor
+
+                    directories = []
+
+                    def walk(descriptor, prefix, archive):
+                        expected = os.fstat(descriptor)
+                        names = sorted(os.listdir(descriptor))
+                        entries = []
+                        directories.append((descriptor, expected, names, entries))
+                        for name in names:
+                            metadata = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+                            entries.append((name, metadata))
+                            member = tarfile.TarInfo(prefix + name)
+                            member.mode = stat.S_IMODE(metadata.st_mode)
+                            member.uid = metadata.st_uid
+                            member.gid = metadata.st_gid
+                            member.mtime = metadata.st_mtime
+                            if stat.S_ISDIR(metadata.st_mode):
+                                child = open_directory(name, descriptor)
+                                unchanged(metadata, os.fstat(child))
+                                member.type = tarfile.DIRTYPE
+                                archive.addfile(member)
+                                walk(child, prefix + name + "/", archive)
+                            elif stat.S_ISREG(metadata.st_mode):
+                                flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
+                                incoming_fd = os.open(name, flags, dir_fd=descriptor)
+                                with os.fdopen(incoming_fd, "rb") as incoming:
+                                    opened = os.fstat(incoming.fileno())
+                                    if not stat.S_ISREG(opened.st_mode) or opened.st_nlink != 1:
+                                        raise ValueError("Only single-link regular files may be sealed")
+                                    unchanged(metadata, opened)
+                                    member.size = opened.st_size
+                                    archive.addfile(member, incoming)
+                                    unchanged(opened, os.fstat(incoming.fileno()))
+                            else:
+                                raise ValueError("Only regular files and directories may be sealed")
                             unchanged(metadata, os.stat(name, dir_fd=descriptor,
                                                         follow_symlinks=False))
-                    for parent, name, descriptor, expected in anchors:
-                        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
-                        if (current.st_dev, current.st_ino, current.st_mode) != (
-                                expected.st_dev, expected.st_ino, expected.st_mode):
-                            raise ValueError("Source directory changed while sealing")
-            process.stdin.close()
-            if process.wait() != 0:
-                raise ValueError("Encryption failed")
-        finally:
-            if process.poll() is None:
-                process.kill()
-            process.wait()
-            try:
+
+                    with tarfile.open(fileobj=process.stdin, mode="w|") as archive:
+                        walk(parent, "", archive)
+                        for descriptor, expected, names, entries in directories:
+                            unchanged(expected, os.fstat(descriptor))
+                            if sorted(os.listdir(descriptor)) != names:
+                                raise ValueError("Source changed while sealing")
+                            for name, metadata in entries:
+                                unchanged(metadata, os.stat(name, dir_fd=descriptor,
+                                                            follow_symlinks=False))
+                        for parent, name, descriptor, expected in anchors:
+                            current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+                            if (current.st_dev, current.st_ino, current.st_mode) != (
+                                    expected.st_dev, expected.st_ino, expected.st_mode):
+                                raise ValueError("Source directory changed while sealing")
                 process.stdin.close()
-            except BrokenPipeError:
-                pass
-        header = MAGIC + salt
-        mac = hmac.new(authentication, header, "sha256")
-        ciphertext.seek(0)
-        descriptor, temporary = tempfile.mkstemp(dir=output.parent)
-        try:
-            with os.fdopen(descriptor, "wb") as envelope:
-                envelope.write(header)
-                for chunk in iter(lambda: ciphertext.read(CHUNK), b""):
-                    mac.update(chunk)
-                    envelope.write(chunk)
-                envelope.write(mac.digest())
-                envelope.flush()
-                os.fsync(envelope.fileno())
-            os.replace(temporary, output)
-        finally:
-            Path(temporary).unlink(missing_ok=True)
+                if process.wait() != 0:
+                    raise ValueError("Encryption failed")
+            finally:
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
+                try:
+                    process.stdin.close()
+                except BrokenPipeError:
+                    pass
+            mac = hmac.new(authentication, header, "sha256")
+            envelope.seek(len(header))
+            for chunk in iter(lambda: envelope.read(CHUNK), b""):
+                mac.update(chunk)
+            envelope.write(mac.digest())
+            envelope.flush()
+            os.fsync(envelope.fileno())
+        os.replace(temporary, output)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 def unseal(source, destination):
