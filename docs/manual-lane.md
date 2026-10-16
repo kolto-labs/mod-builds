@@ -13,13 +13,16 @@ the port lanes are compared against.
 
 For each game:
 
-1. Looks for `ci/<game>-manual-plan.json`. Without it the job logs a notice, skips
-   every remaining step and passes, so a green run without a plan means nothing.
+1. Requires `ci/<game>-manual-plan.json`. If it is absent the job fails with an
+   error and stops; it never passes without a human-reviewed plan.
 2. Installs Wine, Xvfb and archive tools.
 3. Restores `game-<game>-v1` and runs `game_cache.py unpack`, which verifies every
    file. See [steam.md](steam.md).
-4. Restores archives with `cache.py restore`. This is best effort; a missing
-   archive fails the step that needs it. See [cache.md](cache.md).
+4. Restores archives with `cache.py restore` using the read-only cache credentials.
+   Restore is fail-closed: if any archive of the guide is not in the cache (or fails
+   verification), the step exits non-zero and the lane stops before any install
+   step. This job never acquires new links; only the `mods` job fills the cache.
+   See [cache.md](cache.md).
 5. Runs `xvfb-run -a python tools/modsync-ci/manual.py --plan <plan> --guide
    content/<game>/full.md --game-dir ... --archives ... --work-dir ... --report ...`.
 
