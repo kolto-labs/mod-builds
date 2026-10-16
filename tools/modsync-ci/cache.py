@@ -218,6 +218,129 @@ class Links(HTMLParser):
             self.urls.extend(value for name, value in attrs if name == "href" and value)
 
 
+class DownloadRows(HTMLParser):
+    """Collects (file name, download href) rows from a DeadlyStream file-selection page."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self.row = None
+        self.title_tag = None
+        self.title_depth = 0
+
+    def finish_row(self):
+        if self.row is not None and self.row["href"]:
+            self.rows.append({"name": " ".join("".join(self.row["name"]).split()) or None,
+                              "href": self.row["href"]})
+        self.row = None
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        classes = (values.get("class") or "").split()
+        if tag == "li" and "ipsDataItem" in classes:
+            self.finish_row()
+            self.row = {"name": [], "href": None}
+            self.title_tag = None
+        elif self.row is not None:
+            if self.title_tag is None and "ipsDataItem_title" in classes:
+                self.title_tag, self.title_depth = tag, 1
+            elif self.title_tag == tag:
+                self.title_depth += 1
+            if tag == "a" and values.get("href") and not self.row["href"]:
+                query = parse_qs(urlsplit(html.unescape(values["href"])).query)
+                if query.get("do") == ["download"] and "r" in query:
+                    self.row["href"] = values["href"]
+
+    def handle_endtag(self, tag):
+        if self.title_tag == tag:
+            self.title_depth -= 1
+            if self.title_depth == 0:
+                self.title_tag = None
+
+    def handle_data(self, data):
+        if self.row is not None and self.title_tag is not None:
+            self.row["name"].append(data)
+
+    def close(self):
+        super().close()
+        self.finish_row()
+
+
+SELECTIONS_PATH = Path(__file__).with_name("archive_selections.json")
+FILE_ID = re.compile(r"/files/file/([0-9]+)(?:[-/]|$)")
+
+
+def selection_key(key):
+    key = str(key).strip()
+    if key.isdigit():
+        return key
+    match = FILE_ID.search(urlsplit(key).path) if key.startswith(("https://", "http://")) else None
+    if not match:
+        raise ValueError("archive selection key must be a DeadlyStream file id or file page URL")
+    return match[1]
+
+
+def load_selections(path=None):
+    path = Path(path or SELECTIONS_PATH)
+    if not path.exists():
+        return {}
+    document = json.loads(path.read_text(encoding="utf-8"))
+    selections = {}
+    for key, value in (document.get("selections") or {}).items():
+        name = value if isinstance(value, str) else (value or {}).get("file")
+        if not isinstance(name, str) or not ARCHIVE.search(name):
+            raise ValueError("archive selection for " + str(key) + " must name an archive file")
+        selections[selection_key(key)] = name
+    return selections
+
+
+def describe_rows(rows):
+    shown = ["%s (r=%s)" % (json.dumps(row["name"]) if row["name"] else "unnamed", row["r"]) for row in rows[:12]]
+    return "; ".join(shown) + ("; ..." if len(rows) > 12 else "")
+
+
+def choose_download(rows, file_id, selections):
+    reviewed = selections.get(file_id)
+    if reviewed:
+        matches = [row for row in rows if row["name"] == reviewed]
+        if len(matches) == 1:
+            return matches[0]["url"]
+        raise ValueError("reviewed archive selection for file %s matches %d of the listed files; "
+                         "re-review archive_selections.json; candidates: %s" % (file_id, len(matches), describe_rows(rows)))
+    if len(rows) == 1:
+        return rows[0]["url"]
+    archives = [row for row in rows if row["name"] and ARCHIVE.search(row["name"])]
+    if len(archives) == 1 and all(row["name"] for row in rows):
+        return archives[0]["url"]
+    raise ValueError("landing page lists multiple files and no reviewed selection exists for file %s; "
+                     "add an exact file name to archive_selections.json; candidates: %s"
+                     % (file_id, describe_rows(rows)))
+
+
+def deadlystream_endpoint(source, base, candidates, file_id, selections):
+    def query_of(url):
+        return parse_qs(urlsplit(url).query)
+
+    selection = {url for url in candidates if query_of(url).get("do") == ["download"] and "r" in query_of(url)}
+    if selection:
+        named = DownloadRows()
+        named.feed(source)
+        named.close()
+        by_url = {}
+        for row in named.rows:
+            url = urljoin(base, html.unescape(row["href"]))
+            if url in selection:
+                by_url[url] = {"name": row["name"], "url": url}
+        rows = [{**by_url.get(url, {"name": None, "url": url}), "r": query_of(url)["r"][0]}
+                for url in sorted(selection, key=lambda url: (len(query_of(url)["r"][0]), query_of(url)["r"][0]))]
+        return choose_download(rows, file_id, selections)
+    downloads = {url for url in candidates if query_of(url).get("do") == ["download"]}
+    pool = downloads or candidates
+    if len(pool) != 1:
+        raise ValueError("landing page has no unique archive endpoint; attachment selection/provider adapter required")
+    return next(iter(pool))
+
+
 def request(url, args, headers=None):
     checked_url(url)
     for attempt in range(args.retries + 1):
@@ -238,7 +361,7 @@ def request(url, args, headers=None):
         time.sleep(min(2 ** attempt, 8))
 
 
-def page_endpoint(response, item):
+def page_endpoint(response, item, selections=None):
     origin = urlsplit(item["url"])
     if item["provider"] == "deadlystream":
         canonical = urlsplit(checked_url(response.geturl()))
@@ -272,9 +395,10 @@ def page_endpoint(response, item):
                 (not parsed.path.endswith("/attachment.php") and parsed.path.rstrip("/") != origin.path.rstrip("/"))):
             continue
         candidates.add(checked_url(url))
-    attachments = {url for url in candidates if "r" in parse_qs(urlsplit(url).query) or
-                   urlsplit(url).path.endswith("/attachment.php")}
-    candidates = attachments or candidates
+    if item["provider"] == "deadlystream":
+        selections = load_selections() if selections is None else selections
+        file_id = FILE_ID.match(origin.path)[1]
+        return deadlystream_endpoint(source, response.geturl(), candidates, file_id, selections)
     if len(candidates) != 1:
         raise ValueError("landing page has no unique archive endpoint; attachment selection/provider adapter required")
     return candidates.pop()

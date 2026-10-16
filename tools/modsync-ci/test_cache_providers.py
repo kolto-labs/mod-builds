@@ -264,5 +264,141 @@ class FetchWithToolTests(unittest.TestCase):
         self.assertEqual(entry["evidence"], "download-without-upstream-metadata")
 
 
+POST_URL = "https://deadlystream.com/files/file/123-example-post/"
+
+
+class FakePage:
+    def __init__(self, url, source):
+        self.url = url
+        self.source = source.encode()
+
+    def geturl(self):
+        return self.url
+
+    def read(self, size=-1):
+        return self.source
+
+
+def row_html(name, number):
+    return ('<li class="ipsDataItem"><div class="ipsDataItem_main"><h4 class="ipsDataItem_title">'
+            '<a href="/files/file/123-example-post/?do=download&amp;r=%d&amp;confirm=1&amp;t=1&amp;csrfKey=key">%s</a>'
+            '</h4></div></li>' % (number, name))
+
+
+def selection_page(*names, extra=""):
+    rows = "".join(row_html(name, 1000 + index) for index, name in enumerate(names))
+    return "<html><body>%s<ul>%s</ul></body></html>" % (extra, rows)
+
+
+def endpoint_for(source, selections):
+    item = item_for(POST_URL)
+    return cache.page_endpoint(FakePage(POST_URL, source), item, selections)
+
+
+class ArchiveSelectionTests(unittest.TestCase):
+    def test_single_row_needs_no_selection(self):
+        endpoint = endpoint_for(selection_page("only.zip"), {})
+        self.assertIn("r=1000", endpoint)
+
+    def test_multi_row_uses_reviewed_selection(self):
+        source = selection_page("first.zip", "second.7z", "third.rar")
+        endpoint = endpoint_for(source, {"123": "second.7z"})
+        self.assertIn("r=1001", endpoint)
+        self.assertNotIn("r=1000", endpoint)
+
+    def test_multi_row_without_selection_fails_closed_listing_candidates(self):
+        source = selection_page("first.zip", "second.7z")
+        with self.assertRaises(ValueError) as caught:
+            endpoint_for(source, {})
+        message = str(caught.exception)
+        self.assertIn("no reviewed selection", message)
+        self.assertIn("first.zip", message)
+        self.assertIn("second.7z", message)
+
+    def test_selection_for_other_post_does_not_apply(self):
+        source = selection_page("first.zip", "second.7z")
+        with self.assertRaises(ValueError) as caught:
+            endpoint_for(source, {"999": "second.7z"})
+        self.assertIn("no reviewed selection", str(caught.exception))
+
+    def test_selection_naming_missing_file_fails_closed(self):
+        source = selection_page("first.zip", "second.7z")
+        with self.assertRaises(ValueError) as caught:
+            endpoint_for(source, {"123": "absent.zip"})
+        message = str(caught.exception)
+        self.assertIn("matches 0 of the listed files", message)
+        self.assertIn("first.zip", message)
+
+    def test_selection_requires_exact_name_match(self):
+        source = selection_page("first.zip", "second.7z")
+        with self.assertRaises(ValueError):
+            endpoint_for(source, {"123": "First.zip"})
+
+    def test_duplicate_listed_names_fail_closed(self):
+        source = selection_page("same.zip", "same.zip")
+        with self.assertRaises(ValueError) as caught:
+            endpoint_for(source, {"123": "same.zip"})
+        self.assertIn("matches 2 of the listed files", str(caught.exception))
+
+    def test_attachment_links_not_preferred_over_download_endpoint(self):
+        extra = '<a href="/applications/core/interface/file/attachment.php?id=77">preview</a>'
+        endpoint = endpoint_for(selection_page("first.zip", "second.7z", extra=extra), {"123": "first.zip"})
+        self.assertIn("do=download", endpoint)
+        self.assertIn("r=1000", endpoint)
+        self.assertNotIn("attachment.php", endpoint)
+
+    def test_landing_page_prefers_download_over_attachment_link(self):
+        source = ('<html><body>'
+                  '<a href="/applications/core/interface/file/attachment.php?id=77">image</a>'
+                  '<a href="/files/file/123-example-post/?do=download&amp;csrfKey=key">Download</a>'
+                  '</body></html>')
+        endpoint = endpoint_for(source, {})
+        self.assertIn("do=download", endpoint)
+        self.assertNotIn("attachment.php", endpoint)
+
+    def test_attachment_only_page_still_resolves_when_unique(self):
+        source = '<html><body><a href="/applications/core/interface/file/attachment.php?id=77">file</a></body></html>'
+        self.assertIn("attachment.php", endpoint_for(source, {}))
+
+    def test_multiple_attachment_links_without_downloads_fail_closed(self):
+        source = ('<html><body><a href="/applications/core/interface/file/attachment.php?id=1">a</a>'
+                  '<a href="/applications/core/interface/file/attachment.php?id=2">b</a></body></html>')
+        with self.assertRaises(ValueError):
+            endpoint_for(source, {})
+
+
+class LoadSelectionsTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.path = Path(self.directory.name, "selections.json")
+
+    def load(self, text):
+        self.path.write_text(text, encoding="utf-8")
+        return cache.load_selections(self.path)
+
+    def test_missing_file_means_no_selections(self):
+        self.assertEqual(cache.load_selections(Path(self.directory.name, "absent.json")), {})
+
+    def test_string_and_object_forms_with_url_keys(self):
+        loaded = self.load('{"selections": {"11": "a.zip", '
+                           '"https://deadlystream.com/files/file/22-example-post/": {"file": "b.7z", "reason": "why"}}}')
+        self.assertEqual(loaded, {"11": "a.zip", "22": "b.7z"})
+
+    def test_non_archive_selection_rejected(self):
+        with self.assertRaises(ValueError):
+            self.load('{"selections": {"11": "notes.txt"}}')
+
+    def test_bad_key_rejected(self):
+        with self.assertRaises(ValueError):
+            self.load('{"selections": {"not-a-post": "a.zip"}}')
+
+    def test_shipped_selections_are_well_formed(self):
+        loaded = cache.load_selections()
+        for key, name in loaded.items():
+            self.assertTrue(key.isdigit())
+            self.assertRegex(name, r"\.(zip|7z|rar)$")
+
+
 if __name__ == "__main__":
     unittest.main()

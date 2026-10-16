@@ -1,0 +1,120 @@
+{
+  "selections": {
+    "367": {
+      "file": "Sapiens Nihilus TPC.7z",
+      "reason": "guide: download the .tpc version"
+    },
+    "441": {
+      "file": "4k atton [tpc version].7z",
+      "reason": "guide: download the .tpc version"
+    },
+    "723": {
+      "file": "HQSkyboxesII_K1.7z",
+      "reason": "guide names this file"
+    },
+    "931": {
+      "file": "TSL HD Cockpit Skyboxes - Medium Resolution TPC.zip",
+      "reason": "guide recommends Medium and says to use the .tpc files"
+    },
+    "938": {
+      "file": "High Quality Cockpit Skyboxes M.zip",
+      "reason": "guide recommends the Medium option"
+    },
+    "980": {
+      "file": "Malak.rar",
+      "reason": "guide: do not download the loose .tga; install steps reference the eye-colour folders this archive contains"
+    },
+    "982": {
+      "file": "hd_twilek_female.rar",
+      "reason": "guide names this file and says to ignore the other versions"
+    },
+    "1068": {
+      "file": "K1 Galaxy Map Fix Pack.zip",
+      "reason": "main download; guide calls the HR Menu Patch an optional extra"
+    },
+    "1123": {
+      "file": "Canderous OrdoHD (new clothes).rar",
+      "reason": "guide: download only the new-clothes version"
+    },
+    "1125": {
+      "file": "hd_kt_400_military_droid_carrier_and_lethisk_class_armed_freighter.rar",
+      "reason": "guide names this file"
+    },
+    "1133": {
+      "file": "Carth Onasi (new clothes).rar",
+      "reason": "guide: download the new-clothes file unless head/face changes are wanted"
+    },
+    "1199": {
+      "file": "[K1]_Diversified_Jedi_Captives_on_the_SF_v1.2.4.7z",
+      "reason": "guide recommends the base install option"
+    },
+    "1201": {
+      "file": "[TSL]_Fixed_Hologram_Models_and_Admiralty_Redux_for_TSLRCM_v1.61.7z",
+      "reason": "guide: download just the main file, not the patches"
+    },
+    "1213": {
+      "file": "hd_npc_portraits-v2.0.7z",
+      "reason": "guide: download the V2 option"
+    },
+    "1860": {
+      "file": "Droid special weapons fix for TSL v2.0.7z",
+      "reason": "guide: use the V2 version"
+    },
+    "1909": {
+      "file": "Random HD UI Elements.zip",
+      "reason": "guide: download just the main download, not the optional request"
+    },
+    "1929": {
+      "file": "Stylized_Portraits_KOTOR_Light.7z",
+      "reason": "guide strongly recommends the Lite version"
+    },
+    "2031": {
+      "file": "ZaalbarHD.rar",
+      "reason": "guide recommends against the alternate large-texture version"
+    },
+    "2063": {
+      "file": "HD Computer Panel, Damaged Version For Malachor.7z",
+      "reason": "guide: download only the Damaged version, it contains both"
+    },
+    "2277": {
+      "file": "Kiosk HD 15.03.2024.rar",
+      "reason": "guide: download the dated 15.03.2024 version"
+    },
+    "2355": {
+      "file": "TSL Transparent Cockpit Windows v1_1_2 - Reskin Friendly.7z",
+      "reason": "guide recommends the reskin-friendly version"
+    },
+    "2430": {
+      "file": "Stun baton HD.rar",
+      "reason": "guide: download only the base file, not the alternate-icon file"
+    },
+    "2514": {
+      "file": "HD Realistic Sand People.rar",
+      "reason": "guide: download the .tga version, not the .tpc"
+    },
+    "2516": {
+      "file": "NPC clothing M.rar",
+      "reason": "guide: ignore the txi.rar file"
+    },
+    "2659": {
+      "file": "Upscale+ Character Fixes - KotOR V0.52 (2x tpc).7z",
+      "reason": "guide strongly recommends the 2x .tpc version"
+    },
+    "2660": {
+      "file": "Upscale+ Character Fixes - TSL V0.52 (2x tpc).7z",
+      "reason": "guide strongly recommends the 2x .tpc version"
+    },
+    "2699": {
+      "file": "forcecage_updated_1.1.0.zip",
+      "reason": "guide: download just this file"
+    },
+    "2739": {
+      "file": "Manaan taxi (English).zip",
+      "reason": "guide: other languages only if a non-English version is wanted"
+    },
+    "2812": {
+      "file": "CK-Classic Class Attack Bonus.zip",
+      "reason": "guide strongly recommends the standard option"
+    }
+  }
+}
