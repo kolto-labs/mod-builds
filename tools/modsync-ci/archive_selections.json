@@ -8,9 +8,19 @@
       "file": "4k atton [tpc version].7z",
       "reason": "guide: download the .tpc version"
     },
+    "578": {
+      "file": "tslrcm2022.exe",
+      "loose": true,
+      "reason": "reviewed loose file: the guide installs this post as an Executable and the page serves a single pre-built installer, not an archive"
+    },
     "723": {
       "file": "HQSkyboxesII_K1.7z",
       "reason": "guide names this file"
+    },
+    "842": {
+      "file": "aleema_ketos_robe_description_correction.zip",
+      "r": "19298",
+      "reason": "guide: download the larger of the two files; both rows share one name, so the row id picks the 3.47 kB one over the 2.99 kB one"
     },
     "931": {
       "file": "TSL HD Cockpit Skyboxes - Medium Resolution TPC.zip",
@@ -43,6 +53,13 @@
     "1133": {
       "file": "Carth Onasi (new clothes).rar",
       "reason": "guide: download the new-clothes file unless head/face changes are wanted"
+    },
+    "1138": {
+      "files": [
+        "[TSL]_Main_Menu_Widescreen_Fix_v1.2.7z",
+        "Updated_TSLRCM_Logo_v1.8.6.7z"
+      ],
+      "reason": "guide: apply the main fix; the build uses TSLRCM, so the separate Updated_TSLRCM_Logo download is needed as well"
     },
     "1199": {
       "file": "[K1]_Diversified_Jedi_Captives_on_the_SF_v1.2.4.7z",
@@ -116,6 +133,13 @@
       "file": "Stun baton HD.rar",
       "reason": "guide: download only the base file, not the alternate-icon file"
     },
+    "2503": {
+      "files": [
+        "k2rs_30fps_1920x1080.7z",
+        "k2rs_30fps_mods_1920x1080.7z"
+      ],
+      "reason": "guide: with TSLRCM download both the main file for the monitor resolution and the same-resolution _mods file; CI default = 1920x1080 30fps"
+    },
     "2514": {
       "file": "HD Realistic Sand People.rar",
       "reason": "guide: download the .tga version, not the .tpc"
@@ -152,6 +176,15 @@
     "2739": {
       "file": "Manaan taxi (English).zip",
       "reason": "guide: other languages only if a non-English version is wanted"
+    },
+    "2752": {
+      "files": [
+        "relightingtsl_101PERt_2.1.zip",
+        "relightingtsl_102PERfklnt_1.0.zip",
+        "relightingtsl_003EBOg_1.2.zip",
+        "relightingtsl_298TELk_1.0.zip"
+      ],
+      "reason": "guide: download and apply all files; the TSLRCM-only file is included because the build uses TSLRCM"
     },
     "2787": {
       "file": "N_DarthMalak01.tga",

@@ -51,12 +51,14 @@ ADAPTER_REASONS = {
     "download endpoint did not resolve to an attachment; provider adapter required",
     *(name + " requires an authenticated/provider adapter" for name in ("nexus", "mega", "google-drive", "gamefront")),
 }
+SELECTION_PREFIXES = ("reviewed archive selection for file", "landing page lists multiple files and no reviewed selection",
+                      "fetched files do not match the reviewed multi-file selection")
 NETWORK_REASONS = {"network request failed", "total download timeout", "TimeoutError", "URLError", "HTTPException"}
 INTEGRITY_REASONS = {
     "not a supported archive (HTML and unknown payloads rejected)", "truncated archive", "invalid manifest SHA256",
     "restore SHA256 mismatch", "cache object conflict", "expected complete HTTP 200 archive",
 }
-PROVIDERS = {"deadlystream", "nexus", "mega", "google-drive", "gamefront", "http"}
+PROVIDERS = {"deadlystream", "nexus", "mega", "google-drive", "gamefront", "dropbox", "http"}
 
 
 class Stop(BaseException):
@@ -111,10 +113,11 @@ def upload_object(path, remote_path):
         raise ValueError("object source changed during upload")
 
 
-def is_due(entry, now):
+def is_due(entry, now, item=None):
     upstream_checked = entry.get("status") == "fresh" or (
         entry.get("status") == "verified" and entry.get("evidence") == "download-without-upstream-metadata")
-    return not (upstream_checked and 0 <= now - entry.get("checked_at", 0) < FRESH_SECONDS)
+    current = item is None or cache.objects_match_selection(item, entry)
+    return not (upstream_checked and current and 0 <= now - entry.get("checked_at", 0) < FRESH_SECONDS)
 
 
 def refresh_item(item, root, remote, force):
@@ -125,16 +128,16 @@ def refresh_item(item, root, remote, force):
     cache.atomic_json(manifest_path, manifest)
     old = manifest["entries"].get(item["id"], {})
     yield "restore"
-    if old.get("sha256"):
-        path, size = cache.object_path(root, old), old.get("size")
+    for stored in cache.entry_objects(old):
+        path, size = cache.object_path(root, stored), stored.get("size")
         if not isinstance(size, int) or size < 0 or size + RESERVE >= shutil.disk_usage(root).free:
             raise ValueError("insufficient disk to restore selected object")
         temporary = root / "objects" / ".download-restore"
         try:
             if fetch(f"{remote}/objects/{path.name}", temporary):
-                if not matches(temporary, old["sha256"], size):
+                if not matches(temporary, stored["sha256"], size):
                     raise ValueError("restored object failed size/SHA256 verification")
-                cache.validate(temporary, 300, loose=cache.entry_loose(item, old))
+                cache.validate(temporary, 300, loose=cache.entry_loose(item, stored))
                 os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
@@ -154,10 +157,11 @@ def refresh_item(item, root, remote, force):
     yield "persist-object"
     uploaded = set()
     for entry in json.loads(manifest_path.read_text())["entries"].values():
-        if entry.get("sha256") not in uploaded and cache.local_valid(root, entry):
-            path = cache.object_path(root, entry)
-            upload_object(path, f"{remote}/objects/{path.name}")
-            uploaded.add(entry["sha256"])
+        for stored in cache.entry_objects(entry):
+            if stored.get("sha256") not in uploaded and cache.local_valid(root, stored):
+                path = cache.object_path(root, stored)
+                upload_object(path, f"{remote}/objects/{path.name}")
+                uploaded.add(stored["sha256"])
     yield "persist-manifest"
     rclone("copyto", manifest_path, f"{remote}/manifest.json", "--retries", "1")
     yield "evict"
@@ -200,21 +204,23 @@ def classify(reason):
         return "network", None
     if reason in INTEGRITY_REASONS:
         return "integrity", None
+    if reason.startswith(SELECTION_PREFIXES):
+        return "selection-review", None
     return "other", None
 
 
 def totals(entries, manifest, started, stop, ok, persisted, max_items):
     counts = Counter(entry.get("status") for entry in entries)
     checked = [entry for entry in manifest.get("entries", {}).values() if entry.get("checked_at", 0) >= started]
-    verified = [entry for entry in checked
-                if entry.get("evidence") in ("download-200", "download-without-upstream-metadata")]
+    verified = [stored for entry in checked for stored in cache.entry_objects(entry)
+                if stored.get("evidence") in ("download-200", "download-without-upstream-metadata")]
     unresolved = Counter()
     other_reasons = Counter()
     for entry in entries:
         if entry.get("status") == "unresolved":
             provider = entry.get("provider") if entry.get("provider") in PROVIDERS else "unknown"
             unresolved[(provider, *classify(entry.get("reason")))] += 1
-            if classify(entry.get("reason"))[0] == "other":
+            if classify(entry.get("reason"))[0] in ("other", "selection-review"):
                 other_reasons[provider + ": " + str(entry.get("reason"))[:160]] += 1
     stages = {}
     for entry in entries:
@@ -318,7 +324,7 @@ def main(argv=None):
                 attempted = attempts.get(item["id"], entries_by_id.get(item["id"], {}).get("checked_at", 0))
                 return bool(attempted), attempted, item["id"]
 
-            items = sorted((item for item in items if is_due(entries_by_id.get(item["id"], {}), started)),
+            items = sorted((item for item in items if is_due(entries_by_id.get(item["id"], {}), started, item)),
                            key=priority)[:args.max_items]
 
         entries, ok, stop = [], True, "finished"

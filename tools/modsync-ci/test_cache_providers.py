@@ -414,7 +414,8 @@ class LoadSelectionsTests(unittest.TestCase):
         for key, entry in reviewed["tools"].items():
             self.assertRegex(key, r"^(google-drive|mega):[A-Za-z0-9_-]+$")
             self.assertTrue(entry["loose"])
-        self.assertEqual(cache.load_selections(), {key: entry["file"] for key, entry in reviewed["selections"].items()})
+        self.assertEqual(cache.load_selections(), {key: cache.selection_value(entry)
+                                                   for key, entry in reviewed["selections"].items()})
 
     def test_shipped_loose_entries(self):
         reviewed = cache.load_reviewed()
@@ -742,6 +743,521 @@ class LooseCachePipelineTests(unittest.TestCase):
         entry = cache.import_existing(item_for(DRIVE_URL), resource, archives, self.root,
                                       args_for(apply=False, import_manifest={}, import_manifest_document={}))
         self.assertEqual(entry["status"], "unresolved")
+
+
+class MultiSelectionSchemaTests(unittest.TestCase):
+    def test_files_list_accepts_names_and_row_objects(self):
+        entry = cache.review_entry("11", {"files": ["a.zip", {"file": "b.7z", "r": 42}, {"file": "c.rar", "r": "7"}]})
+        self.assertEqual(entry["files"], [{"file": "a.zip", "r": None}, {"file": "b.7z", "r": "42"},
+                                           {"file": "c.rar", "r": "7"}])
+        self.assertEqual(entry["file"], "a.zip")
+        self.assertFalse(entry["loose"])
+
+    def test_single_file_keeps_plain_string_value(self):
+        self.assertEqual(cache.selection_value(cache.review_entry("11", {"file": "a.zip"})), "a.zip")
+        self.assertEqual(cache.selection_value(cache.review_entry("11", "a.zip")), "a.zip")
+
+    def test_row_or_several_files_use_selector_list_value(self):
+        self.assertEqual(cache.selection_value(cache.review_entry("11", {"file": "a.zip", "r": "5"})),
+                         [{"file": "a.zip", "r": "5"}])
+        self.assertEqual(cache.selection_value(cache.review_entry("11", {"files": ["a.zip", "b.zip"]})),
+                         [{"file": "a.zip", "r": None}, {"file": "b.zip", "r": None}])
+
+    def test_malformed_multi_file_selections_rejected(self):
+        for value in ({"file": "a.zip", "files": ["b.zip"]}, {"files": []}, {"files": "a.zip"},
+                      {"files": ["a.zip", "A.ZIP"]}, {"files": ["a.zip", "a.zip"]},
+                      {"files": [{"file": "a.zip", "r": "x1"}]}, {"files": [{"file": "a.zip", "r": True}]},
+                      {"files": [{"file": "a.zip", "extra": 1}]}, {"files": ["notes.txt"]},
+                      {"files": [5]}, {"files": [{"r": "1"}]}, {"file": "a.zip", "r": "-1"}, 5):
+            with self.assertRaises(ValueError, msg=repr(value)):
+                cache.review_entry("11", value)
+
+    def test_loose_and_tool_selections_must_be_one_file_without_row(self):
+        for value in ({"files": ["a.tga", "b.tga"], "loose": True}, {"file": "a.tga", "r": "5", "loose": True}):
+            with self.assertRaises(ValueError, msg=repr(value)):
+                cache.review_entry("11", value)
+        with self.assertRaises(ValueError):
+            cache.review_entry("google-drive:X", {"files": ["a.tga", "b.tga"], "loose": True}, tool=True)
+
+    def test_shipped_multi_file_selections(self):
+        reviewed = cache.load_reviewed()["selections"]
+        names = {key: [selector["file"] for selector in reviewed[key]["files"]] for key in reviewed}
+        self.assertEqual(len(names["2503"]), 2)
+        self.assertEqual(len(set(names["2503"])), 2)
+        self.assertEqual(sum("_mods_" in name for name in names["2503"]), 1)
+        self.assertEqual(len(names["2752"]), 4)
+        self.assertEqual(len(names["1138"]), 2)
+        self.assertEqual(reviewed["842"]["files"], [{"file": "aleema_ketos_robe_description_correction.zip",
+                                                      "r": "19298"}])
+        self.assertTrue(reviewed["578"]["loose"])
+        self.assertTrue(reviewed["2734"]["loose"])
+        for entry in reviewed.values():
+            self.assertTrue(entry["files"])
+
+
+class MultiChooseTests(unittest.TestCase):
+    def rows(self, *names):
+        return [{"name": name, "url": "https://deadlystream.com/x?r=%d" % (10 + index), "r": str(10 + index)}
+                for index, name in enumerate(names)]
+
+    def test_several_files_selected_in_order(self):
+        rows = self.rows("a.zip", "b.zip", "c.zip", "d.zip")
+        chosen = cache.choose_downloads(rows, "9", {"9": [{"file": "c.zip", "r": None}, {"file": "a.zip", "r": None}]})
+        self.assertEqual([row["name"] for row in chosen], ["c.zip", "a.zip"])
+
+    def test_row_id_disambiguates_duplicate_names(self):
+        rows = self.rows("same.zip", "same.zip")
+        chosen = cache.choose_downloads(rows, "9", {"9": [{"file": "same.zip", "r": "11"}]})
+        self.assertEqual([row["r"] for row in chosen], ["11"])
+        with self.assertRaises(ValueError):
+            cache.choose_downloads(rows, "9", {"9": "same.zip"})
+        with self.assertRaises(ValueError):
+            cache.choose_downloads(rows, "9", {"9": [{"file": "same.zip", "r": "99"}]})
+
+    def test_any_missing_selected_file_fails_closed(self):
+        rows = self.rows("a.zip", "b.zip")
+        with self.assertRaises(ValueError) as caught:
+            cache.choose_downloads(rows, "9", {"9": [{"file": "a.zip", "r": None}, {"file": "gone.zip", "r": None}]})
+        self.assertIn("matches 0 of the listed files", str(caught.exception))
+
+    def test_row_id_must_belong_to_named_file(self):
+        rows = self.rows("a.zip", "b.zip")
+        with self.assertRaises(ValueError):
+            cache.choose_downloads(rows, "9", {"9": [{"file": "a.zip", "r": "11"}]})
+
+    def test_unreviewed_multi_row_page_still_fails_closed(self):
+        with self.assertRaises(ValueError) as caught:
+            cache.choose_downloads(self.rows("a.zip", "b.zip"), "9", {})
+        self.assertIn("no reviewed selection", str(caught.exception))
+
+    def test_page_rows_returns_every_selected_row_and_page_endpoint_refuses_several(self):
+        source = selection_page("first.zip", "second.7z", "third.rar")
+        item = item_for(POST_URL)
+        selections = {"123": [{"file": "first.zip", "r": None}, {"file": "third.rar", "r": None}]}
+        rows = cache.page_rows(FakePage(POST_URL, source), item, selections)
+        self.assertEqual([(row["name"], row["r"]) for row in rows], [("first.zip", "1000"), ("third.rar", "1002")])
+        with self.assertRaises(ValueError):
+            cache.page_endpoint(FakePage(POST_URL, source), item, selections)
+
+
+class Reply:
+    def __init__(self, url, payload, content_type="application/octet-stream", disposition=None):
+        self.url = url
+        self.code = 200
+        self.headers = {"Content-Type": content_type, "Content-Length": str(len(payload))}
+        if disposition:
+            self.headers["Content-Disposition"] = disposition
+        self.payload = payload
+        self.offset = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def close(self):
+        pass
+
+    def geturl(self):
+        return self.url
+
+    def read(self, size=-1):
+        end = len(self.payload) if size is None or size < 0 else self.offset + size
+        chunk = self.payload[self.offset:end]
+        self.offset += len(chunk)
+        return chunk
+
+
+def zip_bytes(label):
+    stream = io.BytesIO()
+    with zipfile.ZipFile(stream, "w") as archive:
+        archive.writestr("data.bin", (label * 600).encode())
+    return stream.getvalue()
+
+
+class MultiFileFixture(unittest.TestCase):
+    NAMES = ("pack_a.zip", "pack_b.zip")
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.base = Path(self.directory.name)
+        self.root = self.base / "cache"
+        (self.root / "objects").mkdir(parents=True)
+        self.selections = self.base / "selections.json"
+        self.select({"files": list(self.NAMES)})
+        patcher = mock.patch.object(cache, "SELECTIONS_PATH", self.selections)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.payloads = {name: zip_bytes(name[5]) for name in self.NAMES}
+        self.requests = []
+
+    def select(self, value):
+        self.selections.write_text(json.dumps({"selections": {"123": value}}), encoding="utf-8")
+
+    def serve(self, listed=None, delivered=None):
+        listed = listed or self.NAMES
+        delivered = delivered or {name: self.payloads[name] for name in listed}
+
+        def route(url, args, headers=None):
+            self.requests.append(url)
+            if url == POST_URL:
+                return Reply(url, selection_page(*listed).encode(), "text/html; charset=utf-8")
+            row = int(url.split("r=")[1].split("&")[0]) - 1000
+            name = listed[row]
+            return Reply(url, delivered[name], disposition='attachment; filename="%s"' % name)
+        return mock.patch.object(cache, "request", side_effect=route)
+
+    def bundle(self):
+        with self.serve():
+            return cache.refresh_one(item_for(POST_URL), {}, self.root, args_for())
+
+
+class MultiFileFetchTests(MultiFileFixture):
+    def test_refresh_builds_one_object_per_selected_file(self):
+        entry = self.bundle()
+        self.assertEqual([each["listed_name"] for each in entry["objects"]], list(self.NAMES))
+        self.assertEqual([each["archive_name"] for each in entry["objects"]], list(self.NAMES))
+        self.assertEqual([each["row"] for each in entry["objects"]], ["1000", "1001"])
+        self.assertEqual(entry["size"], sum(len(payload) for payload in self.payloads.values()))
+        self.assertEqual(len({each["sha256"] for each in entry["objects"]}), 2)
+        self.assertTrue(cache.local_valid(self.root, entry))
+        self.assertTrue(cache.objects_match_selection(item_for(POST_URL), entry))
+        self.assertEqual(len(list((self.root / "objects").iterdir())), 2)
+
+    def test_local_valid_requires_every_object(self):
+        entry = self.bundle()
+        cache.object_path(self.root, entry["objects"][1]).unlink()
+        self.assertFalse(cache.local_valid(self.root, entry))
+        self.assertFalse(cache.local_valid(self.root, {"objects": []}))
+        self.assertFalse(cache.local_valid(self.root, {"objects": ["junk"]}))
+
+    def test_size_budget_is_shared_across_files(self):
+        limit = len(self.payloads[self.NAMES[0]]) + 5
+        with self.serve():
+            with self.assertRaises(ValueError) as caught:
+                cache.refresh_one(item_for(POST_URL), {}, self.root, args_for(max_bytes=limit))
+        self.assertIn("size limit", str(caught.exception))
+
+    def test_unchanged_object_is_reused_by_endpoint(self):
+        entry = self.bundle()
+        with self.serve():
+            again = cache.refresh_one(item_for(POST_URL), entry, self.root, args_for())
+        self.assertEqual([each["sha256"] for each in again["objects"]], [each["sha256"] for each in entry["objects"]])
+
+    def test_selection_is_rechecked_against_fetched_rows(self):
+        entry = self.bundle()
+        self.select({"files": [self.NAMES[0], "pack_c.zip"]})
+        self.assertFalse(cache.objects_match_selection(item_for(POST_URL), entry))
+        self.select({"files": [self.NAMES[0]]})
+        self.assertIsNone(cache.multi_selectors(item_for(POST_URL)))
+        self.assertTrue(cache.objects_match_selection(item_for(POST_URL), {"objects": entry["objects"][:1]}))
+
+    def test_row_selection_pins_one_of_two_same_named_rows(self):
+        self.select({"file": "pack_a.zip", "r": "1001"})
+        with self.serve(listed=("pack_a.zip", "pack_a.zip"),
+                        delivered={"pack_a.zip": self.payloads["pack_a.zip"]}):
+            entry = cache.refresh_one(item_for(POST_URL), {}, self.root, args_for())
+        self.assertEqual([(each["listed_name"], each["row"]) for each in entry["objects"]],
+                         [("pack_a.zip", "1001")])
+        self.assertTrue(any("r=1001" in url for url in self.requests))
+        self.assertFalse(any("r=1000" in url for url in self.requests))
+
+    def test_row_selection_through_confirmation_page_yields_one_object(self):
+        self.select({"file": "pack_a.zip", "r": "1001"})
+        landing = '<html><body><a href="/files/file/123-example-post/?do=download">Download</a></body></html>'
+        confirm_url = POST_URL + "?do=download"
+
+        def route(url, args, headers=None):
+            self.requests.append(url)
+            if url == POST_URL:
+                return Reply(url, landing.encode(), "text/html; charset=utf-8")
+            if url == confirm_url:
+                return Reply(url, selection_page("pack_a.zip", "pack_a.zip").encode(), "text/html; charset=utf-8")
+            return Reply(url, self.payloads["pack_a.zip"], disposition='attachment; filename="pack_a.zip"')
+
+        with mock.patch.object(cache, "request", side_effect=route):
+            entry = cache.refresh_one(item_for(POST_URL), {}, self.root, args_for())
+        self.assertEqual([(each["listed_name"], each["row"]) for each in entry["objects"]], [("pack_a.zip", "1001")])
+        self.assertNotIn("objects", entry["objects"][0])
+        self.assertTrue(cache.local_valid(self.root, entry))
+
+    def test_total_from_content_range_rejects_oversized_and_truncated_downloads(self):
+        payload = self.payloads[self.NAMES[0]]
+        self.assertEqual(cache.announced_size({"Content-Length": "7"}), 7)
+        self.assertEqual(cache.announced_size({"Content-Range": "bytes 0-9/10"}), 10)
+        for header in ("bytes 5-9/10", "bytes 0-4/10", "items 0-9/10", ""):
+            self.assertIsNone(cache.announced_size({"Content-Range": header}))
+
+        def reply(total):
+            made = Reply(POST_URL + "?do=download&r=1", payload, disposition='attachment; filename="pack_a.zip"')
+            del made.headers["Content-Length"]
+            made.headers["Content-Range"] = "bytes 0-%d/%d" % (total - 1, total)
+            return made
+
+        item = item_for(POST_URL + "?do=download&r=1")
+        with mock.patch.object(cache, "request", return_value=reply(len(payload) + 100)):
+            with self.assertRaises(ValueError) as caught:
+                cache.fetch_item(item, {}, self.root, args_for())
+        self.assertIn("truncated", str(caught.exception))
+        with mock.patch.object(cache, "request", return_value=reply(10 ** 9)) as opened:
+            with self.assertRaises(ValueError) as caught:
+                cache.fetch_item(item, {}, self.root, args_for(max_bytes=10 ** 6))
+        self.assertIn("size limit", str(caught.exception))
+        self.assertEqual(list((self.root / "objects").iterdir()), [])
+        with mock.patch.object(cache, "request", return_value=reply(len(payload))):
+            self.assertTrue(cache.local_valid(self.root, cache.fetch_item(item, {}, self.root, args_for())))
+
+    def test_mismatched_result_is_refused(self):
+        item = item_for(POST_URL)
+        wrong = dict(self.bundle())
+        wrong["objects"] = [{**wrong["objects"][0]}, {**wrong["objects"][1], "listed_name": "pack_z.zip"}]
+        with mock.patch.object(cache, "fetch_item", return_value=wrong):
+            with self.assertRaises(ValueError) as caught:
+                cache.refresh_one(item, {}, self.root, args_for())
+        self.assertIn("do not match the reviewed multi-file selection", str(caught.exception))
+
+
+class MultiFileRestoreTests(MultiFileFixture):
+    def setUp(self):
+        super().setUp()
+        self.guide = self.base / "guide.md"
+        self.guide.write_text("[mod](%s)\n" % POST_URL, encoding="utf-8")
+        self.destination = self.base / "mods"
+
+    def run_main(self, command, *extra):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = cache.main([command, "--guide", str(self.guide), "--cache-dir", str(self.root), *extra])
+        return code, json.loads(output.getvalue())
+
+    def restore(self):
+        return self.run_main("restore", "--destination", str(self.destination), "--retries", "0")
+
+    def seed(self, entry):
+        (self.root / "manifest.json").write_text(json.dumps({"schema": 1, "entries": {item_for(POST_URL)["id"]: entry}}),
+                                                 encoding="utf-8")
+
+    def restored_names(self):
+        return sorted(path.name for path in self.destination.iterdir()) if self.destination.exists() else []
+
+    def test_restore_returns_every_file_under_one_endpoint(self):
+        entry = self.bundle()
+        entry.update(status="verified", evidence="download-without-upstream-metadata", checked_at=cache.time.time())
+        self.seed(entry)
+        with mock.patch.object(cache, "request", side_effect=AssertionError("restore must not download")):
+            code, report = self.restore()
+        self.assertEqual(code, 0)
+        row = report["entries"][0]
+        self.assertEqual(row["status"], "restored")
+        self.assertEqual([each["file"] for each in row["files"]], list(self.NAMES))
+        self.assertNotIn("file", row)
+        self.assertEqual(self.restored_names(), sorted(self.NAMES))
+        for name in self.NAMES:
+            self.assertEqual((self.destination / name).read_bytes(), self.payloads[name])
+
+    def test_missing_object_restores_nothing(self):
+        entry = self.bundle()
+        entry.update(status="verified", evidence="download-without-upstream-metadata", checked_at=cache.time.time())
+        cache.object_path(self.root, entry["objects"][1]).unlink()
+        self.seed(entry)
+        with mock.patch.object(cache, "request", side_effect=ValueError("network request failed")):
+            code, report = self.restore()
+        self.assertEqual((code, report["entries"][0]["status"]), (1, "unresolved"))
+        self.assertEqual(self.restored_names(), [])
+
+    def test_corrupt_object_restores_nothing(self):
+        entry = self.bundle()
+        entry.update(status="verified", evidence="download-without-upstream-metadata", checked_at=cache.time.time())
+        cache.object_path(self.root, entry["objects"][0]).write_bytes(b"corrupt")
+        self.seed(entry)
+        with mock.patch.object(cache, "request", side_effect=ValueError("network request failed")):
+            code, report = self.restore()
+        self.assertEqual((code, report["entries"][0]["status"]), (1, "unresolved"))
+        self.assertEqual(self.restored_names(), [])
+
+    def test_late_collision_unwinds_files_already_created(self):
+        entry = self.bundle()
+        entry.update(status="verified", evidence="download-without-upstream-metadata", checked_at=cache.time.time())
+        self.seed(entry)
+        self.destination.mkdir()
+        (self.destination / self.NAMES[1]).write_bytes(b"someone else's file")
+        code, report = self.restore()
+        self.assertEqual((code, report["entries"][0]["status"]), (1, "unresolved"))
+        self.assertEqual(self.restored_names(), [self.NAMES[1]])
+        self.assertEqual((self.destination / self.NAMES[1]).read_bytes(), b"someone else's file")
+
+    def test_two_objects_with_one_name_collide(self):
+        entry = self.bundle()
+        entry.update(status="verified", evidence="download-without-upstream-metadata", checked_at=cache.time.time())
+        entry["objects"][1]["archive_name"] = entry["objects"][0]["archive_name"]
+        self.seed(entry)
+        code, report = self.restore()
+        self.assertEqual((code, report["entries"][0]["status"]), (1, "unresolved"))
+        self.assertEqual(self.restored_names(), [])
+
+    def test_legacy_single_entry_for_multi_file_selection_is_repaired(self):
+        payload = self.payloads[self.NAMES[0]]
+        sha = cache.hashlib.sha256(payload).hexdigest()
+        (self.root / "objects" / sha).write_bytes(payload)
+        self.seed({"sha256": sha, "size": len(payload), "extension": "zip", "archive_name": self.NAMES[0],
+                   "status": "verified", "evidence": "download-without-upstream-metadata",
+                   "checked_at": cache.time.time(), "metadata_unknown": True})
+        with self.serve():
+            code, report = self.restore()
+        self.assertEqual((code, report["entries"][0]["status"]), (0, "restored"))
+        self.assertEqual(self.restored_names(), sorted(self.NAMES))
+        manifest = json.loads((self.root / "manifest.json").read_text())
+        self.assertEqual(len(manifest["entries"][item_for(POST_URL)["id"]]["objects"]), 2)
+
+    def test_legacy_single_entry_without_selection_is_unchanged(self):
+        self.selections.write_text("{}", encoding="utf-8")
+        payload = zip_bytes("l")
+        sha = cache.hashlib.sha256(payload).hexdigest()
+        (self.root / "objects" / sha).write_bytes(payload)
+        self.seed({"sha256": sha, "size": len(payload), "extension": "zip", "archive_name": "single.zip",
+                   "status": "verified", "evidence": "download-without-upstream-metadata",
+                   "checked_at": cache.time.time(), "metadata_unknown": True})
+        with mock.patch.object(cache, "request", side_effect=AssertionError("no network")):
+            code, report = self.restore()
+        row = report["entries"][0]
+        self.assertEqual((code, row["status"], row["file"], row["sha256"]), (0, "restored", "single.zip", sha))
+        self.assertNotIn("files", row)
+
+    def test_refresh_command_writes_bundle_manifest(self):
+        with self.serve():
+            code, report = self.run_main("refresh", "--retries", "0")
+        self.assertEqual((code, report["entries"][0]["status"]), (0, "verified"))
+        manifest = json.loads((self.root / "manifest.json").read_text())
+        stored = manifest["entries"][item_for(POST_URL)["id"]]
+        self.assertEqual([each["listed_name"] for each in stored["objects"]], list(self.NAMES))
+
+    def test_import_existing_requires_exact_file_set(self):
+        archives = self.base / "archives"
+        archives.mkdir()
+        for name in self.NAMES:
+            (archives / name).write_bytes(self.payloads[name])
+        item = item_for(POST_URL)
+        resource = {"a": {"HandlerMetadata": {"PrimaryUrl": POST_URL}, "Files": {name: {} for name in self.NAMES}}}
+        manifest = {"schema": 1, "entries": {}}
+        args = args_for(apply=True, import_manifest=manifest["entries"], import_manifest_document=manifest)
+        with mock.patch.object(cache, "DISK_RESERVE_BYTES", 0):
+            entry = cache.import_existing(item, resource, archives, self.root, args)
+        self.assertEqual(entry["status"], "stale-unknown")
+        stored = manifest["entries"][item["id"]]
+        self.assertEqual(sorted(each["listed_name"] for each in stored["objects"]), sorted(self.NAMES))
+        self.assertTrue(cache.local_valid(self.root, stored))
+        resource["a"]["Files"] = {self.NAMES[0]: {}}
+        partial = cache.import_existing(item, resource, archives, self.root,
+                                        args_for(apply=False, import_manifest={}, import_manifest_document={}))
+        self.assertEqual(partial["status"], "ambiguous-variant")
+
+    def test_import_existing_never_guesses_a_row(self):
+        self.select({"file": self.NAMES[0], "r": "1001"})
+        archives = self.base / "archives"
+        archives.mkdir()
+        (archives / self.NAMES[0]).write_bytes(self.payloads[self.NAMES[0]])
+        resource = {"a": {"HandlerMetadata": {"PrimaryUrl": POST_URL}, "Files": {self.NAMES[0]: {}}}}
+        entry = cache.import_existing(item_for(POST_URL), resource, archives, self.root,
+                                      args_for(apply=False, import_manifest={}, import_manifest_document={}))
+        self.assertEqual(entry["status"], "ambiguous-variant")
+
+
+refresh_spec = importlib.util.spec_from_file_location("refresh_archives", Path(__file__).with_name("refresh_archives.py"))
+refresh_archives = importlib.util.module_from_spec(refresh_spec)
+refresh_spec.loader.exec_module(refresh_archives)
+
+
+class MultiFileRefreshJobTests(MultiFileFixture):
+    def setUp(self):
+        super().setUp()
+        patcher = mock.patch.object(refresh_archives.cache, "SELECTIONS_PATH", self.selections)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def bundle_entry(self, status="verified"):
+        entry = self.bundle()
+        entry.update(status=status, evidence="download-without-upstream-metadata", checked_at=1000.0)
+        return entry
+
+    def test_is_due_checks_the_reviewed_selection(self):
+        item = item_for(POST_URL)
+        entry = self.bundle_entry()
+        now = 1000.0 + 60
+        self.assertFalse(refresh_archives.is_due(entry, now))
+        self.assertFalse(refresh_archives.is_due(entry, now, item))
+        self.select({"files": [self.NAMES[0], "pack_c.zip"]})
+        self.assertFalse(refresh_archives.is_due(entry, now))
+        self.assertTrue(refresh_archives.is_due(entry, now, item))
+        self.assertTrue(refresh_archives.is_due(entry, now + 15 * 86400, item))
+
+    def test_selection_failures_have_their_own_reason_class(self):
+        for reason in ("landing page lists multiple files and no reviewed selection exists for file 9; add",
+                       "reviewed archive selection for file 9 matches 0 of the listed files; re-review",
+                       "fetched files do not match the reviewed multi-file selection; re-review"):
+            self.assertEqual(refresh_archives.classify(reason), ("selection-review", None))
+        self.assertEqual(refresh_archives.classify("cache missing; archive refresh job must populate it")[0], "other")
+
+    def test_totals_count_each_object_of_a_bundle(self):
+        entry = self.bundle_entry()
+        entry["checked_at"] = 2000.0
+        for each in entry["objects"]:
+            each["evidence"] = "download-200"
+        manifest = {"entries": {"1": entry, "2": {"checked_at": 1.0}}}
+        unresolved = [{"id": "3", "provider": "deadlystream", "status": "unresolved",
+                       "reason": "landing page lists multiple files and no reviewed selection exists for file 9"}]
+        summary = refresh_archives.totals(unresolved, manifest, 1500.0, "finished", True, True, 5)
+        self.assertEqual(summary["verified_downloads"], 2)
+        self.assertEqual(summary["verified_bytes"], sum(len(value) for value in self.payloads.values()))
+        self.assertEqual(summary["unresolved_classes"][0]["reason_class"], "selection-review")
+        self.assertEqual(len(summary["other_reasons"]), 1)
+
+    def test_item_job_restores_and_uploads_every_object(self):
+        entry = self.bundle_entry()
+        (self.root / "manifest.json").write_text(json.dumps({"schema": 1, "entries": {"123": entry}}), encoding="utf-8")
+        remote = {each["sha256"]: self.payloads[each["listed_name"]] for each in entry["objects"]}
+        for each in entry["objects"]:
+            cache.object_path(self.root, each).unlink()
+        fetched, uploaded = [], []
+
+        def fake_fetch(remote_path, local_path, *extra):
+            fetched.append(remote_path.rsplit("/", 1)[1])
+            Path(local_path).write_bytes(remote[fetched[-1]])
+            return True
+
+        def fake_upload(path, remote_path):
+            uploaded.append(Path(path).name)
+
+        item = item_for(POST_URL)
+        item["id"] = "123"
+        steps = []
+
+        def fake_main(argv):
+            (self.root.parent / "item-report.json").write_text(json.dumps({"entries": [], "ok": True}))
+
+        with mock.patch.object(refresh_archives, "fetch", fake_fetch), \
+                mock.patch.object(refresh_archives, "upload_object", fake_upload), \
+                mock.patch.object(refresh_archives, "rclone", lambda *a, **k: None), \
+                mock.patch.object(refresh_archives, "matches", lambda path, sha, size: True), \
+                mock.patch.object(refresh_archives.cache, "discover", lambda guides: []), \
+                mock.patch.object(refresh_archives.cache, "main", fake_main):
+            steps.extend(refresh_archives.refresh_item(item, self.root, "remote:bucket", False))
+        self.assertEqual(sorted(fetched), sorted(remote))
+        self.assertEqual(sorted(uploaded), sorted(remote))
+        self.assertIn("persist-manifest", steps)
+        self.assertEqual(steps[-1], {"entries": [], "ok": True})
+
+
+class DropboxTests(unittest.TestCase):
+    def test_dropbox_preview_link_resolves_to_direct_download(self):
+        url = "https://www.dropbox.com/scl/fi/abc/pack.zip?rlkey=KEY&dl=0"
+        self.assertEqual(cache.provider(url), ("dropbox", False))
+        direct = cache.dropbox_direct(url)
+        self.assertIn("dl=1", direct)
+        self.assertIn("rlkey=KEY", direct)
+        self.assertNotIn("dl=0", direct)
+
 
 
 if __name__ == "__main__":
