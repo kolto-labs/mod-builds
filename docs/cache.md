@@ -6,7 +6,7 @@ CI keeps two caches. Both only make runs faster; the guides in
 | Cache | Holds | Lives in | Written by |
 | --- | --- | --- | --- |
 | Game | One encrypted, movie-free copy of K1 or K2 | Actions cache, key `game-<game>-v1` | `game` job |
-| Archives | Mod archives named by the guides | GitHub Actions cache first; optional Cloudflare R2 fallback | `install` and `manual` jobs; `mods` refreshes R2 |
+| Archives | Mod archives named by the guides | GitHub Actions cache first; optional Cloudflare R2 fallback | `install` CLI lane; `mods` refreshes R2 |
 
 The game cache is described in [steam.md](steam.md). Archive sets can exceed the
 repository's Actions cache quota, so the Actions cache is best effort; R2 can
@@ -36,16 +36,18 @@ time.
 ## Restoring: install and manual jobs
 
 Each lane first restores the current week's per-game archive snapshot from GitHub
-Actions cache. On a miss, it tries R2 when configured. A complete R2 restore is
-saved to Actions cache by one CLI lane; incomplete restores are not cached. Cache
-entries are keyed by game, guide contents and UTC week, so a later week causes a
-fresh R2 lookup. GitHub may evict entries or decline a snapshot that exceeds its
-storage limits; lanes then fall back to R2.
+Actions cache, then adds any available R2 archives when R2 is configured. The
+Actions copy takes priority if both sources contain a file with the same name.
+One CLI lane saves the merged snapshot, including partial snapshots, under a key
+bound to its file names and hashes. Later runs can add newly available R2 files.
+Entries are keyed by game, guide contents and UTC week, so a later week starts a
+fresh snapshot. GitHub may evict entries or decline a snapshot that exceeds its
+storage limits; lanes then rely on R2 when configured.
 
-If neither source is available, the lane still runs with any archives it has, and
-the installer fails when a required archive is missing. R2 is therefore optional
-as a service, but a cache hit or another source of the required archive bytes is
-still necessary for a complete install.
+If neither source provides an archive, the lane still runs with any archives it
+has, and the installer fails when a required archive is missing. R2 is therefore
+optional as a service, but the required archive bytes must be available from the
+Actions cache or another source for a complete install.
 
 ## Refreshing: the `mods` job
 

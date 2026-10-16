@@ -218,12 +218,11 @@ jobs:
         uses: actions/cache/restore@v4
         continue-on-error: true
         with:
-          path: ${{ runner.temp }}/archives
-          key: mod-archives-${{ matrix.game }}-${{ steps.archive-cache-week.outputs.week }}-${{ hashFiles(format('content/{0}/full.md', matrix.game)) }}
-      - name: Restore archives from R2 when the Actions cache misses
+          path: ${{ runner.temp }}/archive-cache
+          key: mod-archives-${{ matrix.game }}-${{ steps.archive-cache-week.outputs.week }}-${{ hashFiles(format('content/{0}/full.md', matrix.game)) }}-lookup
+          restore-keys: mod-archives-${{ matrix.game }}-${{ steps.archive-cache-week.outputs.week }}-${{ hashFiles(format('content/{0}/full.md', matrix.game)) }}-
+      - name: Merge Actions cache with available R2 archives
         id: archive-restore
-        if: steps.archive-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
         env:
           RCLONE_CONFIG_MODCACHE_TYPE: s3
           RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
@@ -235,25 +234,50 @@ jobs:
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
           echo "complete=false" >> "$GITHUB_OUTPUT"
-          rm -rf "$RUNNER_TEMP/archives"
-          mkdir -p "$RUNNER_TEMP/archives"
-          if [[ -z "$RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID" || \
-                -z "$RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY" || \
-                -z "$RCLONE_CONFIG_MODCACHE_ENDPOINT" || -z "$MOD_CACHE_BUCKET" ]]; then
-            echo "::notice::R2 is not configured; using only any archives already in the Actions cache."
-            exit 0
+          mkdir -p "$RUNNER_TEMP/archives" "$RUNNER_TEMP/r2-archives"
+          copy_archives() {
+            local source="$1" archive target
+            [[ -d "$source" ]] || return 0
+            while IFS= read -r -d '' archive; do
+              [[ -f "$archive" && ! -L "$archive" ]] || continue
+              target="$RUNNER_TEMP/archives/${archive##*/}"
+              [[ -e "$target" ]] || cp -- "$archive" "$target"
+            done < <(find "$source" -maxdepth 1 -type f -print0)
+          }
+          copy_archives "$RUNNER_TEMP/archive-cache"
+          if [[ -n "$RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID" && \
+                -n "$RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY" && \
+                -n "$RCLONE_CONFIG_MODCACHE_ENDPOINT" && -n "$MOD_CACHE_BUCKET" ]]; then
+            restore_status=0
+            python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
+              --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/r2-archives" \
+              --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives" || restore_status=$?
+            if [[ "$restore_status" == 0 ]]; then
+              echo "complete=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice::R2 archive restore was incomplete; preserving available archives."
+            fi
+          else
+            echo "::notice::R2 is not configured; using archives available from the Actions cache."
           fi
-          python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
-            --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
-            --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
-          echo "complete=true" >> "$GITHUB_OUTPUT"
+          copy_archives "$RUNNER_TEMP/r2-archives"
+      - id: archive-snapshot
+        name: Fingerprint available archive snapshot
+        run: |
+          if [[ -z "$(find "$RUNNER_TEMP/archives" -maxdepth 1 -type f -print -quit)" ]]; then
+            echo "fingerprint=" >> "$GITHUB_OUTPUT"
+          else
+            fingerprint=$(cd "$RUNNER_TEMP/archives" && find . -maxdepth 1 -type f -print0 \
+              | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1)
+            echo "fingerprint=$fingerprint" >> "$GITHUB_OUTPUT"
+          fi
       - name: Save archives to GitHub Actions cache
-        if: ${{ steps.archive-restore.outputs.complete == 'true' && steps.archive-cache.outputs.cache-hit != 'true' && matrix.implementation == 'rust' && matrix.mode == 'cli' }}
+        if: ${{ steps.archive-snapshot.outputs.fingerprint != '' && matrix.implementation == 'rust' && matrix.mode == 'cli' }}
         uses: actions/cache/save@v4
         continue-on-error: true
         with:
           path: ${{ runner.temp }}/archives
-          key: mod-archives-${{ matrix.game }}-${{ steps.archive-cache-week.outputs.week }}-${{ hashFiles(format('content/{0}/full.md', matrix.game)) }}
+          key: mod-archives-${{ matrix.game }}-${{ steps.archive-cache-week.outputs.week }}-${{ hashFiles(format('content/{0}/full.md', matrix.game)) }}-${{ steps.archive-snapshot.outputs.fingerprint }}
 
       - name: Install the full guide
         env:
@@ -325,12 +349,11 @@ jobs:
         uses: actions/cache/restore@v4
         continue-on-error: true
         with:
-          path: ${{ runner.temp }}/archives
-          key: mod-archives-${{ matrix.game }}-${{ steps.archive-cache-week.outputs.week }}-${{ hashFiles(format('content/{0}/full.md', matrix.game)) }}
-      - name: Restore archives from R2 when the Actions cache misses
+          path: ${{ runner.temp }}/archive-cache
+          key: mod-archives-${{ matrix.game }}-${{ steps.archive-cache-week.outputs.week }}-${{ hashFiles(format('content/{0}/full.md', matrix.game)) }}-lookup
+          restore-keys: mod-archives-${{ matrix.game }}-${{ steps.archive-cache-week.outputs.week }}-${{ hashFiles(format('content/{0}/full.md', matrix.game)) }}-
+      - name: Merge Actions cache with available R2 archives
         id: archive-restore
-        if: steps.archive-cache.outputs.cache-hit != 'true'
-        continue-on-error: true
         env:
           RCLONE_CONFIG_MODCACHE_TYPE: s3
           RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
@@ -342,18 +365,33 @@ jobs:
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
           echo "complete=false" >> "$GITHUB_OUTPUT"
-          rm -rf "$RUNNER_TEMP/archives"
-          mkdir -p "$RUNNER_TEMP/archives"
-          if [[ -z "$RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID" || \
-                -z "$RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY" || \
-                -z "$RCLONE_CONFIG_MODCACHE_ENDPOINT" || -z "$MOD_CACHE_BUCKET" ]]; then
-            echo "::notice::R2 is not configured; using only any archives already in the Actions cache."
-            exit 0
+          mkdir -p "$RUNNER_TEMP/archives" "$RUNNER_TEMP/r2-archives"
+          copy_archives() {
+            local source="$1" archive target
+            [[ -d "$source" ]] || return 0
+            while IFS= read -r -d '' archive; do
+              [[ -f "$archive" && ! -L "$archive" ]] || continue
+              target="$RUNNER_TEMP/archives/${archive##*/}"
+              [[ -e "$target" ]] || cp -- "$archive" "$target"
+            done < <(find "$source" -maxdepth 1 -type f -print0)
+          }
+          copy_archives "$RUNNER_TEMP/archive-cache"
+          if [[ -n "$RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID" && \
+                -n "$RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY" && \
+                -n "$RCLONE_CONFIG_MODCACHE_ENDPOINT" && -n "$MOD_CACHE_BUCKET" ]]; then
+            restore_status=0
+            python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
+              --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/r2-archives" \
+              --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives" || restore_status=$?
+            if [[ "$restore_status" == 0 ]]; then
+              echo "complete=true" >> "$GITHUB_OUTPUT"
+            else
+              echo "::notice::R2 archive restore was incomplete; preserving available archives."
+            fi
+          else
+            echo "::notice::R2 is not configured; using archives available from the Actions cache."
           fi
-          python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
-            --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
-            --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
-          echo "complete=true" >> "$GITHUB_OUTPUT"
+          copy_archives "$RUNNER_TEMP/r2-archives"
       - name: Install the full guide manually with the original patchers
         run: |
           xvfb-run -a python tools/modsync-ci/manual.py --plan "$PLAN" \

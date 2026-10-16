@@ -39,15 +39,16 @@ on pull requests. See [cache.md](cache.md).
 **`install`** — Checks out the ModSync source for the implementation (the
 repository named by `MODSYNC_RS_REPOSITORY` or `MODSYNC_TS_REPOSITORY`, read with
 `MODSYNC_SOURCE_TOKEN`; empty values fail the job). It restores the game cache
-(a miss fails the job) and unpacks it. For archives, it tries the current week's
-per-game GitHub Actions cache first, then R2 when configured. A complete R2
-restore is saved to the Actions cache by one CLI lane. Both are best effort:
-unavailable archives are diagnosed by `ports.py` when installation needs them.
+(a miss fails the job) and unpacks it. For archives, it restores the current
+week's per-game GitHub Actions cache first, then adds available R2 archives when
+configured. One CLI lane saves the merged snapshot, including partial snapshots.
+Unavailable archives are diagnosed by `ports.py` when installation needs them.
 `gui` lanes run under Xvfb. See [ports.md](ports.md) and [cache.md](cache.md).
 
-**`manual`** — Restores archives from GitHub Actions cache first and R2 if
-configured, then installs the same guide step by step with each mod's original
-patcher under Wine, from a human-reviewed plan at `ci/<game>-manual-plan.json`.
+**`manual`** — Restores archives from GitHub Actions cache first and adds archives
+from R2 if configured, then installs the same guide step by step with each mod's
+original patcher under Wine, from a human-reviewed plan at
+`ci/<game>-manual-plan.json`.
 If the plan file is absent, the job logs a notice, skips every step and passes. A
 green `manual` job therefore proves nothing until the plan exists. See
 [manual-lane.md](manual-lane.md).
