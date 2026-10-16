@@ -1,36 +1,53 @@
 # Implementation status
 
-Updated 2026-10-15. This ledger separates source checks, cache receipts, and
-actual full-install acceptance. None of the cache or production-gate evidence
-below proves a completed manual or Rust/TypeScript K1/K2 full install.
+As of 2026-10-15.
 
-## Verified
+## CI design
 
-- **K1 game cache:** In [run 38773654509](https://github.com/kolto-labs/mod-builds/actions/runs/38773654509), the K1 matrix job passed acquisition, auth-state save, movie-free cache sealing, budget check, and cache save. The overall matrix failed because K2 acquisition failed.
-- **K1 cache-only reuse:** Published cache-reuse source commit [d3a4664](https://github.com/kolto-labs/mod-builds/commit/d3a46644ac0ff0126ab66e087cbd7053a3bc57dd) passed live verification in [run 38794268552](https://github.com/kolto-labs/mod-builds/actions/runs/38794268552): it restored 3,030,076,846 bytes from the K1 cache created by run 38773654509, validated scope, source receipt, filtered inventory, and freshness, then skipped authentication. This proves K1 cache reuse only—not K2 portability or a full install.
-- **Targeted archive repair:** [Run 38786721299](https://github.com/kolto-labs/mod-builds/actions/runs/38786721299) completed green with one verified 13,486,213-byte archive and private persistence. This is a targeted repair, not corpus-wide cache coverage.
-- **Archive cache:** [run 38779960888](https://github.com/kolto-labs/mod-builds/actions/runs/38779960888) is a green single refresh. Later batches reported partial uploads of 9/10 and 3/10; [run 38780468602](https://github.com/kolto-labs/mod-builds/actions/runs/38780468602) and [run 38782060668](https://github.com/kolto-labs/mod-builds/actions/runs/38782060668) are not green. The latest failed during provider archive download/verification.
-- **Provider capacity:** A OneDrive provider report showed 102,971,840,921 bytes free, enough for the stated 61.3 GiB requirement. Account plan and billing are not verified; no credentials were exported.
-- **R2 sample integrity:** An independent check covered a 25-entry manifest (19,890 bytes) and a sample object (10,465,786 bytes) whose object hash and archive integrity passed. This validates that sample, not full guide coverage or all referenced objects.
-- **Archive import dry run:** The latest operator receipt found 233 exact-URL-matched candidates: 98 planned, 115 ambiguous variants, and 20 unresolved; 124 candidates were unmatched. No preview directory was created. An earlier 115 stat-only eligible count is not the stricter import acceptance count.
-- **Archive import implementation:** Published source commit [e8608bb](https://github.com/kolto-labs/mod-builds/commit/e8608bb) passed independent review. A real application import copied one existing 1,193-byte archive at matched offset 23 and exited successfully; the record is `stale-unknown/local-import`. Independent post-read SHA-256 checks matched the original and private cached object to the manifest. The cache is `/home/brunner56/modsync-hot/ci-import-seed`; no `checked_at` or validators were recorded. This proves importing and verifying an existing source, not upstream freshness or whole-corpus caching.
-- **Rust production gates:** Formatting plus production build and strict Clippy with and without default features passed at [ccc4317](https://github.com/bodencrouch/ModSync.rs/commit/ccc4317c0738d9e39a017511eb74add7f71c209d). No separate Qt runtime or full-install acceptance was established.
-- **Rust install work:** Archive-aware method generation is still in progress; the production-gate pass does not complete it or establish a full install.
-- **Steam source changes:** The acquisition workflow now treats Actions cache as an optional accelerator and has no public-egress/location gate. Steam Guard approval and verified game acquisition remain external prerequisites.
+Everything runs from one workflow, `.github/workflows/ci.yml`; see [ci.md](ci.md).
 
-## Open work
+- **Triggers:** push to `dev`, pull requests (same-repository only; fork and
+  Dependabot pull requests skip every job that needs secrets), published releases,
+  a Monday and Thursday schedule and `workflow_dispatch`. A newer push to a pull
+  request cancels its older run; other runs are not cancelled.
+- **`game` (k1, k2; one at a time):** restore the encrypted game cache, or download
+  with SteamCMD (saved login if `STEAM_CONFIG_VDF` is set) and save it. Fails only
+  if the game is still missing. See [steam.md](steam.md).
+- **`mods`:** refresh up to 20 archive links per run into Cloudflare R2. Unresolved
+  links are reported, not errors, and the job never blocks an install. See
+  [cache.md](cache.md).
+- **`install` (k1, k2 × rust, typescript × cli, gui):** restore and verify the game
+  (a cache miss fails the lane), restore archives on a best-effort basis, run
+  `ports.py`. Lanes run per game even if the other game failed. See
+  [ports.md](ports.md).
+- **`manual` (k1, k2):** same restores, then `manual.py` with a reviewed plan. With
+  no plan committed it skips every step and passes. See
+  [manual-lane.md](manual-lane.md).
 
-- **R2 coverage:** The corpus remains partial. Reconcile the 115 ambiguous variants and 20 unresolved matched candidates against exact URL, payload identity, hash, and archive integrity; resolve the 124 unmatched candidates. The single-object import receipt is not corpus-wide cache or freshness proof. Continue bounded batches and independently verify stored objects; these remain implementation and evidence tasks.
-- **Manual full install:** Commit [1b15786](https://github.com/kolto-labs/mod-builds/commit/1b15786) adds reviewed `expected_files` SHA-256 postconditions to extract/copy operations, so those ordered steps cannot be marked complete after an incomplete or wrong output. No accepted full-guide run exists yet. Original-installer unattended compatibility remains unverified: inspect each required original installer, implement any missing control, and verify patcher identity, target selection, output checks, snapshots, rollback, and per-step records. A reviewed plan alone is insufficient.
-- **TypeScript physical install:** Not implemented; do not mark complete or substitute Rust results. `installer.ts:227` refuses every physical run, `store.ts:652` explicitly forbids physical restore, and native patcher preimages are absent from `predictTouched`. Implement Node-owned physical execution, complete preimage prediction and checkpoint restore, then verify ordered K1/K2 runs against clean baselines. The Node ownership capability is in progress; guards must remain until recovery and subprocess quiescence are verified.
-- **Rust/TypeScript CLI and GUI full installs:** Still unverified. The available synthetic Linux successes ([CLI](https://github.com/bodencrouch/ModSync.rs/actions/runs/38509232684), [GUI](https://github.com/bodencrouch/ModSync.rs/actions/runs/38509549581)) ran at older source and are not real-game evidence. Close the Rust archive-aware method-generation work and other native review/selection gaps; separately implement the TypeScript physical-run and restore path above. Then run each lane against clean K1/K2 baselines and complete verified archive sets, recording ordered phase/step receipts and comparison to the manual reference. These are coding and validation tasks, not reasons to route TypeScript completion through Rust.
-- **Steam/K2:** K2 acquisition and Steam Guard approval remain unverified. The workflow hard-fails only when neither a valid cache nor verified SteamCMD output is available; it does not attempt to predict Steam's location decision.
-- **Critical acquisition failure handling:** Run [38814324159](https://github.com/kolto-labs/mod-builds/actions/runs/38814324159) exposed a misleading secondary `mv .../game` failure after the acquisition step had already failed; the historical workflow continued through cache sealing without a game directory. Commits [f19a5d7](https://github.com/kolto-labs/mod-builds/commit/f19a5d7), [e83f0cb](https://github.com/kolto-labs/mod-builds/commit/e83f0cb), [ed4f08c](https://github.com/kolto-labs/mod-builds/commit/ed4f08c57c34961c635d1653499ca64cd754c049), and [270ed7d](https://github.com/kolto-labs/mod-builds/commit/270ed7d) validate critical output before sealing, prevent empty cache publication, hard-fail authentication persistence failures, and preserve diagnostics without fabricating a game. The safe live proof [38821384455](https://github.com/kolto-labs/mod-builds/actions/runs/38821384455) on `270ed7d` confirms missing-cache K2 stops at the explicit cache-only gate, skips Steam dependencies/egress/authentication, skips sealing/budget/cache save, hard-fails, and skips readiness finalization.
-- **Local code-auth helper:** Commit [b589166](https://github.com/kolto-labs/mod-builds/commit/b589166) adds a masked local SteamCMD login helper. Its login output is bounded in memory and cleared, while the private runscript is removed after use. The helper has not completed a real login: the isolated SteamCMD client spent its bounded warm attempts downloading Valve's public self-update and exited before the code prompt. No Steam request was sent and no saved-login portability proof exists.
+All jobs use Linux runners because the adapters are POSIX and Xvfb only.
 
-## Next actions
+## Current state
 
-1. Continue archive-cache coverage beyond the proven single-object import and targeted repair; reconcile ambiguous/unresolved candidates, preserve unknown freshness, and independently verify bounded private-cache batches. Validate OneDrive plan and billing separately before relying on it as storage.
-2. Verify original-installer unattended support, implement missing adapters, and produce a real ordered manual reference run with verified snapshots and receipts.
-3. Implement TypeScript-owned physical execution, preimage prediction, and physical restore; continue Rust archive-aware generation and native review-gate work. Run clean K1/K2 lanes separately and compare with the manual reference.
-4. Complete one authenticated K2 acquisition or provide a valid private cache; Steam Guard approval and SteamCMD account access cannot be automated around by repository code.
+| Area | State |
+| --- | --- |
+| K1 game cache | Present |
+| K2 game cache | Missing; Steam mobile-app approvals timed out |
+| Mod archive cache | Partial; filling about 20 links per run |
+| Review manifests (`ci/<game>-<impl>-review.json`) | None committed |
+| Manual plans (`ci/<game>-manual-plan.json`) | None committed |
+
+Without review manifests the TypeScript lanes stop with `review_manifest_required`,
+and without manual plans the `manual` job passes without installing anything. No
+full-guide install has passed in CI for any lane.
+
+## Next steps
+
+1. Get the K2 cache saved: either approve the sign-in in the Steam mobile app
+   during a run, or set `STEAM_CONFIG_VDF` once (see [steam.md](steam.md)) so no
+   approval is needed.
+2. Let scheduled runs keep filling the archive cache; triage links that stay
+   unresolved.
+3. Commit reviewed `ci/<game>-typescript-review.json` manifests and
+   `ci/<game>-manual-plan.json` plans.
+4. Finish the TypeScript physical install and restore path and the Rust
+   archive-aware install work, then run every lane against the cached baselines.

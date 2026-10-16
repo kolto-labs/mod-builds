@@ -4,8 +4,10 @@ This repository's public K1/TSL guides are the subject of these jobs. The privat
 ModSync implementations are the tools used to verify them. This is a companion
 pipeline for an associated project, not a general-purpose free compute relay.
 
-There are six manual entry workflows: `private-ci-{cli,gui}-{linux,windows,macos}.yml`.
-Each can select Rust, TypeScript, or both. Standard public hosted runners currently
+`gh-private-ci init` generates six manual entry workflows in the repository you
+adopt it into: `private-ci-{cli,gui}-{linux,windows,macos}.yml`. Each can select
+Rust, TypeScript, or both. This repository does not ship them; its own CI is
+`.github/workflows/ci.yml`. Standard public hosted runners currently
 have no Actions compute charge; self-hosted machines have their own operating
 costs. Encrypted artifacts still consume storage allowance; larger hosted runners
 are billed even for public repositories. See [GitHub billing](https://docs.github.com/en/billing/concepts/product-billing/github-actions).
@@ -79,15 +81,15 @@ configuration. Secret setup is required before private jobs can run.
 Run from a local checkout:
 
 ```sh
-python tools/private-ci/gh-private-ci run --repo kolto-labs/mod-builds --platform linux --kind cli --implementation both
-python tools/private-ci/gh-private-ci status --repo kolto-labs/mod-builds
+python tools/private-ci/gh-private-ci run --repo OWNER/PUBLIC --platform linux --kind cli --implementation both
+python tools/private-ci/gh-private-ci status --repo OWNER/PUBLIC
 ```
 
 Update a private snapshot without editing public YAML, then dispatch:
 
 ```sh
-python tools/private-ci/gh-private-ci refresh --repo kolto-labs/mod-builds --config /your/private/rust-config.json --config-secret PRIVATE_CI_CONFIG_RS --source-directory /your/private/ModSync.rs
-python tools/private-ci/gh-private-ci run --repo kolto-labs/mod-builds --platform linux --kind gui --implementation rust
+python tools/private-ci/gh-private-ci refresh --repo OWNER/PUBLIC --config /your/private/rust-config.json --config-secret PRIVATE_CI_CONFIG_RS --source-directory /your/private/ModSync.rs
+python tools/private-ci/gh-private-ci run --repo OWNER/PUBLIC --platform linux --kind gui --implementation rust
 ```
 
 Use `--private-ref FULL_SHA` instead of `--source-directory` to select an explicitly
@@ -96,7 +98,7 @@ payload nor the SHA. A failed secret update leaves the local file unchanged. No
 public workflow is rewritten. Use `PRIVATE_CI_CONFIG_TS` for TypeScript and
 `PRIVATE_CI_CONFIG` for generic single-project adopters.
 
-The equivalent `gh workflow run private-ci-cli-linux.yml --repo kolto-labs/mod-builds`
+The equivalent `gh workflow run private-ci-cli-linux.yml --repo OWNER/PUBLIC`
 works too. Add `--field runner-mode=self-hosted` for an owner-controlled runner
 registered with `self-hosted`, its OS label, and `modsync-session`. Public repositories
 must not give untrusted pull requests access to those machines or credentials.
@@ -108,7 +110,7 @@ as a public artifact directory.
 Download encrypted artifacts as a repository reader, then decrypt locally:
 
 ```sh
-gh run download RUN_ID --repo kolto-labs/mod-builds --dir /your/private/evidence
+gh run download RUN_ID --repo OWNER/PUBLIC --dir /your/private/evidence
 /your/private/tools/age/age --decrypt -i /your/private/modsync.agekey -o evidence.tar.gz path/to/evidence.age
 ```
 
@@ -144,7 +146,7 @@ Original mod archives and their licenses remain separate required inputs before 
 complete original mod-build installation can be claimed.
 
 `src/steam_acquire.py` is a prepared acquisition adapter, **not enabled by the six
-default workflows**. It supports normal authenticated SteamCMD acquisition of
+generated workflows**. It supports normal authenticated SteamCMD acquisition of
 owned apps 32370/208580 on Linux/Windows, forcing Windows depots; native macOS
 acquisition is unsupported. It does not bypass ownership, Steam Guard, or DRM.
 Credentials must be injected only into the acquisition process using
