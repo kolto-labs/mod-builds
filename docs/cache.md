@@ -60,11 +60,12 @@ python tools/modsync-ci/cache.py restore --guide content/<game>/full.md \
 ```
 
 Restore pulls the manifest and objects from R2, verifies their hashes and copies
-each archive into a lane-local directory under its original file name. It never
-contacts the mod hosts. An entry that is missing, corrupt, or last confirmed more
-than 14 days ago is reported unresolved and the command exits 1. The jobs only
-warn about that and carry on with what was restored; the install step that needs a
-missing archive then fails.
+each archive into a lane-local directory under its original file name. If a
+manifest entry is fresh but its object is missing, or its freshness window has
+expired, restore reacquires that one archive from its source, verifies it, and
+pushes the repaired object and manifest back to R2. A source that remains
+unavailable is reported unresolved and the command exits 1, so an install that
+cannot obtain a required archive still fails closed.
 
 ## Freshness and providers
 

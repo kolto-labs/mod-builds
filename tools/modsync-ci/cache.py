@@ -614,6 +614,7 @@ def main(argv=None):
         if manifest.get("schema") != 1 or not isinstance(manifest.get("entries"), dict):
             raise ValueError("unsupported manifest schema")
         restored_names = {}
+        repaired = False
         for item in items:
             old = manifest["entries"].get(item["id"], {})
             entry = {"id": item["id"], "url": clean_url(item["url"]), "provider": item["provider"]}
@@ -631,7 +632,14 @@ def main(argv=None):
                     atomic_json(manifest_path, manifest)
                 else:
                     if not fresh:
-                        raise ValueError("cache missing, corrupt, stale or upstream verification failed; run refresh")
+                        if not old.get("sha256"):
+                            raise ValueError("cache missing and no verified manifest entry")
+                        old = refresh_one(item, old, root, args)
+                        manifest["entries"][item["id"]] = old
+                        atomic_json(manifest_path, manifest)
+                        repaired = True
+                        if old.get("status") not in ("fresh", "verified") or not local_valid(root, old):
+                            raise ValueError("archive refresh did not produce a verified object")
                     source = object_path(root, old)
                     validate(source, args.integrity_timeout)
                     args.destination.mkdir(parents=True, exist_ok=True)
@@ -675,6 +683,8 @@ def main(argv=None):
                     atomic_json(manifest_path, manifest)
             report["entries"].append(entry)
         if args.command == "refresh":
+            rclone(args, "push", root)
+        elif repaired:
             rclone(args, "push", root)
     if args.command != "import-existing":
         report["ok"] = all(entry.get("status") in ("fresh", "verified", "restored")
