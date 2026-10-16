@@ -13,8 +13,8 @@ the port lanes are compared against.
 
 For each game:
 
-1. Looks for `ci/<game>-manual-plan.json`. Without it the job logs a notice, skips
-   every remaining step and passes, so a green run without a plan means nothing.
+1. Looks for `ci/<game>-manual-plan.json`. Without it the job logs an error and
+   fails. `fail-fast: false` lets the other matrix jobs continue.
 2. Installs Wine, Xvfb and archive tools.
 3. Restores `game-<game>-v1` and runs `game_cache.py unpack`, which verifies every
    file. See [steam.md](steam.md).

@@ -318,7 +318,8 @@ jobs:
         run: |
           echo "present=$HAS_PLAN" >> "$GITHUB_OUTPUT"
           if [[ "$HAS_PLAN" != true ]]; then
-            echo "::notice::Skipping manual install: missing $PLAN (human-reviewed manual install plan)."
+            echo "::error::Cannot run manual install: missing $PLAN (human-reviewed manual install plan)."
+            exit 1
           fi
       - name: Install Wine and tools, free disk space
         if: steps.plan.outputs.present == 'true'

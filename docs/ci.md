@@ -49,8 +49,8 @@ Unavailable archives are diagnosed by `ports.py` when installation needs them.
 from R2 if configured, then installs the same guide step by step with each mod's
 original patcher under Wine, from a human-reviewed plan at
 `ci/<game>-manual-plan.json`.
-If the plan file is absent, the job logs a notice, skips every step and passes. A
-green `manual` job therefore proves nothing until the plan exists. See
+If the plan file is absent, the job logs an error and fails before installation.
+The matrix uses `fail-fast: false`, so this does not cancel the other jobs. See
 [manual-lane.md](manual-lane.md).
 
 ## Secrets and variables
