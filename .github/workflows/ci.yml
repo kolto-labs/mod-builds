@@ -57,6 +57,7 @@ jobs:
           STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
           STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
           STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+          STEAM_GUARD_CODES: ${{ secrets.STEAM_GUARD_CODES }}  # optional: whitespace-separated Steam Guard backup codes
           CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
         run: |
           set -euo pipefail
@@ -72,10 +73,17 @@ jobs:
             umask 077
             mkdir -p "$HOME/Steam/config"
             printf '%s' "$STEAM_CONFIG_VDF" | base64 -d > "$HOME/Steam/config/config.vdf"
-            "$steamcmd" "${options[@]}" +@NoPromptForPassword 1 +login "$STEAM_USERNAME" "${install[@]}" </dev/null
-          else
-            printf '%s\n' "$STEAM_PASSWORD" | "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "${install[@]}"
+            "$steamcmd" "${options[@]}" +@NoPromptForPassword 1 +login "$STEAM_USERNAME" "${install[@]}" </dev/null || true
           fi
+          if [[ ! -f "$RUNNER_TEMP/game/chitin.key" ]]; then
+            printf '%s\n' "$STEAM_PASSWORD" | "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "${install[@]}" || true
+          fi
+          # Fallback: Steam Guard backup codes (each is single-use; spent codes are rejected quickly).
+          for code in $STEAM_GUARD_CODES; do
+            [[ -f "$RUNNER_TEMP/game/chitin.key" ]] && break
+            echo "Trying a Steam Guard backup code."
+            "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "$STEAM_PASSWORD" "$code" "${install[@]}" </dev/null || true
+          done
           test -f "$RUNNER_TEMP/game/chitin.key"
           python tools/modsync-ci/game_cache.py pack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
