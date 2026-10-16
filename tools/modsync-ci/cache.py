@@ -5,6 +5,7 @@ import argparse
 from email.message import EmailMessage
 from email.policy import default as email_policy
 import hashlib
+import importlib.util
 from http.client import HTTPException
 from http.cookiejar import CookieJar
 import html
@@ -30,6 +31,9 @@ ARCHIVE = re.compile(r"\.(zip|7z|rar)$", re.I)
 LINK = re.compile(r'\[[^\]]*\]\(\s*(<[^>]+>|[^\s)]+)(?:\s+[^)]*)?\)|<((?:https?)://[^>]+)>|^\s*\[[^\]]+\]:\s*(\S+)', re.M)
 HTTP = build_opener(HTTPCookieProcessor(CookieJar()))
 DISK_RESERVE_BYTES = 3 * 1024 ** 3
+MIN_TOOL_ARCHIVE_BYTES = 1024
+TOOL_PROVIDERS = ("mega", "google-drive")
+NEXUS_REASON = "nexus requires NEXUS_API_KEY (no headless adapter; CAPTCHA is never bypassed); blocked-pending-user-action"
 
 
 def clean_url(url):
@@ -163,13 +167,45 @@ def validate(path, timeout):
     kind = "7z" if magic.startswith(b"7z\xbc\xaf\x27\x1c") else "rar" if magic.startswith(b"Rar!\x1a\x07") else None
     if not kind:
         raise ValueError("not a supported archive (HTML and unknown payloads rejected)")
-    executable = shutil.which("7zz") or shutil.which("7z")
-    if not executable:
+    return run_integrity_tools(path, kind, timeout)
+
+
+def integrity_tools(path, kind):
+    target = str(path.resolve())
+    tools, seen = [], set()
+    for name in ("7zz", "7z"):
+        executable = shutil.which(name)
+        if executable and os.path.realpath(executable) not in seen:
+            seen.add(os.path.realpath(executable))
+            tools.append((name, [executable, "t", "-bd", "-y", "-p", target]))
+    unrar = shutil.which("unrar") if kind == "rar" else None
+    if unrar:
+        tools.append(("unrar", [unrar, "t", "-idq", "-y", "-p-", target]))
+    bsdtar = shutil.which("bsdtar")
+    if bsdtar:
+        tools.append(("bsdtar", [bsdtar, "-xOf", target]))
+    return tools
+
+
+def run_integrity_tools(path, kind, timeout):
+    tools = integrity_tools(path, kind)
+    if not tools:
         raise ValueError("7z or 7zz required for RAR/7z integrity")
-    subprocess.run([executable, "t", "-bd", "-y", "-p", str(path.resolve())],
-                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                   stderr=subprocess.DEVNULL, timeout=timeout, check=True)
-    return kind
+    crashed = []
+    for name, command in tools:
+        try:
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=timeout)
+        except OSError:
+            continue
+        if result.returncode == 0:
+            return kind
+        if result.returncode > 0:
+            raise subprocess.CalledProcessError(result.returncode, [name])
+        crashed.append(name)
+    if not crashed:
+        raise ValueError("7z or 7zz required for RAR/7z integrity")
+    raise ValueError("archive integrity check crashed in every available tool (" + ", ".join(crashed) + ")")
 
 
 class Links(HTMLParser):
@@ -244,15 +280,79 @@ def page_endpoint(response, item):
     return candidates.pop()
 
 
+def tool_base(provider_name):
+    if provider_name == "mega":
+        for name, prefix in (("megatools", ["dl"]), ("megadl", [])):
+            executable = shutil.which(name)
+            if executable:
+                return [executable, *prefix, "--path"]
+        raise ValueError("mega download requires megatools (megatools or megadl) on PATH; not installed")
+    if provider_name == "google-drive":
+        executable = shutil.which("gdown")
+        if executable:
+            return [executable, "--fuzzy", "--quiet", "-O"]
+        if importlib.util.find_spec("gdown"):
+            return [sys.executable, "-m", "gdown", "--fuzzy", "--quiet", "-O"]
+        raise ValueError("google-drive download requires gdown (pip install gdown); not installed")
+    raise ValueError(provider_name + " has no tool adapter")
+
+
+def tool_command(provider_name, directory, url):
+    target = str(directory) + (os.sep if provider_name == "google-drive" else "")
+    return [*tool_base(provider_name), target, url]
+
+
 def resolve(item, args):
-    if item["provider"] in ("mega", "nexus", "google-drive", "gamefront"):
-        raise ValueError(item["provider"] + " requires an authenticated/provider adapter")
+    if item["provider"] == "nexus":
+        raise ValueError(NEXUS_REASON)
+    if item["provider"] == "gamefront":
+        raise ValueError("gamefront requires an authenticated/provider adapter")
+    if item["provider"] in TOOL_PROVIDERS:
+        tool_base(item["provider"])
+        return item["url"]
     if item["direct"]:
         return item["url"]
     with request(item["url"], args) as response:
         if "html" not in response.headers.get("Content-Type", "").lower():
             raise ValueError("landing URL has no explicit archive endpoint")
         return page_endpoint(response, item)
+
+
+def fetch_with_tool(item, root, args):
+    objects = root / "objects"
+    objects.mkdir(parents=True, exist_ok=True)
+    workdir = Path(tempfile.mkdtemp(dir=objects, prefix=".tool-"))
+    try:
+        command = tool_command(item["provider"], workdir, item["url"])
+        try:
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=args.download_timeout)
+        except subprocess.TimeoutExpired:
+            raise ValueError("total download timeout") from None
+        except OSError:
+            raise ValueError(item["provider"] + " download tool could not be executed") from None
+        if result.returncode != 0:
+            raise ValueError(item["provider"] + " download tool failed (exit " + str(result.returncode) + ")")
+        files = [candidate for candidate in workdir.rglob("*") if candidate.is_file() or candidate.is_symlink()]
+        if len(files) != 1 or files[0].is_symlink():
+            raise ValueError(item["provider"] + " download did not yield exactly one regular file")
+        path = files[0]
+        size = path.stat().st_size
+        if size < MIN_TOOL_ARCHIVE_BYTES:
+            raise ValueError("downloaded file below minimum archive size (likely an error page)")
+        if size > args.max_bytes:
+            raise ValueError("archive exceeds size limit")
+        kind = validate(path, args.integrity_timeout)
+        sha = digest(path)
+        os.replace(path, objects / sha)
+        name = safe_archive_name(path.name, kind) or archive_name(item, kind, item["url"])
+        return {"sha256": sha, "size": size, "extension": kind, "archive_name": name,
+                "endpoint_id": item["id"], "endpoint": clean_url(item["url"]),
+                "etag": None, "last_modified": None, "version_id": None,
+                "checked_at": time.time(), "status": "verified", "metadata_unknown": True,
+                "evidence": "download-without-upstream-metadata"}
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def object_path(root, entry):
@@ -308,6 +408,8 @@ def archive_name(item, extension, url, disposition=None):
 
 def refresh_one(item, old, root, args, endpoint=None, depth=0):
     endpoint = endpoint or resolve(item, args)
+    if item["provider"] in TOOL_PROVIDERS:
+        return fetch_with_tool(item, root, args)
     endpoint_key = endpoint_id(endpoint)
     valid = local_valid(root, old)
     headers = {"Referer": item["url"]} if item["provider"] == "deadlystream" else {}

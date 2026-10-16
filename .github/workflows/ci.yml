@@ -109,7 +109,8 @@ jobs:
           persist-credentials: false
       - name: Install archive tools
         run: |
-          sudo apt-get install -y -qq p7zip-full >/dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq 7zip 7zip-rar megatools >/dev/null
+          python -m pip install --quiet gdown
           python3 tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone"
       - name: Download new or changed mod archives into the cache
         env:
@@ -122,6 +123,59 @@ jobs:
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: python tools/modsync-ci/refresh_archives.py --max-items 500
+
+  p2p-loopback:
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve ModSync source repository
+        id: source
+        env:
+          RUST_REPOSITORY: ${{ vars.MODSYNC_RS_REPOSITORY }}
+          SOURCE_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RUST_REPOSITORY" ]]; then
+            echo "::error::The repository variable for the rust ModSync source is empty."
+            exit 1
+          fi
+          if [[ -z "$SOURCE_TOKEN" ]]; then
+            echo "::error::MODSYNC_SOURCE_TOKEN is empty."
+            exit 1
+          fi
+          echo "repository=$RUST_REPOSITORY" >> "$GITHUB_OUTPUT"
+
+      - name: Check out ModSync (rust)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.source.outputs.repository }}
+          token: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+          path: .modsync-source
+          persist-credentials: false
+
+      - name: Let cargo fetch private git dependencies
+        env:
+          SOURCE_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$SOURCE_TOKEN"
+          git config --global url."https://x-access-token:${SOURCE_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
+      - name: Install build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libssl-dev >/dev/null
+
+      - name: Build modsync
+        working-directory: .modsync-source
+        run: cargo build --locked --bin modsync
+
+      - name: Transfer a random archive between two peers on loopback
+        run: python3 tools/modsync-ci/p2p_loopback.py --binary .modsync-source/target/debug/modsync
 
   install:
     name: install (${{ matrix.game }}, ${{ matrix.implementation }}, ${{ matrix.mode }})
@@ -170,6 +224,16 @@ jobs:
           token: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
           path: .modsync-source
           persist-credentials: false
+
+      - name: Let cargo fetch private git dependencies
+        if: matrix.implementation == 'rust'
+        env:
+          SOURCE_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$SOURCE_TOKEN"
+          git config --global url."https://x-access-token:${SOURCE_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
 
       - name: Install tools and free disk space
         run: |
