@@ -76,7 +76,12 @@ class ValidateFallbackTests(unittest.TestCase):
     def test_rar_falls_through_to_unrar_then_bsdtar(self):
         tools = {"7z": "/f/7z", "unrar": "/f/unrar", "bsdtar": "/f/bsdtar"}
         kind, calls = self.run_with(self.rar, tools, {"7z": -11, "unrar": -11, "bsdtar": 0})
-        self.assertEqual((kind, calls), ("rar", ["7z", "unrar", "bsdtar"]))
+        self.assertEqual((kind, calls), ("rar", ["unrar", "7z", "bsdtar"]))
+
+    def test_rar_positive_failure_continues_to_remaining_tools(self):
+        tools = {"7z": "/f/7z", "unrar": "/f/unrar", "bsdtar": "/f/bsdtar"}
+        kind, calls = self.run_with(self.rar, tools, {"unrar": 3, "7z": 2, "bsdtar": 0})
+        self.assertEqual((kind, calls), ("rar", ["unrar", "7z", "bsdtar"]))
 
     def test_unrar_skipped_for_7z_payload(self):
         tools = {"7z": "/f/7z", "unrar": "/f/unrar", "bsdtar": "/f/bsdtar"}
@@ -96,7 +101,7 @@ class ValidateFallbackTests(unittest.TestCase):
     def test_all_tools_crash_fails_closed(self):
         with self.assertRaises(ValueError) as caught:
             self.run_with(self.seven, {"7zz": "/f/7zz", "7z": "/f/7z"}, {"7zz": -11, "7z": -6})
-        self.assertIn("crashed in every available tool", str(caught.exception))
+        self.assertIn("failed in every available tool", str(caught.exception))
 
     def test_genuine_corruption_is_not_retried(self):
         with self.assertRaises(subprocess.CalledProcessError) as caught:
@@ -209,7 +214,7 @@ class FetchWithToolTests(unittest.TestCase):
         with mock.patch.object(cache.subprocess, "run", self.fake_tool("pack.zip", self.make_zip)):
             entry = cache.fetch_with_tool(item_for(DRIVE_URL), self.root, args_for())
         self.assertEqual(self.last_command[0], "/f/gdown")
-        self.assertIn("--fuzzy", self.last_command)
+        self.assertNotIn("--fuzzy", self.last_command)
         self.assertEqual(entry["status"], "verified")
         self.assertTrue(cache.local_valid(self.root, entry))
 

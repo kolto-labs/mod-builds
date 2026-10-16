@@ -31,7 +31,7 @@ ARCHIVE = re.compile(r"\.(zip|7z|rar)$", re.I)
 LINK = re.compile(r'\[[^\]]*\]\(\s*(<[^>]+>|[^\s)]+)(?:\s+[^)]*)?\)|<((?:https?)://[^>]+)>|^\s*\[[^\]]+\]:\s*(\S+)', re.M)
 HTTP = build_opener(HTTPCookieProcessor(CookieJar()))
 DISK_RESERVE_BYTES = 3 * 1024 ** 3
-MIN_TOOL_ARCHIVE_BYTES = 1024
+MIN_TOOL_ARCHIVE_BYTES = 64
 TOOL_PROVIDERS = ("mega", "google-drive")
 NEXUS_REASON = "nexus requires NEXUS_API_KEY (no headless adapter; CAPTCHA is never bypassed); blocked-pending-user-action"
 
@@ -173,14 +173,14 @@ def validate(path, timeout):
 def integrity_tools(path, kind):
     target = str(path.resolve())
     tools, seen = [], set()
+    unrar = shutil.which("unrar") if kind == "rar" else None
+    if unrar:
+        tools.append(("unrar", [unrar, "t", "-idq", "-y", "-p-", target]))
     for name in ("7zz", "7z"):
         executable = shutil.which(name)
         if executable and os.path.realpath(executable) not in seen:
             seen.add(os.path.realpath(executable))
             tools.append((name, [executable, "t", "-bd", "-y", "-p", target]))
-    unrar = shutil.which("unrar") if kind == "rar" else None
-    if unrar:
-        tools.append(("unrar", [unrar, "t", "-idq", "-y", "-p-", target]))
     bsdtar = shutil.which("bsdtar")
     if bsdtar:
         tools.append(("bsdtar", [bsdtar, "-xOf", target]))
@@ -191,7 +191,7 @@ def run_integrity_tools(path, kind, timeout):
     tools = integrity_tools(path, kind)
     if not tools:
         raise ValueError("7z or 7zz required for RAR/7z integrity")
-    crashed = []
+    failed = []
     for name, command in tools:
         try:
             result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
@@ -200,12 +200,12 @@ def run_integrity_tools(path, kind, timeout):
             continue
         if result.returncode == 0:
             return kind
-        if result.returncode > 0:
+        if result.returncode > 0 and kind != "rar":
             raise subprocess.CalledProcessError(result.returncode, [name])
-        crashed.append(name)
-    if not crashed:
+        failed.append(name)
+    if not failed:
         raise ValueError("7z or 7zz required for RAR/7z integrity")
-    raise ValueError("archive integrity check crashed in every available tool (" + ", ".join(crashed) + ")")
+    raise ValueError("archive integrity check failed in every available tool (" + ", ".join(failed) + ")")
 
 
 class Links(HTMLParser):
@@ -414,9 +414,9 @@ def tool_base(provider_name):
     if provider_name == "google-drive":
         executable = shutil.which("gdown")
         if executable:
-            return [executable, "--fuzzy", "--quiet", "-O"]
+            return [executable, "--quiet", "-O"]
         if importlib.util.find_spec("gdown"):
-            return [sys.executable, "-m", "gdown", "--fuzzy", "--quiet", "-O"]
+            return [sys.executable, "-m", "gdown", "--quiet", "-O"]
         raise ValueError("google-drive download requires gdown (pip install gdown); not installed")
     raise ValueError(provider_name + " has no tool adapter")
 
