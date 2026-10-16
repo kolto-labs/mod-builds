@@ -47,6 +47,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: game-${{ matrix.game }}-v1
+          restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
           lookup-only: true
 
       - name: Download game with SteamCMD
@@ -117,7 +118,8 @@ jobs:
   install:
     name: install (${{ matrix.game }}, ${{ matrix.implementation }}, ${{ matrix.mode }})
     needs: [game, mods]
-    if: ${{ !cancelled() && needs.game.result == 'success' }}
+    # Run per game even if the other game failed; unpacking fails if this game is missing.
+    if: ${{ !cancelled() && needs.game.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
@@ -192,6 +194,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: game-${{ matrix.game }}-v1
+          restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
           fail-on-cache-miss: true
       - name: Unpack game
         env:
@@ -229,7 +232,8 @@ jobs:
   manual:
     name: manual (${{ matrix.game }})
     needs: [game, mods]
-    if: ${{ !cancelled() && needs.game.result == 'success' }}
+    # Run per game even if the other game failed; unpacking fails if this game is missing.
+    if: ${{ !cancelled() && needs.game.result != 'skipped' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
@@ -269,6 +273,7 @@ jobs:
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: game-${{ matrix.game }}-v1
+          restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
           fail-on-cache-miss: true
       - name: Unpack game
         if: steps.plan.outputs.present == 'true'
