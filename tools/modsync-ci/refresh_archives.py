@@ -201,8 +201,10 @@ def classify(reason):
         return "other", None
     if reason in ADAPTER_REASONS:
         return "adapter-required", None
-    if reason == "provider challenge/CAPTCHA; blocked-pending-user-action" or reason.startswith("nexus requires NEXUS_API_KEY"):
+    if reason == "provider challenge/CAPTCHA; blocked-pending-user-action":
         return "captcha-user-action", None
+    if reason.startswith("nexus requires NEXUS_API_KEY"):
+        return "credentials-required", None
     match = re.fullmatch(r"HTTP ([45][0-9]{2})", reason)
     if match:
         return "http-status", int(match[1])

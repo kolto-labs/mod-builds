@@ -157,7 +157,10 @@ only after confirming the lane never installs the named section (see
 
 ## Integrity checks
 
-- ZIP: CRC test of every member.
+- ZIP: CRC test of every member with Python `zipfile`. If `zipfile` rejects the file
+  (for example a zip whose member paths use backslashes), the check falls back to
+  `7zz`/`7z t`, then `bsdtar`, and the file is rejected only when no available
+  tool accepts it.
 - RAR: `unrar t` if installed, then `7zz`/`7z t`, then `bsdtar`. A tool that fails
   or cannot run falls through to the next; the file is rejected only when every
   available tool fails.
@@ -224,17 +227,132 @@ first-listed file, 1920x1080 at 30fps for resolution packs. Where the guide name
 no file, the `reason` says that instead. These are CI defaults, not
 recommendations; change the entry if a build needs a different variant.
 
+## Operator seed (Nexus Mods and GameFront)
+
+Nexus Mods and GameFront cannot be fetched by the `mods` job (see
+[Known gaps](#known-gaps)): the Nexus file pages sit behind a Cloudflare Turnstile
+check and there is no `NEXUS_API_KEY`; GameFront answers with a Cloudflare
+challenge (HTTP 403). The challenge is never bypassed. Instead an operator
+downloads each file once in a normal browser session, stages it privately, and CI
+copies it into the archive bucket only if it matches a reviewed pin.
+
+### Pins
+
+`tools/modsync-ci/seed_pins.json` is `{"schema": 1, "entries": {...}}`. Each entry
+is keyed by the guide link id (the same id `cache.py discover` prints) and holds:
+
+- `url`: the guide link. It must still be linked from `content/k1/full.md` or
+  `content/k2/full.md` with exactly this URL, or the seed run exits 1 (pins and
+  guides have drifted).
+- `provider`: `nexus` or `gamefront`. Other providers are not accepted.
+- `provenance`: must be `operator-local-download`.
+- `objects`: one or more `{archive_name, sha256, size, extension}`. `extension` is
+  `zip`, `7z`, `rar` or `file`; `file` is allowed only for a reviewed loose
+  selection (see [Loose files](#loose-files)). `size` must be positive, a SHA-256
+  may appear once per pin, and one `archive_name` may not stage different content
+  under two pins. A post with several files is bound to the reviewed
+  multi-file selection in `archive_selections.json`.
+
+A pin that `cache.py` rejects (wrong provider or provenance, bad hash, missing
+fields) is a hard error for the seed script, not a silent skip. The file holds
+hashes, sizes and file names only, never credentials.
+
+### What a seed run records
+
+For each pin the script copies one staged file at a time to scratch space and
+checks, in order: the file exists in staging, its size equals the pin, its SHA-256
+equals the pin (a difference is `pin-mismatch` and fails the run), and the usual
+[integrity check](#integrity-checks) passes. Only then does it upload
+`objects/<sha256>` and write the manifest entry with `status: "pinned"` and
+`evidence: "operator-seed"` (plus `metadata_unknown`). The local copy is deleted
+after every pin. Nothing that fails a check is published.
+
+Consequences of `pinned`:
+
+- Restore treats a valid pinned entry as fresh: no 14-day expiry, no upstream
+  request. The `mods` job does not refresh it either (`refresh_archives.py` skips
+  pinned entries). An entry is `pinned` only if its manifest objects still match
+  the pin and the reviewed selection; otherwise it is an ordinary stale entry.
+- Pins are the only way a Nexus or GameFront link becomes restorable. A link with no
+  pin stays `blocked-pending-user-action` or unresolved, and the lane that needs
+  it stops at restore.
+- A pin that is already in the bucket with the right object sizes is reported
+  `already-seeded` and not rewritten. `--force` (CLI only; the workflow does not
+  pass it) reseeds.
+
+### Running it
+
+1. Download each pinned file by hand. Upload it to a flat folder named
+   `modsync-seed-staging` on a private rclone-reachable remote, one file per pin,
+   named exactly `archive_name` (no subfolders). The workflow uses this default
+   folder name; `seed_archives.py --staging-path` can change it for local runs only.
+2. Store the staging `rclone.conf` (it must define a `[STAGING]` remote), base64
+   encoded, as the secret `SEED_STAGING_RCLONE_CONF_B64`, available to the
+   `mod-cache-seed` environment. The `seed` job runs in that environment and also
+   needs the write pair (`MOD_CACHE_S3_ACCESS_KEY_ID`,
+   `MOD_CACHE_S3_SECRET_ACCESS_KEY`), `MOD_CACHE_S3_ENDPOINT` and the
+   `MOD_CACHE_BUCKET` variable. After a real seed it re-runs with the read pair
+   (`--verify`) to prove every pinned id restores, as an install job would.
+3. Dry run first. It downloads and fully verifies every staged file against its pin
+   and writes nothing to the cache:
+
+   ```sh
+   gh workflow run ci.yml -R kolto-labs/mod-builds --ref <branch> -f seed_archives=true -f seed_dry_run=true
+   ```
+
+4. Then seed for real:
+
+   ```sh
+   gh workflow run ci.yml -R kolto-labs/mod-builds --ref <branch> -f seed_archives=true -f seed_dry_run=false
+   ```
+
+`<branch>` must contain the workflow with these inputs. With `seed_archives=true`
+every other job is skipped, and the `seed` job shares the `mod-cache-writer`
+concurrency group with the `mods` job so the two never write the manifest at once.
+The run prints only sanitized totals and per-pin outcomes (`verified`, `seeded`,
+`already-seeded`, `restores`, or `FAILED: <reason>`) to the log and the step
+summary: no URLs, file names, remote paths or secrets. The script's own modes are
+`--dry-run` and `--verify` (read-only); exit 1 is any pin or infrastructure
+failure, exit 2 a usage or configuration error.
+
+### Trust caveat
+
+The staging remote is an account-wide OneDrive token, not a credential scoped to
+the staging folder: the secret grants access to the whole account. The script
+masks credential-looking values in the decoded config and keeps it in a private
+temporary file, but that does not narrow what the token can reach. Use it only
+for the seeding window. When seeding is done, delete the staging folder, delete
+the `SEED_STAGING_RCLONE_CONF_B64` secret and revoke the token, so no standing
+access to the account remains in CI.
+
+### Never cached: the Bink-video post
+
+The K2 cutscene-video post (DeadlyStream file 2503, about 25.7 GB of `.bik` video)
+is deliberately not seeded and not in `seed_pins.json`. It is listed under
+`uncached` (see [Never cached by policy](#never-cached-by-policy)): `.bik` is never
+cached, by `game_cache.py` or by this archive cache. `cache.py restore` reports it
+as `uncached-by-policy` and exits 1 for the K2 guide.
+`--allow-uncached-by-policy "<section>"` is the opt-in escape for a lane that never
+installs the section holding the referencing step; it is not wired into any lane
+today (see [ci.md](ci.md#install-lanes-and-uncached-links)).
+
 ## Known gaps
 
 These links do not get cached today, so a guide that contains any of them cannot
 pass restore. They are blockers outside this repository's code, and none is worked
 around.
 
-- **Nexus Mods:** 37 links across the two guides (`cache.py discover`). There is no
+- **Nexus Mods:** 35 distinct links across the two guides (`cache.py discover`; 37 with the 2 GameFront links). There is no
   `NEXUS_API_KEY`, and the file pages sit behind a Cloudflare Turnstile check. The
-  client reports `blocked-pending-user-action` and never bypasses the check.
+  client reports `blocked-pending-user-action` and never bypasses the check. The
+  refresh summary classifies the missing key as `credentials-required`; only a real
+  provider challenge page is classified `captcha-user-action`.
 - **GameFront:** 2 links. The client has no adapter and does not request them; a
   manual request returns HTTP 403 with a Cloudflare challenge.
+
+Links with a reviewed pin are the exception: they restore from the bucket once
+seeded (see [Operator seed](#operator-seed-nexus-mods-and-gamefront)). Every other
+Nexus or GameFront link above stays blocked.
 - **DeadlyStream post 2503** (K2 cutscene videos): the entry pins the main file and
   its `_mods` file, 1920x1080 at 30fps. The two together are about 25.7 GB of Bink
   video. It is listed under `uncached` (see

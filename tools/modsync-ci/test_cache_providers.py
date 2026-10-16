@@ -1199,6 +1199,19 @@ class MultiFileRefreshJobTests(MultiFileFixture):
             self.assertEqual(refresh_archives.classify(reason), ("selection-review", None))
         self.assertEqual(refresh_archives.classify("cache missing; archive refresh job must populate it")[0], "other")
 
+    def test_missing_credentials_are_not_labelled_as_captcha(self):
+        self.assertEqual(refresh_archives.classify(cache.NEXUS_REASON), ("credentials-required", None))
+        self.assertEqual(refresh_archives.classify("nexus requires NEXUS_API_KEY"), ("credentials-required", None))
+        self.assertEqual(refresh_archives.classify("provider challenge/CAPTCHA; blocked-pending-user-action"),
+                         ("captcha-user-action", None))
+        unresolved = [{"id": "4", "provider": "nexus", "status": "unresolved", "reason": cache.NEXUS_REASON},
+                      {"id": "5", "provider": "deadlystream", "status": "unresolved",
+                       "reason": "provider challenge/CAPTCHA; blocked-pending-user-action"}]
+        summary = refresh_archives.totals(unresolved, {"entries": {}}, 0.0, "finished", True, True, 5)
+        classes = {(each["provider"], each["reason_class"]) for each in summary["unresolved_classes"]}
+        self.assertEqual(classes, {("nexus", "credentials-required"), ("deadlystream", "captcha-user-action")})
+        self.assertEqual(summary["other_reasons"], {})
+
     def test_totals_count_each_object_of_a_bundle(self):
         entry = self.bundle_entry()
         entry["checked_at"] = 2000.0
