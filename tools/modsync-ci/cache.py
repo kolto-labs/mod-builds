@@ -224,11 +224,16 @@ def validate(path, timeout, loose=False):
             raise ValueError(HTML_REJECTED)
         return LOOSE
     if magic.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
-        subprocess.run([sys.executable, "-c",
-                        "import sys,zipfile; archive=zipfile.ZipFile(sys.argv[1]); "
-                        "sys.exit(1 if archive.testzip() else 0)", str(path.resolve())],
-                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=timeout, check=True)
+        try:
+            subprocess.run([sys.executable, "-c",
+                            "import sys,zipfile; archive=zipfile.ZipFile(sys.argv[1]); "
+                            "sys.exit(1 if archive.testzip() else 0)", str(path.resolve())],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=timeout, check=True)
+        except subprocess.CalledProcessError:
+            if not integrity_tools(path, "zip"):
+                raise
+            run_integrity_tools(path, "zip", timeout)
         return "zip"
     kind = "7z" if magic.startswith(b"7z\xbc\xaf\x27\x1c") else "rar" if magic.startswith(b"Rar!\x1a\x07") else None
     if not kind:
