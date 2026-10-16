@@ -632,6 +632,8 @@ def main(argv=None):
                     atomic_json(manifest_path, manifest)
                 else:
                     if not fresh:
+                        if not old.get("sha256"):
+                            raise ValueError("cache missing; archive refresh job must populate it")
                         old = refresh_one(item, old, root, args)
                         manifest["entries"][item["id"]] = old
                         atomic_json(manifest_path, manifest)

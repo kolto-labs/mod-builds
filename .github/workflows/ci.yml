@@ -121,7 +121,7 @@ jobs:
           RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
-        run: python tools/modsync-ci/refresh_archives.py --max-items 20
+        run: python tools/modsync-ci/refresh_archives.py --max-items 500
 
   install:
     name: install (${{ matrix.game }}, ${{ matrix.implementation }}, ${{ matrix.mode }})

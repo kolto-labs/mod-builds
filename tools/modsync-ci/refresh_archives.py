@@ -254,14 +254,14 @@ def publish(summary):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--max-items", type=int, required=True, help="due links to attempt (1-20)")
+    parser.add_argument("--max-items", type=int, required=True, help="due links to attempt (1-500)")
     parser.add_argument("--candidate-id", help="retry exactly this discovered item (64 lowercase hex), forced")
     parser.add_argument("--guide", action="append", help="repeatable full.md path (default both games)")
     parser.add_argument("--work-dir", type=Path, help="parent for the private scratch dir (default $RUNNER_TEMP or /tmp)")
     parser.add_argument("--time-limit", type=int, default=2100, help="seconds before stopping with partial progress")
     args = parser.parse_args(argv)
-    if not 1 <= args.max_items <= 20:
-        parser.error("--max-items must be 1..20")
+    if not 1 <= args.max_items <= 500:
+        parser.error("--max-items must be 1..500")
     if args.candidate_id and not re.fullmatch(r"[0-9a-f]{64}", args.candidate_id):
         parser.error("--candidate-id must be exactly 64 lowercase hexadecimal characters")
 
