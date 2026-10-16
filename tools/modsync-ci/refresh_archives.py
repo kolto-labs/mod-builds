@@ -209,10 +209,13 @@ def totals(entries, manifest, started, stop, ok, persisted, max_items):
     verified = [entry for entry in checked
                 if entry.get("evidence") in ("download-200", "download-without-upstream-metadata")]
     unresolved = Counter()
+    other_reasons = Counter()
     for entry in entries:
         if entry.get("status") == "unresolved":
             provider = entry.get("provider") if entry.get("provider") in PROVIDERS else "unknown"
             unresolved[(provider, *classify(entry.get("reason")))] += 1
+            if classify(entry.get("reason"))[0] == "other":
+                other_reasons[provider + ": " + str(entry.get("reason"))[:160]] += 1
     stages = {}
     for entry in entries:
         if entry.get("stage"):
@@ -232,6 +235,7 @@ def totals(entries, manifest, started, stop, ok, persisted, max_items):
         "unresolved": counts["unresolved"], "manifest_checked": len(checked),
         "verified_downloads": len(verified), "verified_bytes": sum(entry.get("size", 0) for entry in verified),
         "refresh_complete": int(ok and persisted and stop == "finished"), "persistence_succeeded": int(persisted),
+        "other_reasons": dict(other_reasons.most_common(20)),
         "unresolved_classes": [
             {"provider": provider, "reason_class": reason_class, "count": count,
              **({"http_status": status} if status is not None else {})}
