@@ -548,7 +548,7 @@ class LooseSelectionTests(unittest.TestCase):
         self.assertEqual(cache.reviewed_loose(item_for(POST_URL), self.path), "loose_texture.tga")
         self.assertEqual(cache.reviewed_loose(item_for(DRIVE_URL), self.path), "dialog_sample.dlg")
         self.assertIsNone(cache.reviewed_loose(item_for(MEGA_URL), self.path))
-        self.assertIsNone(cache.reviewed_loose(item_for("https://deadlystream.com/files/file/124-other/"), self.path))
+        self.assertIsNone(cache.reviewed_loose(item_for(OTHER_URL), self.path))
         self.assertIsNone(cache.reviewed_loose(item_for("https://deadlystream.com/files/file/999-other/"), self.path))
         self.assertIsNone(cache.reviewed_loose(item_for("https://example.com/a.zip"), self.path))
 
@@ -1247,6 +1247,119 @@ class MultiFileRefreshJobTests(MultiFileFixture):
         self.assertEqual(sorted(uploaded), sorted(remote))
         self.assertIn("persist-manifest", steps)
         self.assertEqual(steps[-1], {"entries": [], "ok": True})
+
+
+OTHER_URL = "https://deadlystream.com/files/file/124-other-example-post/"
+
+
+class UncachedPolicyTests(MultiFileFixture):
+    REASON = "example video pack; video is never cached"
+
+    def setUp(self):
+        super().setUp()
+        self.stale = self.bundle()
+        self.selections.write_text(json.dumps({
+            "uncached": {"123": {"reason": self.REASON}},
+            "selections": {"123": {"files": list(self.NAMES)}}}), encoding="utf-8")
+        patcher = mock.patch.object(refresh_archives.cache, "SELECTIONS_PATH", self.selections)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.guide = self.base / "guide.md"
+        self.guide.write_text("[mod](%s)\n" % POST_URL, encoding="utf-8")
+        self.destination = self.base / "mods"
+        self.item = item_for(POST_URL)
+        self.objects_before = sorted((self.root / "objects").iterdir())
+
+    def run_main(self, command, *extra):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = cache.main([command, "--guide", str(self.guide), "--cache-dir", str(self.root), *extra])
+        return code, json.loads(output.getvalue())
+
+    def stale_manifest(self):
+        self.stale.update(status="fresh", checked_at=cache.time.time())
+        (self.root / "manifest.json").write_text(json.dumps(
+            {"schema": 1, "entries": {self.item["id"]: self.stale}}), encoding="utf-8")
+
+    def test_reason_lookup_is_limited_to_the_listed_deadlystream_file(self):
+        self.assertEqual(cache.uncached_reason(item_for(POST_URL)), self.REASON)
+        self.assertIsNone(cache.uncached_reason(item_for("https://deadlystream.com/files/file/124-other/")))
+        self.assertIsNone(cache.uncached_reason(item_for(MEGA_URL)))
+
+    def test_malformed_policy_is_rejected(self):
+        for value in ({"uncached": []}, {"uncached": {"123": {}}}, {"uncached": {"123": {"reason": " "}}},
+                      {"uncached": {"123": "no"}}, {"uncached": {"not-an-id": {"reason": "x"}}}):
+            self.selections.write_text(json.dumps(value), encoding="utf-8")
+            with self.assertRaises(ValueError):
+                cache.load_uncached()
+
+    def test_shipped_policy_lists_the_video_pack_with_a_reason(self):
+        self.assertTrue(cache.load_uncached(Path(cache.__file__).with_name("archive_selections.json"))["2503"])
+
+    def test_refresh_one_never_touches_the_network(self):
+        with mock.patch.object(cache, "request", side_effect=AssertionError("network used")):
+            with self.assertRaises(ValueError) as caught:
+                cache.refresh_one(self.item, {}, self.root, args_for())
+        self.assertIn("by policy", str(caught.exception))
+        self.assertEqual(sorted((self.root / "objects").iterdir()), self.objects_before)
+
+    def test_refresh_command_reports_policy_status_downloads_nothing_and_drops_stale_entry(self):
+        self.stale_manifest()
+        with mock.patch.object(cache, "request", side_effect=AssertionError("network used")):
+            code, report = self.run_main("refresh", "--retries", "0")
+        self.assertEqual(code, 0)
+        self.assertEqual([entry["status"] for entry in report["entries"]], [cache.UNCACHED])
+        self.assertIn(self.REASON, report["entries"][0]["reason"])
+        self.assertEqual(json.loads((self.root / "manifest.json").read_text())["entries"], {})
+
+    def test_restore_fails_closed_with_explicit_status_and_restores_nothing(self):
+        self.stale_manifest()
+        with mock.patch.object(cache, "request", side_effect=AssertionError("network used")):
+            code, report = self.run_main("restore", "--destination", str(self.destination), "--retries", "0")
+        self.assertEqual(code, 1)
+        self.assertEqual([entry["status"] for entry in report["entries"]], [cache.UNCACHED])
+        self.assertIn("not cached by policy", report["entries"][0]["reason"])
+        self.assertFalse(self.destination.exists() and any(self.destination.iterdir()))
+
+    def test_import_existing_does_not_copy_a_policy_listed_link(self):
+        entry = cache.import_existing(self.item, {}, self.base, self.root, args_for())
+        self.assertEqual(entry["status"], cache.UNCACHED)
+
+    def test_refresh_job_skips_listed_link_before_any_remote_access(self):
+        def fail(*args, **kwargs):
+            raise AssertionError("remote used")
+
+        with mock.patch.object(refresh_archives, "fetch", fail), \
+                mock.patch.object(refresh_archives, "upload_object", fail), \
+                mock.patch.object(refresh_archives, "rclone", fail), \
+                mock.patch.object(refresh_archives.cache, "main", fail):
+            steps = list(refresh_archives.refresh_item(self.item, self.root, "remote:bucket", True))
+        self.assertEqual(len(steps), 1)
+        self.assertTrue(steps[0]["ok"])
+        self.assertEqual(steps[0]["entries"][0]["status"], cache.UNCACHED)
+
+    def test_listed_link_is_never_due_and_is_counted_separately(self):
+        self.assertFalse(refresh_archives.is_due({}, 1000.0, self.item))
+        self.assertTrue(refresh_archives.is_due({}, 1000.0, item_for(OTHER_URL)))
+        summary = refresh_archives.totals([cache.uncached_entry(self.item, self.REASON)], {}, 0.0,
+                                          "finished", True, True, 5)
+        self.assertEqual((summary["uncached_by_policy"], summary["unresolved"]), (1, 0))
+
+    def test_download_budget_is_capped_even_when_the_disk_is_huge(self):
+        other = item_for(OTHER_URL)
+        (self.root / "manifest.json").write_text(json.dumps({"schema": 1, "entries": {}}), encoding="utf-8")
+        seen = []
+
+        def fake_main(argv):
+            seen.append(int(argv[argv.index("--max-bytes") + 1]))
+            (self.root.parent / "item-report.json").write_text(json.dumps({"entries": [], "ok": True}))
+
+        usage = types.SimpleNamespace(free=10 ** 15)
+        with mock.patch.object(refresh_archives, "rclone", lambda *a, **k: None), \
+                mock.patch.object(refresh_archives.shutil, "disk_usage", return_value=usage), \
+                mock.patch.object(refresh_archives.cache, "main", fake_main):
+            list(refresh_archives.refresh_item(other, self.root, "remote:bucket", False))
+        self.assertEqual(seen, [cache.MAX_LINK_BYTES])
 
 
 class DropboxTests(unittest.TestCase):

@@ -69,7 +69,7 @@ None of these is bypassed.
 | --- | --- | --- |
 | Nexus Mods | 37 links in the two guides; no `NEXUS_API_KEY`; Cloudflare Turnstile on file pages | Never cached, reported `blocked-pending-user-action`; the CAPTCHA is never solved |
 | GameFront | 2 links; HTTP 403 with a Cloudflare challenge | Never cached; the client has no adapter |
-| DeadlyStream post 2503 (K2 cutscenes) | About 25.7 GB of Bink video; above the per-link size cap | Intentionally uncached; K2 restore fails while it is missing |
+| DeadlyStream post 2503 (K2 cutscenes) | About 25.7 GB of Bink video; listed under `uncached` in `archive_selections.json` | Never downloaded or uploaded; restore reports `uncached-by-policy` and K2 restore fails |
 
 Because restore is fail-closed, a guide that contains any of these links stops at
 the restore step in every install and manual lane.

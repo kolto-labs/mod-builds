@@ -42,6 +42,8 @@ PIN_PROVIDERS = ("nexus", "gamefront")
 PIN_PROVENANCE = "operator-local-download"
 PIN_EXTENSIONS = ("zip", "7z", "rar", LOOSE)
 SHA256 = re.compile(r"[a-f0-9]{64}")
+UNCACHED = "uncached-by-policy"
+MAX_LINK_BYTES = 20 * 1024 ** 3
 NEXUS_REASON = "nexus requires NEXUS_API_KEY (no headless adapter; CAPTCHA is never bypassed); blocked-pending-user-action"
 
 
@@ -395,6 +397,35 @@ def load_reviewed(path=None):
     for key, value in (document.get("tool_selections") or {}).items():
         reviewed["tools"][tool_selection_key(key)] = review_entry(key, value, tool=True)
     return reviewed
+
+
+def load_uncached(path=None):
+    path = Path(path or SELECTIONS_PATH)
+    if not path.exists():
+        return {}
+    document = json.loads(path.read_text(encoding="utf-8"))
+    declared = document.get("uncached", {})
+    if not isinstance(declared, dict):
+        raise ValueError("uncached must be an object keyed by DeadlyStream file id")
+    uncached = {}
+    for key, value in declared.items():
+        reason = value.get("reason") if isinstance(value, dict) else None
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("uncached entry for " + str(key) + " must carry a non-empty reason")
+        uncached[selection_key(key)] = reason.strip()
+    return uncached
+
+
+def uncached_reason(item, path=None):
+    if item["provider"] != "deadlystream":
+        return None
+    match = FILE_ID.search(urlsplit(item["url"]).path)
+    return load_uncached(path).get(match[1]) if match else None
+
+
+def uncached_entry(item, reason):
+    return {"id": item["id"], "url": clean_url(item["url"]), "provider": item["provider"],
+            "status": UNCACHED, "reason": "intentionally not cached by policy: " + reason}
 
 
 def selection_value(entry):
@@ -804,6 +835,9 @@ def archive_name(item, extension, url, disposition=None, reviewed=None):
 
 
 def refresh_one(item, old, root, args, endpoint=None, depth=0):
+    policy = uncached_reason(item)
+    if policy:
+        raise ValueError("intentionally not cached by policy: " + policy)
     result = fetch_item(item, old, root, args, endpoint, depth)
     if not objects_match_selection(item, result):
         raise ValueError("fetched files do not match the reviewed multi-file selection; "
@@ -1021,6 +1055,9 @@ def expected_for(expected_sha256, filename):
 
 
 def import_existing(item, resource_entries, archive_root, root, args, expected_sha256=None):
+    policy = uncached_reason(item)
+    if policy:
+        return uncached_entry(item, policy)
     matches = [(key, value) for key, value in resource_entries.items()
                if isinstance(value, dict)
                and isinstance(value.get("HandlerMetadata"), dict)
@@ -1198,7 +1235,7 @@ def main(argv=None):
     parser.add_argument("--integrity-timeout", type=float, default=300)
     parser.add_argument("--backend-timeout", type=float, default=1800)
     parser.add_argument("--retries", type=int, default=2)
-    parser.add_argument("--max-bytes", type=int, default=20 * 1024 ** 3)
+    parser.add_argument("--max-bytes", type=int, default=MAX_LINK_BYTES)
     args = parser.parse_args(argv)
     if not 0 <= args.retries <= 5 or not 0 < args.max_age_days <= 14:
         parser.error("retries must be 0..5; max-age-days must be >0 and <=14")
@@ -1262,7 +1299,7 @@ def main(argv=None):
         report["unmatched_urls"] = len(items) - len(matched_items)
         report["truncated"] = report["next_offset"] < len(matched_items)
         report["ok"] = all(entry["status"] in (
-            "planned", "existing-association", "already-present", "stale-unknown", "pinned")
+            "planned", "existing-association", "already-present", "stale-unknown", "pinned", UNCACHED)
                            for entry in report["entries"])
     else:
         root = args.cache_dir.resolve()
@@ -1281,6 +1318,12 @@ def main(argv=None):
         for item in items:
             old = manifest["entries"].get(item["id"], {})
             entry = {"id": item["id"], "url": clean_url(item["url"]), "provider": item["provider"]}
+            policy = uncached_reason(item)
+            if policy:
+                report["entries"].append(uncached_entry(item, policy))
+                if args.command == "refresh" and manifest["entries"].pop(item["id"], None) is not None:
+                    atomic_json(manifest_path, manifest)
+                continue
             try:
                 valid = local_valid(root, old)
                 age = time.time() - old.get("checked_at", 0)
@@ -1334,7 +1377,8 @@ def main(argv=None):
         elif repaired:
             rclone(args, "push", root)
     if args.command != "import-existing":
-        report["ok"] = all(entry.get("status") in ("fresh", "verified", "restored", "pinned")
+        accepted = ("fresh", "verified", "restored", "pinned") + ((UNCACHED,) if args.command == "refresh" else ())
+        report["ok"] = all(entry.get("status") in accepted
                            for entry in report["entries"]) if args.command != "discover" else True
     if args.report:
         atomic_json(args.report, report)

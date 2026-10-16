@@ -1,4 +1,9 @@
 {
+  "uncached": {
+    "2503": {
+      "reason": "Bink video, about 25.7 GB for the reviewed main and _mods files; video is never cached and the CI game baseline carries no movies"
+    }
+  },
   "selections": {
     "367": {
       "file": "Sapiens Nihilus TPC.7z",

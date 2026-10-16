@@ -114,7 +114,7 @@ def upload_object(path, remote_path):
 
 
 def is_due(entry, now, item=None, pins=None):
-    if item is not None and cache.is_pinned(item, entry, pins):
+    if item is not None and (cache.uncached_reason(item) or cache.is_pinned(item, entry, pins)):
         return False
     upstream_checked = entry.get("status") == "fresh" or (
         entry.get("status") == "verified" and entry.get("evidence") == "download-without-upstream-metadata")
@@ -125,6 +125,10 @@ def is_due(entry, now, item=None, pins=None):
 def refresh_item(item, root, remote, force):
     """Restore, refresh, persist and evict one item; returns cache.py's sanitized report."""
     manifest_path = root / "manifest.json"
+    policy = cache.uncached_reason(item)
+    if policy:
+        yield {"entries": [cache.uncached_entry(item, policy)], "ok": True}
+        return
     manifest = json.loads(manifest_path.read_text())
     manifest.setdefault("refresh_attempts", {})[item["id"]] = time.time()
     cache.atomic_json(manifest_path, manifest)
@@ -143,7 +147,7 @@ def refresh_item(item, root, remote, force):
                 os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
-    available = shutil.disk_usage(root).free - RESERVE
+    available = min(shutil.disk_usage(root).free - RESERVE, cache.MAX_LINK_BYTES)
     if available <= 0:
         raise ValueError("insufficient download disk")
     yield "refresh"
@@ -240,7 +244,7 @@ def totals(entries, manifest, started, stop, ok, persisted, max_items):
     return {
         "max_items": max_items, "state": stop, "reported_entries": len(entries),
         "fresh": counts["fresh"], "verified": counts["verified"], "pinned": counts["pinned"],
-        "stale_unknown": counts["stale-unknown"],
+        "stale_unknown": counts["stale-unknown"], "uncached_by_policy": counts[cache.UNCACHED],
         "unresolved": counts["unresolved"], "manifest_checked": len(checked),
         "verified_downloads": len(verified), "verified_bytes": sum(entry.get("size", 0) for entry in verified),
         "refresh_complete": int(ok and persisted and stop == "finished"), "persistence_succeeded": int(persisted),
@@ -294,6 +298,13 @@ def main(argv=None):
         items = [item for item in items if item["id"] == args.candidate_id]
         if len(items) != 1:
             parser.error("--candidate-id does not match exactly one discovered item")
+    try:
+        policy = {item["id"]: cache.uncached_reason(item) for item in items}
+    except (ValueError, OSError) as error:
+        print(f"::error::Archive selections are invalid ({type(error).__name__}).", file=sys.stderr)
+        return 2
+    policy_entries = [cache.uncached_entry(item, policy[item["id"]]) for item in items if policy[item["id"]]]
+    items = [item for item in items if not policy[item["id"]]]
 
     os.umask(0o077)
     parent = args.work_dir or Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir())
@@ -314,6 +325,9 @@ def main(argv=None):
             if (manifest.get("schema") != 1 or not isinstance(manifest.get("entries"), dict)
                     or not isinstance(manifest.setdefault("refresh_attempts", {}), dict)):
                 raise ValueError
+            for entry in policy_entries:
+                manifest["entries"].pop(entry["id"], None)
+                manifest["refresh_attempts"].pop(entry["id"], None)
             cache.atomic_json(manifest_path, manifest)
         except (subprocess.SubprocessError, ValueError, OSError) as error:
             print(f"::error::Archive cache backend unreachable or manifest corrupt ({type(error).__name__}).",
@@ -334,7 +348,7 @@ def main(argv=None):
             items = sorted((item for item in items if is_due(entries_by_id.get(item["id"], {}), started, item, pins)),
                            key=priority)[:args.max_items]
 
-        entries, ok, stop = [], True, "finished"
+        entries, ok, stop = list(policy_entries), True, "finished"
         signal.signal(signal.SIGALRM, interrupt)
         signal.signal(signal.SIGTERM, interrupt)
         signal.alarm(args.time_limit)
@@ -345,7 +359,8 @@ def main(argv=None):
                     break
                 item_entries, item_ok = run_item(item, root, remote, bool(args.candidate_id))
                 entries += item_entries
-                ok = ok and item_ok and all(entry.get("status") in ("fresh", "verified", "pinned") for entry in item_entries)
+                ok = ok and item_ok and all(entry.get("status") in ("fresh", "verified", "pinned", cache.UNCACHED)
+                                            for entry in item_entries)
         except Stop as reason:
             stop, ok = f"{reason}; partial progress", False
         finally:

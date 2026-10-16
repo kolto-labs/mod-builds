@@ -55,7 +55,8 @@ guide cannot be restored and verified, the restore step exits non-zero and the
 lane stops before `ports.py`. The install lanes never acquire a link the cache has
 not already recorded; only `mods` does. Today that means every lane stops at
 restore for a guide that contains an uncached link (Nexus Mods, GameFront and the
-K2 cutscene post; see [cache.md](cache.md#known-gaps)).
+K2 cutscene post, reported as `uncached-by-policy`; see
+[cache.md](cache.md#known-gaps)).
 
 - **`typescript` lanes** first require `ci/<game>-typescript-review.json`, a
   human-reviewed manifest. If it is missing, the job fails; it never passes

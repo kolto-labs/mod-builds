@@ -15,8 +15,8 @@ of GB, too large for the 10 GB Actions cache, so they live in the bucket.
 
 `.bik` movies are never cached. `game_cache.py pack` deletes them before sealing,
 and `unpack` fails if the restored tree does not match the recorded inventory. The
-one mod download that is mostly video is also not cached (see
-[Known gaps](#known-gaps)).
+one mod download that is mostly video is also never cached (see
+[Never cached by policy](#never-cached-by-policy)).
 
 ## Backend and names
 
@@ -56,14 +56,19 @@ secrets. It is `continue-on-error`, so a failure never blocks an install. It run
 `tools/modsync-ci/refresh_archives.py --max-items 500`:
 
 1. Pull `manifest.json` from the bucket (not the objects).
-2. Pick up to 500 due links from both full guides: never attempted first, then the
+2. Drop links listed under `uncached` in `archive_selections.json` (see
+   [Never cached by policy](#never-cached-by-policy)): they are never contacted and
+   any manifest entry they have is removed. Pick up to 500 due links from both
+   full guides: never attempted first, then the
    oldest attempt. A link is due unless it was verified within the last 14 days and
    its stored files still match the reviewed selection. Stop early at the time
    limit (2100 s) or when under 3 GiB of disk is free.
 3. For each link: restore that link's existing objects and verify them, refresh it
    with `cache.py` (conditional GET where the host gives validators), verify the
    result, upload the object and the manifest, then delete the local copy. The
-   size cap for one link is the free disk minus the 3 GiB reserve.
+   size cap for one link is the smaller of the free disk minus the 3 GiB reserve
+   and 20 GiB (`MAX_LINK_BYTES`). The disk term alone used to be the cap, which on
+   a large runner was higher than 20 GiB and let a 25.7 GB post through.
 
 Unresolved links (login walls, dead links, CAPTCHAs, non-archives, oversized
 downloads, posts needing a selection) are reported as totals with a reason class,
@@ -101,7 +106,12 @@ hold only the read pair, so that push is expected to fail. The workflow treats a
 non-zero first attempt as a warning and runs restore again against the local,
 already verified cache; the second attempt decides whether the job continues.
 
-If any link remains unresolved, the command exits 1 and the job stops at the
+A link listed under `uncached` is not looked up in the manifest at all. Restore
+reports it with `status: "uncached-by-policy"` and a reason that starts with
+`intentionally not cached by policy`, so it is distinguishable from `unresolved`
+(a link the cache failed to supply), and it still counts against the exit code.
+
+If any link remains unresolved or uncached by policy, the command exits 1 and the job stops at the
 restore step, before any install work. A lane therefore cannot start with a
 guide whose archives are not all present.
 
@@ -153,6 +163,25 @@ extension `file` and checked only for the 64-byte minimum and for not starting
 with `<` (HTML). Its name must match the reviewed name exactly; restore refuses a
 `file` object whose link has no matching loose selection.
 
+## Never cached by policy
+
+Top-level `uncached` in `archive_selections.json` is keyed by DeadlyStream file id
+(or file page URL); each entry needs a non-empty `reason`. A listed link is never
+fetched, never uploaded and never restored:
+
+- `refresh_archives.py` removes it from the work list before any network or bucket
+  access, deletes its manifest entry and `refresh_attempts` record, and counts it
+  as `uncached_by_policy` in the summary. Objects an earlier run already uploaded
+  stay in the bucket as unreferenced orphans; purge them by hand.
+- `cache.py refresh` reports `uncached-by-policy` (not a failure), `import-existing`
+  never copies it, and `refresh_one` raises before opening a connection.
+- `cache.py restore` reports `uncached-by-policy` and exits 1 (fail-closed, see
+  above).
+
+Today the list holds one post, K2 file 2503: Bink video, about 25.7 GB for the
+pinned main and `_mods` files. Its `selections` entry stays so the exact files are
+on record if the policy is ever lifted.
+
 ## Reviewed selections
 
 Some DeadlyStream posts list several files, and the guide either names one, leaves
@@ -193,6 +222,8 @@ around.
   manual request returns HTTP 403 with a Cloudflare challenge.
 - **DeadlyStream post 2503** (K2 cutscene videos): the entry pins the main file and
   its `_mods` file, 1920x1080 at 30fps. The two together are about 25.7 GB of Bink
-  video, above the per-link size cap, so the refresh reports `archive exceeds size
-  limit` and the post is intentionally left uncached. Restore therefore fails for
-  the K2 guide until that changes.
+  video. It is listed under `uncached` (see
+  [Never cached by policy](#never-cached-by-policy)), so restore reports
+  `uncached-by-policy` and fails for the K2 guide. The CI game baseline has no
+  movies, and no other guide step reads them; the step has no archive-free
+  substitute in the lanes yet.
