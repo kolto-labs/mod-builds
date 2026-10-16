@@ -323,9 +323,9 @@
       "provenance": "operator-local-download",
       "objects": [
         {
-          "archive_name": "Remote Tells Influence Patch for TSLRCM.zip",
-          "sha256": "1825fff8de3443fff13eeee2bd5828832a7d0dcf11e6054c2a646bf81d8d8d87",
-          "size": 10766,
+          "archive_name": "remote_influence.zip",
+          "sha256": "8331ae9647516034a61d3ae24bd1847cbcab1a6e4cd4d3cf14fb075cb8052e85",
+          "size": 10088,
           "extension": "zip"
         }
       ]

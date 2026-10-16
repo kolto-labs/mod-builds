@@ -1454,6 +1454,105 @@ class UncachedPolicyTests(MultiFileFixture):
         self.assertEqual(seen, [cache.MAX_LINK_BYTES])
 
 
+class SiblingLinkRestoreNameTests(unittest.TestCase):
+    PAGE_URL = "https://www.gamefront.com/games/example/file/example-mod"
+    PATCH_URL = "https://www.dropbox.com/s/abc123/Example%20Mod%20Patch.zip?dl=0"
+    SHARED = "Example Mod Patch.zip"
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.base = Path(self.directory.name)
+        self.root = self.base / "cache"
+        (self.root / "objects").mkdir(parents=True)
+        self.destination = self.base / "mods"
+        self.payloads = {"page": zip_bytes("p"), "patch": zip_bytes("q"), "other": zip_bytes("r")}
+        self.entries = {}
+        self.pins = {}
+
+    def stage(self, url, key, name, pinned=False):
+        payload = self.payloads[key]
+        sha = cache.hashlib.sha256(payload).hexdigest()
+        (self.root / "objects" / sha).write_bytes(payload)
+        item = item_for(url)
+        entry = {"sha256": sha, "size": len(payload), "extension": "zip", "archive_name": name,
+                 "status": "verified", "evidence": "download-without-upstream-metadata",
+                 "checked_at": cache.time.time(), "metadata_unknown": True}
+        if pinned:
+            entry.update(status="pinned", evidence="operator-seed")
+            self.pins[item["id"]] = {"provider": item["provider"], "url": url, "provenance": cache.PIN_PROVENANCE,
+                                     "objects": [{"archive_name": name, "sha256": sha, "size": len(payload),
+                                                  "extension": "zip"}]}
+        self.entries[item["id"]] = entry
+        return sha
+
+    def restore(self, *blocks):
+        guide = self.base / "guide.md"
+        guide.write_text("".join("### %s\n\n%s\n\n" % (heading, "\n".join("[x](%s)" % url for url in urls))
+                                 for heading, urls in blocks), encoding="utf-8")
+        (self.root / "manifest.json").write_text(json.dumps({"schema": 1, "entries": self.entries}),
+                                                 encoding="utf-8")
+        output = io.StringIO()
+        with mock.patch.object(cache, "load_pins", return_value=self.pins), contextlib.redirect_stdout(output):
+            code = cache.main(["restore", "--guide", str(guide), "--cache-dir", str(self.root),
+                               "--destination", str(self.destination), "--retries", "0"])
+        return code, {each["id"]: each for each in json.loads(output.getvalue())["entries"]}
+
+    def test_pinned_link_keeps_its_name_and_sibling_gets_a_distinct_one_in_either_order(self):
+        page_id, patch_id = item_for(self.PAGE_URL)["id"], item_for(self.PATCH_URL)["id"]
+        for urls in ((self.PAGE_URL, self.PATCH_URL), (self.PATCH_URL, self.PAGE_URL)):
+            self.entries.clear()
+            self.pins.clear()
+            page_sha = self.stage(self.PAGE_URL, "page", self.SHARED, pinned=True)
+            patch_sha = self.stage(self.PATCH_URL, "patch", self.SHARED)
+            if self.destination.exists():
+                for path in self.destination.iterdir():
+                    path.unlink()
+            code, report = self.restore(("Example Mod", urls))
+            self.assertEqual(code, 0)
+            self.assertEqual(report[page_id]["file"], self.SHARED)
+            self.assertEqual(report[patch_id]["file"], "Example Mod Patch-%s.zip" % patch_id[:8])
+            self.assertEqual(cache.digest(self.destination / self.SHARED), page_sha)
+            self.assertEqual(cache.digest(self.destination / report[patch_id]["file"]), patch_sha)
+            self.assertEqual(len(list(self.destination.iterdir())), 2)
+
+    def test_unpinned_siblings_prefer_the_link_whose_own_name_it_is(self):
+        page_id, patch_id = item_for(self.PAGE_URL)["id"], item_for(self.PATCH_URL)["id"]
+        self.stage(self.PAGE_URL, "page", self.SHARED)
+        self.stage(self.PATCH_URL, "patch", self.SHARED)
+        code, report = self.restore(("Example Mod", (self.PAGE_URL, self.PATCH_URL)))
+        self.assertEqual(code, 0)
+        self.assertEqual(report[patch_id]["file"], self.SHARED)
+        self.assertEqual(report[page_id]["file"], "Example Mod Patch-%s.zip" % page_id[:8])
+
+    def test_names_without_a_collision_are_unchanged(self):
+        page_id = item_for(self.PAGE_URL)["id"]
+        self.stage(self.PAGE_URL, "page", "example_page.zip", pinned=True)
+        self.stage(self.PATCH_URL, "patch", self.SHARED)
+        code, report = self.restore(("Example Mod", (self.PAGE_URL, self.PATCH_URL)))
+        self.assertEqual(code, 0)
+        self.assertEqual(report[page_id]["file"], "example_page.zip")
+        self.assertEqual(sorted(path.name for path in self.destination.iterdir()),
+                         ["Example Mod Patch.zip", "example_page.zip"])
+
+    def test_same_name_from_different_mods_still_collides(self):
+        self.stage(self.PAGE_URL, "page", self.SHARED, pinned=True)
+        self.stage(self.PATCH_URL, "patch", self.SHARED)
+        code, report = self.restore(("Example Mod", (self.PAGE_URL,)), ("Other Mod", (self.PATCH_URL,)))
+        self.assertEqual(code, 1)
+        self.assertEqual({row["status"] for row in report.values()}, {"restored", "unresolved"})
+        self.assertEqual(len(list(self.destination.iterdir())), 1)
+
+    def test_unpinned_siblings_both_owning_a_name_fall_back_to_guide_order(self):
+        other = "https://www.dropbox.com/s/zzz999/Example%20Mod%20Patch.zip?dl=0"
+        self.stage(self.PATCH_URL, "patch", self.SHARED)
+        self.stage(other, "other", self.SHARED)
+        code, report = self.restore(("Example Mod", (self.PATCH_URL, other)))
+        self.assertEqual(code, 0)
+        self.assertEqual(sorted(path.name for path in self.destination.iterdir()),
+                         sorted([self.SHARED, "Example Mod Patch-%s.zip" % item_for(other)["id"][:8]]))
+
+
 class DropboxTests(unittest.TestCase):
     def test_dropbox_preview_link_resolves_to_direct_download(self):
         url = "https://www.dropbox.com/scl/fi/abc/pack.zip?rlkey=KEY&dl=0"

@@ -98,6 +98,11 @@ the `mods` job does. For every link in the guide, restore:
   and copies each into a lane-local directory under its original file name. A
   duplicate file name, a hash mismatch, or a loose file that is not a reviewed
   selection fails that link.
+  When two links under one guide mod heading would restore to the same stored name,
+  the link with a reviewed seed pin keeps the name (otherwise the link whose own URL
+  file name it is, otherwise guide order) and each other link gets
+  `<stem>-<first 8 characters of its id>.<ext>`. Stored names and manifests are not
+  changed, and the same name under different mod headings still fails.
 
 If a stored entry is stale (older than 14 days, an object missing or corrupt, or
 the reviewed selection changed), restore re-fetches that one already-known link

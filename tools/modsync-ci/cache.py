@@ -1197,7 +1197,67 @@ def import_existing(item, resource_entries, archive_root, root, args, expected_s
     return entry
 
 
-def restore_object(item, old, root, args, restored_names, taken, created):
+def restore_filename(item, old):
+    reviewed = reviewed_loose(item) if old.get("extension") == LOOSE else None
+    if "archive_name" in old:
+        filename = safe_archive_name(old["archive_name"], old["extension"])
+        if filename is None:
+            raise ValueError("invalid manifest archive name")
+    else:
+        filename = archive_name(item, old["extension"], old.get("endpoint") or item["url"],
+                                reviewed=reviewed)
+    return filename, reviewed
+
+
+def mod_keys(item):
+    return {(step["guide"], step["section"], step["heading"])
+            for step in referencing_steps(item) if step["heading"] is not None}
+
+
+def link_basename_names(url):
+    basename = unquote(urlsplit(url).path.rsplit("/", 1)[-1])
+    return {name.casefold() for name in (safe_archive_name(basename, kind) for kind in ("zip", "7z", "rar"))
+            if name}
+
+
+def sibling_name_losers(items, manifest_entries, pins):
+    members = {}
+    for position, item in enumerate(items):
+        if uncached_reason(item):
+            continue
+        old = manifest_entries.get(item["id"])
+        natural = link_basename_names(item["url"])
+        pinned = is_pinned(item, old, pins)
+        names = set()
+        for each in entry_objects(old):
+            try:
+                filename, reviewed = restore_filename(item, each)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not reviewed:
+                names.add(filename.casefold())
+        for key in mod_keys(item):
+            for name in names:
+                members.setdefault((key, name), {})[item["id"]] = (not pinned, name not in natural, position)
+    losers = {}
+    for (_, name), ranks in members.items():
+        if len(ranks) > 1:
+            winner = min(ranks, key=ranks.get)
+            for item_id in ranks:
+                if item_id != winner:
+                    losers.setdefault(item_id, set()).add(name)
+    return losers
+
+
+def disambiguated_name(filename, item):
+    stem, suffix = filename.rsplit(".", 1)
+    name = safe_archive_name(stem + "-" + item["id"][:8] + "." + suffix, suffix.lower())
+    if name is None:
+        raise ValueError("archive filename collision")
+    return name
+
+
+def restore_object(item, old, root, args, restored_names, taken, created, renamed=None):
     source = object_path(root, old)
     if old.get("extension") not in ("zip", "7z", "rar", LOOSE):
         raise ValueError("invalid manifest archive extension")
@@ -1206,15 +1266,11 @@ def restore_object(item, old, root, args, restored_names, taken, created):
         raise ValueError("loose file is not a reviewed selection")
     validate(source, args.integrity_timeout, loose=bool(reviewed))
     args.destination.mkdir(parents=True, exist_ok=True)
-    if "archive_name" in old:
-        filename = safe_archive_name(old["archive_name"], old["extension"])
-        if filename is None:
-            raise ValueError("invalid manifest archive name")
-    else:
-        filename = archive_name(item, old["extension"], old.get("endpoint") or item["url"],
-                                reviewed=reviewed)
+    filename, reviewed = restore_filename(item, old)
     if reviewed and filename != reviewed:
         raise ValueError("loose file name does not match the reviewed selection")
+    if not reviewed and filename.casefold() in (renamed or ()):
+        filename = disambiguated_name(filename, item)
     name_key = filename.casefold()
     if name_key in taken or (name_key in restored_names and restored_names[name_key] != item["id"]):
         raise ValueError("archive filename collision")
@@ -1364,6 +1420,7 @@ def main(argv=None):
             pins = load_pins()
         except (ValueError, OSError):
             pins = {}
+        losers = sibling_name_losers(items, manifest["entries"], pins) if args.command == "restore" else {}
         for item in items:
             old = manifest["entries"].get(item["id"], {})
             entry = {"id": item["id"], "url": clean_url(item["url"]), "provider": item["provider"]}
@@ -1411,7 +1468,7 @@ def main(argv=None):
                     try:
                         for each in entry_objects(old):
                             restored.append({"file": restore_object(item, each, root, args, restored_names,
-                                                                    taken, created),
+                                                                    taken, created, losers.get(item["id"])),
                                              "sha256": each["sha256"]})
                     except Exception:
                         for path in created:
