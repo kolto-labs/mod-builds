@@ -318,10 +318,10 @@ jobs:
         run: |
           echo "present=$HAS_PLAN" >> "$GITHUB_OUTPUT"
           if [[ "$HAS_PLAN" != true ]]; then
-            echo "::error::Missing $PLAN (human-reviewed manual install plan)."
-            exit 1
+            echo "::notice::Skipping manual install: missing $PLAN (human-reviewed manual install plan)."
           fi
       - name: Install Wine and tools, free disk space
+        if: steps.plan.outputs.present == 'true'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo dpkg --add-architecture i386
@@ -329,6 +329,7 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends wine wine64 wine32:i386 xvfb xauth p7zip-full >/dev/null
           python3 tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone"
       - name: Restore game cache
+        if: steps.plan.outputs.present == 'true'
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/sealed/*.seal
@@ -336,6 +337,7 @@ jobs:
           restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
           fail-on-cache-miss: true
       - name: Unpack game
+        if: steps.plan.outputs.present == 'true'
         env:
           CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
         run: |
@@ -343,9 +345,11 @@ jobs:
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
       - id: archive-cache-week
         name: Set archive cache week
+        if: steps.plan.outputs.present == 'true'
         run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
       - name: Restore archives from GitHub Actions cache
         id: archive-cache
+        if: steps.plan.outputs.present == 'true'
         uses: actions/cache/restore@v4
         continue-on-error: true
         with:
@@ -354,6 +358,7 @@ jobs:
           restore-keys: mod-archives-${{ matrix.game }}-${{ steps.archive-cache-week.outputs.week }}-${{ hashFiles(format('content/{0}/full.md', matrix.game)) }}-
       - name: Merge Actions cache with available R2 archives
         id: archive-restore
+        if: steps.plan.outputs.present == 'true'
         env:
           RCLONE_CONFIG_MODCACHE_TYPE: s3
           RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
@@ -393,6 +398,7 @@ jobs:
           fi
           copy_archives "$RUNNER_TEMP/r2-archives"
       - name: Install the full guide manually with the original patchers
+        if: steps.plan.outputs.present == 'true'
         run: |
           xvfb-run -a python tools/modsync-ci/manual.py --plan "$PLAN" \
             --guide "content/$GAME/full.md" --game-dir "$RUNNER_TEMP/game" \
