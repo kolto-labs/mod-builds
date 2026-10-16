@@ -96,7 +96,7 @@ jobs:
           key: game-${{ matrix.game }}-v1
 
   mods:
-    if: github.event_name != 'pull_request'
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     continue-on-error: true  # a stale archive cache must never block the install lanes
     concurrency:
       group: mod-cache-writer
