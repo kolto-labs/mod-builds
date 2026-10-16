@@ -88,6 +88,9 @@ python tools/modsync-ci/cache.py restore --guide content/<game>/full.md \
   --cache-dir <dir> --destination <archives> --remote MODCACHE:<bucket>/modsync-archives
 ```
 
+`--archive-map <path>` (restore only) also writes `{guide link URL: restored filename
+or [filenames]}` for restored links, for `modsync convert --archive-map`.
+
 Restore is fail-closed. Install and manual jobs never add a link to the cache; only
 the `mods` job does. For every link in the guide, restore:
 

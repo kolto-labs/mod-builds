@@ -687,6 +687,17 @@ class LooseCachePipelineTests(unittest.TestCase):
         return self.run_main("restore", "--guide", str(guide), "--cache-dir", str(self.root),
                              "--destination", str(destination)), destination
 
+    def test_archive_map_lists_single_file_under_canonical_url(self):
+        guide, _ = self.seed(DS_PAGE, "loose_texture.tga", self.LOOSE_BYTES)
+        map_path = Path(self.directory.name, "archive-map.json")
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = cache.main(["restore", "--guide", str(guide), "--cache-dir", str(self.root),
+                               "--destination", str(Path(self.directory.name, "mods")),
+                               "--archive-map", str(map_path)])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(map_path.read_text()), {DS_PAGE: "loose_texture.tga"})
+
     def test_restore_returns_loose_files_intact_with_original_names(self):
         for url, name in ((DRIVE_URL, "dialog_sample.dlg"), (DS_PAGE, "loose_texture.tga")):
             guide, sha = self.seed(url, name, self.LOOSE_BYTES)
@@ -1551,6 +1562,30 @@ class SiblingLinkRestoreNameTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(sorted(path.name for path in self.destination.iterdir()),
                          sorted([self.SHARED, "Example Mod Patch-%s.zip" % item_for(other)["id"][:8]]))
+
+
+class ArchiveMapTests(MultiFileRestoreTests):
+    def restore_map(self):
+        map_path = self.base / "archive-map.json"
+        code, report = self.run_main("restore", "--destination", str(self.destination), "--retries", "0",
+                                     "--archive-map", str(map_path))
+        return code, report, json.loads(map_path.read_text())
+
+    def test_bundle_maps_canonical_url_to_every_restored_file(self):
+        entry = self.bundle()
+        entry.update(status="verified", evidence="download-without-upstream-metadata", checked_at=cache.time.time())
+        self.seed(entry)
+        code, _, mapping = self.restore_map()
+        self.assertEqual((code, mapping), (0, {POST_URL: list(self.NAMES)}))
+
+    def test_unresolved_link_is_left_out_of_the_map(self):
+        code, report, mapping = self.restore_map()
+        self.assertEqual((code, report["entries"][0]["status"]), (1, "unresolved"))
+        self.assertEqual(mapping, {})
+
+    def test_archive_map_requires_restore(self):
+        with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+            cache.main(["refresh", "--guide", str(self.guide), "--archive-map", str(self.base / "m.json")])
 
 
 class DropboxTests(unittest.TestCase):

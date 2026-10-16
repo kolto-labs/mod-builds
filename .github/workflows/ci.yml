@@ -366,12 +366,14 @@ jobs:
           set +e
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
             --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
+            --archive-map "$RUNNER_TEMP/archive-map.json" \
             --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
           remote_status=$?
           if [[ "$remote_status" -ne 0 ]]; then
             echo "::warning::R2 restore or repair persistence failed; retrying from the local verified cache."
             python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
-              --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives"
+              --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
+              --archive-map "$RUNNER_TEMP/archive-map.json"
             local_status=$?
             if [[ "$local_status" -ne 0 ]]; then exit "$local_status"; fi
           fi
@@ -385,6 +387,7 @@ jobs:
             --implementation '${{ matrix.implementation }}' --mode '${{ matrix.mode }}' \
             --source .modsync-source --guide "content/$GAME/full.md" \
             --game-dir "$RUNNER_TEMP/game" --archives "$RUNNER_TEMP/archives" \
+            --archive-map "$RUNNER_TEMP/archive-map.json" \
             --work-dir "$RUNNER_TEMP/work" --report "$RUNNER_TEMP/report.json" "${review[@]}"
 
   manual:

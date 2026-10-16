@@ -139,7 +139,7 @@ class ExecuteCommandTests(unittest.TestCase):
         (root / "source" / "packages" / "cli" / "src").mkdir(parents=True)
         (root / "source" / "packages" / "cli" / "src" / "main.ts").write_text("", encoding="utf-8")
         args = argparse.Namespace(
-            implementation=None, mode="cli", review_manifest=None, source=root / "source",
+            implementation=None, mode="cli", review_manifest=None, archive_map=None, source=root / "source",
             guide=guide, game_dir=root / "game", archives=root / "archives",
             work_dir=root / "work", report=root / "report.json")
         return root, args
@@ -191,6 +191,24 @@ class ExecuteCommandTests(unittest.TestCase):
         self.assertIn("--parse-directions", convert)
         for flag in ("--review-draft", "--best-effort", "--ignore-errors"):
             self.assertNotIn(flag, convert)
+
+    def test_rust_convert_passes_archive_map_and_typescript_ignores_it(self):
+        root, args = self.prepare("k1")
+        args.archive_map = root / "archive-map.json"
+        args.archive_map.write_text("{}", encoding="utf-8")
+        text = document(component("Mod One", "30000000-0000-0000-0000-000000000001"))
+        args.implementation = "rust"
+        convert = dict(self.captured(args, text)[0])["convert"]
+        self.assertEqual(convert[convert.index("--archive-map") + 1], str(args.archive_map.resolve()))
+        args.implementation = "typescript"
+        convert = dict(self.captured(args, text)[0])["convert"]
+        self.assertNotIn("--archive-map", convert)
+
+    def test_rust_convert_without_archive_map_has_no_flag(self):
+        _, args = self.prepare("k1")
+        args.implementation = "rust"
+        text = document(component("Mod One", "30000000-0000-0000-0000-000000000001"))
+        self.assertNotIn("--archive-map", dict(self.captured(args, text)[0])["convert"])
 
 
 if __name__ == "__main__":

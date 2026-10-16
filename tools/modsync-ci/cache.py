@@ -1326,6 +1326,9 @@ def main(argv=None):
                         help="start at this exact-URL matched candidate index")
     parser.add_argument("--apply", action="store_true", help="copy and record import-existing matches")
     parser.add_argument("--report", type=Path, help="also write sanitized JSON report")
+    parser.add_argument("--archive-map", type=Path,
+                        help="restore only: write {guide link URL: restored filename(s)} for the installer's "
+                             "--archive-map; restored links only")
     parser.add_argument("--remote", help="optional rclone remote:path; trusted operator input only")
     parser.add_argument("--force", action="store_true", help="refresh even inside freshness interval")
     parser.add_argument("--max-age-days", type=float, default=14)
@@ -1342,6 +1345,8 @@ def main(argv=None):
     args = parser.parse_args(argv)
     if args.allow_uncached_by_policy and args.command != "restore":
         parser.error("--allow-uncached-by-policy is only valid with restore")
+    if args.archive_map and args.command != "restore":
+        parser.error("--archive-map is only valid with restore")
     if not 0 <= args.retries <= 5 or not 0 < args.max_age_days <= 14:
         parser.error("retries must be 0..5; max-age-days must be >0 and <=14")
     if any(value <= 0 for value in (args.timeout, args.download_timeout, args.integrity_timeout,
@@ -1499,8 +1504,20 @@ def main(argv=None):
                            for entry in report["entries"]) if args.command != "discover" else True
     if args.report:
         atomic_json(args.report, report)
+    if args.archive_map:
+        atomic_json(args.archive_map, archive_map(report))
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["ok"] else 1
+
+
+def archive_map(report):
+    mapping = {}
+    for entry in report["entries"]:
+        if entry.get("status") != "restored":
+            continue
+        names = [each["file"] for each in entry["files"]] if "files" in entry else [entry["file"]]
+        mapping[entry["url"]] = names[0] if len(names) == 1 else names
+    return mapping
 
 
 def safe_reason(error):

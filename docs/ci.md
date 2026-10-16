@@ -52,7 +52,12 @@ install the full guide. `gui` lanes run under Xvfb. See [ports.md](ports.md).
 
 Archive restore is fail-closed and read-only for the cache: if any link of the
 guide cannot be restored and verified, the restore step exits non-zero and the
-lane stops before `ports.py`. The install lanes never acquire a link the cache has
+lane stops before `ports.py`. The install job's restore also writes
+`$RUNNER_TEMP/archive-map.json` (`cache.py restore --archive-map`): a flat
+`{guide link URL: filename | [filenames]}` object, URLs without query or fragment,
+filenames relative to the archives directory, restored links only. `ports.py
+--archive-map` passes it to the Rust `modsync convert --archive-map`; the
+TypeScript lanes ignore it. The install lanes never acquire a link the cache has
 not already recorded; only `mods` does. Today that means every lane stops at
 restore for a guide that contains an uncached link (Nexus Mods, GameFront and the
 K2 cutscene post, reported as `uncached-by-policy`; see

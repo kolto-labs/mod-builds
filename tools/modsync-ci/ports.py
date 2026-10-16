@@ -256,9 +256,12 @@ def execute(args, report):
         run(["cargo", "build", "--locked", "--bin", "modsync"],
             source, private, "build", report, env)
         command = [str(private / "target/debug/modsync")]
+        archive_map = []
+        if args.archive_map:
+            archive_map = ["--archive-map", str(args.archive_map.resolve(strict=True))]
         run(command + ["convert", str(guide), str(converted),
                        "--format", "toml", "--parse-directions",
-                       "--auto-generate-local", "--source-path", str(archives)],
+                       "--auto-generate-local", "--source-path", str(archives)] + archive_map,
             source, private, "convert", report, env)
     else:
         if not (source / "packages/cli/src/main.ts").is_file():
@@ -409,6 +412,8 @@ def main(argv=None):
     parser.add_argument("--mode", choices=("cli", "gui"), required=True)
     parser.add_argument("--review-manifest", type=Path,
                         help="separately authored hash-bound JSON review (TypeScript required)")
+    parser.add_argument("--archive-map", type=Path,
+                        help="cache.py restore --archive-map JSON passed to the Rust convert (ignored by TypeScript)")
     for name in ("source", "guide", "game-dir", "archives", "work-dir", "report"):
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args(argv)

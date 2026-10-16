@@ -12,7 +12,7 @@ Each lane:
    `MODSYNC_TS_REPOSITORY` using `MODSYNC_SOURCE_TOKEN`.
 2. Restores `game-<game>-v1` (a miss fails the lane) and runs `game_cache.py
    unpack`, which verifies every file. See [steam.md](steam.md).
-3. Restores archives with `cache.py restore`. This is best effort; a missing
+3. Restores archives with `cache.py restore --archive-map`. This is best effort; a missing
    archive fails the install step that needs it. See [cache.md](cache.md).
 4. Runs `ports.py`, passing `--review-manifest ci/<game>-<impl>-review.json` when
    that file exists. TypeScript requires it; Rust ignores it.
