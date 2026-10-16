@@ -206,6 +206,171 @@ class PolicySkipCoverageTests(unittest.TestCase):
         self.assertEqual(records[0]["urls"], ["https://example.invalid/a", "https://example.invalid/b"])
 
 
+GUIDE_WITH_ALTERNATIVES = """# Guide
+
+## Mod List
+
+### Mod One
+
+## Enhanced Widescreen Support Mods
+
+### Cutscenes Pack A
+
+### Cutscenes Pack B
+
+### Loading Screens
+"""
+
+PACK_A = ("Enhanced Widescreen Support Mods", "Cutscenes Pack A")
+PACK_A_GUID = "50000000-0000-0000-0000-000000000002"
+PACK_B_GUID = "50000000-0000-0000-0000-000000000003"
+
+
+def alternatives_document(pack_b_instructions=True, pack_a_extra=""):
+    pack_a = "\n".join([
+        "[[thisMod]]", 'Guid = "' + PACK_A_GUID + '"', 'Name = "Cutscenes Pack A"',
+        "IsSelected = true", "WidescreenOnly = true", pack_a_extra,
+        "[[thisMod.Options]]", 'Guid = "50000000-0000-0000-0000-0000000000a1"',
+        'Name = "Option 1"', "IsSelected = false",
+    ])
+    pack_b = component("Cutscenes Pack B", PACK_B_GUID, WidescreenOnly="true")
+    if not pack_b_instructions:
+        pack_b = pack_b.split("[[thisMod.Instructions]]")[0]
+    return document(
+        component("Mod One", "50000000-0000-0000-0000-000000000001"),
+        pack_a, pack_b,
+        component("Loading Screens", "50000000-0000-0000-0000-000000000004", WidescreenOnly="true"),
+    )
+
+
+class AlternativeCutsceneSkipTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.directory))
+        self.guide = self.directory / "full.md"
+        self.guide.write_text(GUIDE_WITH_ALTERNATIVES, encoding="utf-8")
+        self.converted = self.directory / "converted.toml"
+        self.report_path = self.directory / "restore.json"
+
+    def skips(self):
+        restore_report(self.report_path, self.guide.resolve(), PACK_A)
+        return ports.load_policy_skips(self.report_path, self.guide.resolve())
+
+    def test_only_the_skipped_pack_is_exempt_and_its_alternative_still_needs_instructions(self):
+        self.converted.write_text(alternatives_document(), encoding="utf-8")
+        report = {}
+        self.assertEqual(ports.coverage(self.guide, self.converted, report, "rust", self.skips()), 4)
+        self.assertEqual([(record["heading"], record["component_guid"])
+                          for record in report["skipped_by_reviewed_policy"]],
+                         [("Cutscenes Pack A", PACK_A_GUID)])
+        self.converted.write_text(alternatives_document(pack_b_instructions=False), encoding="utf-8")
+        with self.assertRaisesRegex(ports.Blocked, "guide_steps_without_instructions"):
+            ports.coverage(self.guide, self.converted, {}, "rust", self.skips())
+
+    def test_skipped_pack_without_the_reviewed_flag_still_blocks(self):
+        self.converted.write_text(alternatives_document(), encoding="utf-8")
+        with self.assertRaisesRegex(ports.Blocked, "guide_steps_without_instructions"):
+            ports.coverage(self.guide, self.converted, {}, "rust", [])
+
+    def test_a_component_listing_the_skipped_pack_as_a_dependency_blocks(self):
+        document_text = alternatives_document().replace(
+            'Name = "Loading Screens"',
+            'Name = "Loading Screens"\nDependencies = ["' + PACK_A_GUID.upper() + '"]')
+        self.converted.write_text(document_text, encoding="utf-8")
+        with self.assertRaisesRegex(ports.Blocked, "policy_skipped_component_has_dependents"):
+            ports.coverage(self.guide, self.converted, {}, "rust", self.skips())
+
+    def test_a_pack_heading_that_appears_twice_blocks(self):
+        self.guide.write_text(GUIDE_WITH_ALTERNATIVES.replace(
+            "### Loading Screens", "### Cutscenes Pack A"), encoding="utf-8")
+        self.converted.write_text(alternatives_document().replace(
+            "Loading Screens", "Cutscenes Pack A"), encoding="utf-8")
+        with self.assertRaisesRegex(ports.Blocked, "policy_skipped_step_ambiguous"):
+            ports.coverage(self.guide, self.converted, {}, "rust", self.skips())
+
+    def test_rust_cli_deselects_only_the_skipped_pack(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        content = root / "content" / "k2"
+        content.mkdir(parents=True)
+        guide = content / "full.md"
+        guide.write_text(GUIDE_WITH_ALTERNATIVES, encoding="utf-8")
+        for name in ("source", "game", "archives"):
+            (root / name).mkdir()
+        (root / "source" / "Cargo.toml").write_text("", encoding="utf-8")
+        args = argparse.Namespace(
+            implementation="rust", mode="cli", review_manifest=None, archive_map=None,
+            restore_report=restore_report(root / "restore.json", guide.resolve(), PACK_A),
+            source=root / "source", guide=guide, game_dir=root / "game",
+            archives=root / "archives", work_dir=root / "work", report=root / "report.json")
+        commands = []
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append((stage, list(command)))
+            if stage == "convert":
+                (private / "converted.toml").write_text(alternatives_document(), encoding="utf-8")
+
+        report = {"commands": []}
+        with mock.patch.object(ports, "run", fake_run):
+            ports.execute(args, report)
+        staged = dict(commands)
+        for stage in ("validate", "install"):
+            command = staged[stage]
+            self.assertEqual([value for flag, value in zip(command, command[1:]) if flag == "--deselect"],
+                             [PACK_A_GUID])
+            self.assertNotIn(PACK_B_GUID, command)
+        self.assertEqual(report["status"], "installed")
+
+
+class RealK2GuideCutsceneSkipTests(unittest.TestCase):
+    GUIDE = Path(ports.__file__).resolve().parents[2] / "content" / "k2" / "full.md"
+    STEP = ("Enhanced Widescreen Support Mods", "K2 Cutscenes Rescaled")
+    ALTERNATIVE = "K2 Remastered Cutscenes"
+
+    def converted_from_guide(self, directory, instructed):
+        section = None
+        blocks = []
+        for line in self.GUIDE.read_text(encoding="utf-8").splitlines():
+            if line.startswith("## "):
+                section = line[3:].strip()
+            elif line.startswith("### ") and section in (
+                    "Mod List", "Optional Widescreen & Extended Widescreen Support Mods",
+                    "Enhanced Widescreen Support Mods"):
+                heading = line[4:].strip()
+                guid = "60000000-0000-0000-0000-%012d" % len(blocks)
+                if (section, heading) == self.STEP:
+                    blocks.append("\n".join([
+                        "[[thisMod]]", 'Guid = "' + guid + '"', 'Name = "' + heading + '"',
+                        "IsSelected = true", "WidescreenOnly = true"]))
+                    self.guid = guid
+                elif heading == self.ALTERNATIVE and not instructed:
+                    blocks.append("\n".join([
+                        "[[thisMod]]", 'Guid = "' + guid + '"', 'Name = "' + heading + '"',
+                        "IsSelected = true"]))
+                else:
+                    blocks.append(component(heading.replace('"', "'"), guid))
+        path = directory / "converted.toml"
+        path.write_text(document(*blocks), encoding="utf-8")
+        return path, len(blocks)
+
+    def test_the_k2_rescaled_cutscene_step_is_the_only_exempt_component(self):
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(directory))
+        converted, count = self.converted_from_guide(directory, instructed=True)
+        with self.assertRaisesRegex(ports.Blocked, "guide_steps_without_instructions"):
+            ports.coverage(self.GUIDE, converted, {}, "rust", [])
+        report_path = restore_report(directory / "restore.json", self.GUIDE, self.STEP)
+        skips = ports.load_policy_skips(report_path, self.GUIDE)
+        report = {}
+        self.assertEqual(ports.coverage(self.GUIDE, converted, report, "rust", skips), count)
+        self.assertEqual([(record["section"], record["heading"], record["component_guid"])
+                          for record in report["skipped_by_reviewed_policy"]],
+                         [(self.STEP[0], self.STEP[1], self.guid)])
+        converted, _ = self.converted_from_guide(directory, instructed=False)
+        with self.assertRaisesRegex(ports.Blocked, "guide_steps_without_instructions"):
+            ports.coverage(self.GUIDE, converted, {}, "rust", skips)
+
+
 class SelectionTests(unittest.TestCase):
     def write(self, text):
         handle = tempfile.NamedTemporaryFile("w", suffix=".toml", delete=False, encoding="utf-8")

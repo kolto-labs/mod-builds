@@ -1619,6 +1619,8 @@ class ShippedNexusPolicyTests(unittest.TestCase):
     POLICY = Path(cache.__file__).with_name("archive_selections.json")
     ASSISTANT = "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching"
     CUTSCENES = "Optional Widescreen & Extended Widescreen Support Mods::Remastered Cutscenes"
+    RESCALED = "Enhanced Widescreen Support Mods::K2 Cutscenes Rescaled"
+
     def policy_items(self, game):
         guide = self.ROOT / "content" / game / "full.md"
         return [item for item in cache.discover([str(guide)]) if cache.uncached_reason(item, self.POLICY)]
@@ -1628,8 +1630,20 @@ class ShippedNexusPolicyTests(unittest.TestCase):
         for key in ("nexus:1214", "nexus:1306", "2503"):
             self.assertTrue(declared[key], key)
 
+    def test_shipped_policy_does_not_list_the_pinned_alternative_cutscene_mod(self):
+        self.assertNotIn("nexus:1066", cache.load_uncached(self.POLICY))
+        guide = self.ROOT / "content" / "k2" / "full.md"
+        alternative = next(each for each in cache.discover([str(guide)])
+                           if "/kotor2/mods/1066" in each["url"])
+        self.assertIsNone(cache.uncached_reason(alternative, self.POLICY))
+        steps, outside = cache.skippable_steps(alternative, (self.RESCALED,))
+        self.assertEqual([(step["section"], step["heading"]) for step in steps],
+                         [("Enhanced Widescreen Support Mods", "K2 Remastered Cutscenes")])
+        self.assertEqual(outside, steps)
+
     def test_exactly_the_reviewed_steps_are_skipped_and_nothing_else(self):
-        for game, allowances in (("k1", (self.ASSISTANT, self.CUTSCENES)), ("k2", (self.ASSISTANT,))):
+        for game, allowances in (("k1", (self.ASSISTANT, self.CUTSCENES)),
+                                 ("k2", (self.ASSISTANT, self.RESCALED))):
             skipped = {}
             kept = []
             for item in self.policy_items(game):
@@ -1644,10 +1658,10 @@ class ShippedNexusPolicyTests(unittest.TestCase):
                         ("Optional Install Assistant - Quicker TSLPatching", "Quicker TSLPatching")],
                     **({"https://www.nexusmods.com/kotor/mods/1306": [
                         ("Optional Widescreen & Extended Widescreen Support Mods", "Remastered Cutscenes")]}
-                       if game == "k1" else {})})
-                self.assertEqual(len(kept), 0 if game == "k1" else 1)
-                for url in kept:
-                    self.assertIn("/files/file/2503", url)
+                       if game == "k1" else {
+                        "https://deadlystream.com/files/file/2503-k2-cutscenes-rescaled/": [
+                            ("Enhanced Widescreen Support Mods", "K2 Cutscenes Rescaled")]})})
+                self.assertEqual(kept, [])
 
     def test_the_assistant_flag_alone_leaves_the_cutscene_links_uncached(self):
         for item in self.policy_items("k1"):
@@ -1655,8 +1669,21 @@ class ShippedNexusPolicyTests(unittest.TestCase):
                 steps, outside = cache.skippable_steps(item, (self.ASSISTANT,))
                 self.assertEqual(outside, steps)
 
+    def test_the_k2_cutscene_flag_is_step_scoped_and_needs_the_assistant_flag_too(self):
+        item = next(each for each in self.policy_items("k2") if "/files/file/2503" in each["url"])
+        steps, outside = cache.skippable_steps(item, (self.ASSISTANT,))
+        self.assertEqual(outside, steps)
+        steps, outside = cache.skippable_steps(item, (self.RESCALED,))
+        self.assertEqual(outside, [])
+        steps, outside = cache.skippable_steps(item, ("Enhanced Widescreen Support Mods::K2 Remastered Cutscenes",))
+        self.assertEqual(outside, steps)
+        nexus = next(each for each in self.policy_items("k2") if "/kotor/mods/1214" in each["url"])
+        self.assertEqual(cache.skippable_steps(nexus, (self.RESCALED,))[1],
+                         cache.skippable_steps(nexus, ())[1])
+
     def test_restore_reports_the_reviewed_steps_skipped_in_each_real_guide(self):
-        for game, allowances in (("k1", (self.ASSISTANT, self.CUTSCENES)), ("k2", (self.ASSISTANT,))):
+        for game, allowances in (("k1", (self.ASSISTANT, self.CUTSCENES)),
+                                 ("k2", (self.ASSISTANT, self.RESCALED))):
             guide = self.ROOT / "content" / game / "full.md"
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory) / "cache"
@@ -1675,13 +1702,15 @@ class ShippedNexusPolicyTests(unittest.TestCase):
                 self.assertEqual(sorted(step["heading"] for step in report["skipped_steps"]),
                                  sorted(self.EXPECTED_HEADINGS[game]))
                 kept = [entry["url"] for entry in report["entries"] if entry["status"] == cache.UNCACHED]
-                self.assertEqual(len(kept), 0 if game == "k1" else 1)
+                self.assertEqual(kept, [])
 
     EXPECTED_SKIPPED = {
         "k1": ["https://www.nexusmods.com/kotor/mods/1214",
                "https://www.nexusmods.com/kotor/mods/1306"],
-        "k2": ["https://www.nexusmods.com/kotor/mods/1214"]}
-    EXPECTED_HEADINGS = {"k1": ["Quicker TSLPatching", "Remastered Cutscenes"], "k2": ["Quicker TSLPatching"]}
+        "k2": ["https://deadlystream.com/files/file/2503-k2-cutscenes-rescaled/",
+               "https://www.nexusmods.com/kotor/mods/1214"]}
+    EXPECTED_HEADINGS = {"k1": ["Quicker TSLPatching", "Remastered Cutscenes"],
+                         "k2": ["K2 Cutscenes Rescaled", "Quicker TSLPatching"]}
 
 
 class SiblingLinkRestoreNameTests(unittest.TestCase):

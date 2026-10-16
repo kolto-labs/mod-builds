@@ -69,7 +69,7 @@ None of these is bypassed.
 | --- | --- | --- |
 | Nexus Mods | 37 links in the two guides; no `NEXUS_API_KEY`; Cloudflare Turnstile on file pages | Never cached, reported `blocked-pending-user-action` (summary class `credentials-required`); the CAPTCHA is never solved |
 | GameFront | 2 links; HTTP 403 with a Cloudflare challenge | Never cached; the client has no adapter |
-| DeadlyStream post 2503 (K2 cutscenes) | About 25.7 GB of Bink video; listed under `uncached` in `archive_selections.json` | Never downloaded or uploaded; restore reports `uncached-by-policy` and K2 restore fails |
+| DeadlyStream post 2503 (K2 cutscenes) | About 25.7 GB of Bink video; listed under `uncached` in `archive_selections.json` | Never downloaded or uploaded; restore reports `uncached-by-policy` and K2 restore fails, except in the Rust install lanes, which pass the reviewed step-scoped `--allow-uncached-by-policy "Enhanced Widescreen Support Mods::K2 Cutscenes Rescaled"` and have `ports.py` deselect the component |
 
 Because restore is fail-closed, a guide that contains any of these links stops at
 the restore step in every install and manual lane.

@@ -90,7 +90,7 @@ prove the review is correct and does not bypass the port's own install gates.
 
 ## Reviewed policy skips
 
-Rust lanes restore with the reviewed Nexus `--allow-uncached-by-policy` flags
+Rust lanes restore with the reviewed `--allow-uncached-by-policy` step flags
 (see [ci.md](ci.md#install-lanes-and-uncached-links)); the restore only asserts
 the link is skipped. `ports.py --restore-report restore-report.json` makes the lane
 guarantee it. It reads the report's `skipped_steps` (refusing a report that is not
@@ -113,11 +113,15 @@ guarantee it. It reads the report's `skipped_steps` (refusing a report that is n
   no component for the step).
 
 Measured on the real guides with the Rust converter (`--parse-directions`; K1 has
-197 components, K2 151):
+197 components, K2 151). The K2 `K2 Cutscenes Rescaled` skip is a reviewed
+decision (never cache `.bik` video; the step only installs movies, nothing depends
+on it, and the guide says to use only one of the two K2 cutscene mods, so the
+pinned Nexus 1066 alternative is the one kept):
 
 | Step | Converter output |
 | --- | --- |
 | `Quicker TSLPatching` (K1, K2) | Not a component. Its `##` section is outside the counted sections (`Mod List` and the two widescreen sections), so it adds no heading and no component; recorded only, no deselect |
+| K2 `K2 Cutscenes Rescaled` (DeadlyStream 2503) | Component 147 of 151 (`Enhanced Widescreen Support Mods`, immediately before `K2 Remastered Cutscenes`, 148): `IsSelected = true`, `WidescreenOnly = true`, no `Instructions`, two spurious prose-derived `Options` (`resolution`, `both the main`, both unselected and instruction-free), `DraftReview.RequiresReview = true` with `DraftInstructionCount = 0`. Its GUID appears nowhere else in the converted TOML: no component lists it in `Dependencies`, `Restrictions`, `InstallBefore` or `InstallAfter`, so the dependents and ambiguity checks pass on the real guide and exactly one `--deselect <Guid>` is emitted. Selected, validate stops with `unreviewed draft instructions`; deselecting it adds no auto-deselection of any other component (compared against the same run without it, with every other component deselected). The alternative `K2 Remastered Cutscenes` (Nexus 1066, component 148) is a separate component with its own GUID, is not skipped and is not deselected |
 | K1 `Remastered Cutscenes` | Component 197 of 197: `IsSelected = true`, `WidescreenOnly = true`, no `Instructions`, no `Options`, `DraftReview.RequiresReview = true` with `DraftInstructionCount = 0`. Even with `--auto-generate-local` and an archive map it stays instruction-free (`No matching archive found for '1306'`). Selected and not deselected, validate stops with `unreviewed draft instructions`; deselected on its own, validate reports `No components are selected` |
 
 `--restore-report` is refused for `--implementation typescript`

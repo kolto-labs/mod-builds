@@ -220,11 +220,12 @@ fetched, never uploaded and never restored:
   above) unless `--allow-uncached-by-policy` names the section (or `SECTION::STEP`) covering
   every step that references the link; the status is then `uncached-skipped`.
 
-Today the list holds three reviewed entries:
+Today the list holds three reviewed entries, each a reviewed decision with its
+reason in `archive_selections.json`:
 
 | Key | Link | Why it is never cached | Referencing steps (`##` / `###`) |
 | --- | --- | --- | --- |
-| `2503` | DeadlyStream K2 cutscene videos | Bink video, about 25.7 GB for the pinned main and `_mods` files; its `selections` entry stays so the exact files are on record if the policy is ever lifted | K2: `Enhanced Widescreen Support Mods` / `K2 Cutscenes Rescaled` |
+| `2503` | DeadlyStream K2 cutscene videos | Bink video, about 25.7 GB for the pinned main and `_mods` files; `.bik` is never cached, the CI game baseline has no movies and nothing else in the guide reads them. The guide says to use only one K2 cutscene mod, and the alternative (Nexus 1066) is pinned. Its `selections` entry stays so the exact files are on record if the policy is ever lifted | K2: `Enhanced Widescreen Support Mods` / `K2 Cutscenes Rescaled` |
 | `nexus:1214` | Quicker TSLPatching (Nexus mod 1214) | Windows registry helper; the guide documents that it does not work on Mac or Linux, and nothing in the build consumes its output | K1 and K2: `Optional Install Assistant - Quicker TSLPatching` / `Quicker TSLPatching` |
 | `nexus:1306` | KOTOR Remastered Cutscenes (Nexus mod 1306) | Tier 4 optional, loose movie `.bik` files, never cached; mutually exclusive with the installed Cutscenes Rescaled post (DeadlyStream 2380) | K1: `Optional Widescreen & Extended Widescreen Support Mods` / `Remastered Cutscenes` |
 
@@ -235,9 +236,9 @@ exempts, records and deselects the steps, see
 - K1 restore:
   `--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching" --allow-uncached-by-policy "Optional Widescreen & Extended Widescreen Support Mods::Remastered Cutscenes"`
 - K2 restore:
-  `--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching"`
-  (K2 still fails on post 2503 unless the lane also passes
-  `--allow-uncached-by-policy "Enhanced Widescreen Support Mods"`.)
+  `--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching" --allow-uncached-by-policy "Enhanced Widescreen Support Mods::K2 Cutscenes Rescaled"`
+  (step form only: the section also holds the pinned 1066 cutscene alternative,
+  which restore must keep supplying.)
 
 The shipped-policy tests assert that these flags skip exactly the steps above and
 nothing else in either real guide.
@@ -373,10 +374,11 @@ The K2 cutscene-video post (DeadlyStream file 2503, about 25.7 GB of `.bik` vide
 is deliberately not seeded and not in `seed_pins.json`. It is listed under
 `uncached` (see [Never cached by policy](#never-cached-by-policy)): `.bik` is never
 cached, by `game_cache.py` or by this archive cache. `cache.py restore` reports it
-as `uncached-by-policy` and exits 1 for the K2 guide.
-`--allow-uncached-by-policy "<section>"` is the opt-in escape for a lane that never
-installs the section holding the referencing step; the section form for this post
-is not wired into any lane (see [ci.md](ci.md#install-lanes-and-uncached-links)).
+as `uncached-by-policy` and exits 1 for the K2 guide unless the lane passes
+`--allow-uncached-by-policy "Enhanced Widescreen Support Mods::K2 Cutscenes Rescaled"`.
+The Rust install lanes pass that step form (see
+[ci.md](ci.md#install-lanes-and-uncached-links)); the section form is wired
+nowhere.
 
 ## Known gaps
 
@@ -400,8 +402,11 @@ Nexus or GameFront link above stays blocked.
   video. It is listed under `uncached` (see
   [Never cached by policy](#never-cached-by-policy)), so restore reports
   `uncached-by-policy` and fails for the K2 guide unless the lane passes
-  `--allow-uncached-by-policy "Enhanced Widescreen Support Mods"`. The only step
-  that references the post is `K2 Cutscenes Rescaled` in that section. The CI game
-  baseline has no movies, and no other guide step reads them. No lane passes the
-  flag: the Rust CLI lane installs that section (see
-  [ci.md](ci.md#install-lanes-and-uncached-links)).
+  `--allow-uncached-by-policy "Enhanced Widescreen Support Mods::K2 Cutscenes Rescaled"`.
+  The only step that references the post is `K2 Cutscenes Rescaled` in that
+  section. The CI game baseline has no movies, no other guide step reads them, and
+  the guide says to use only one of the two K2 cutscene mods (the other, Nexus
+  1066, is pinned and still restored). The Rust install lanes pass the step form
+  and `ports.py` deselects the component (see
+  [ci.md](ci.md#install-lanes-and-uncached-links)); the other lanes still stop
+  at restore.

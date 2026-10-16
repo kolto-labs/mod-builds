@@ -364,13 +364,15 @@ jobs:
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
           set +e
-          # Reviewed Nexus policy skips (docs/ci.md). Rust lanes only: ports.py deselects
+          # Reviewed policy skips (docs/ci.md). Rust lanes only: ports.py deselects
           # the skipped component; the TypeScript lanes have no deselect mechanism.
           policy=()
           if [[ '${{ matrix.implementation }}' == rust ]]; then
             policy+=(--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching")
             if [[ "$GAME" == k1 ]]; then
               policy+=(--allow-uncached-by-policy "Optional Widescreen & Extended Widescreen Support Mods::Remastered Cutscenes")
+            elif [[ "$GAME" == k2 ]]; then
+              policy+=(--allow-uncached-by-policy "Enhanced Widescreen Support Mods::K2 Cutscenes Rescaled")
             fi
           fi
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
