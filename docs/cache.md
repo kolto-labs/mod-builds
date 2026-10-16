@@ -83,3 +83,17 @@ cannot obtain a required archive still fails closed.
 
 `cache.py` takes `discover`, `refresh`, `restore` and `import-existing`, plus
 `--guide` (repeatable), `--cache-dir`, `--remote` and `--report`. See `--help`.
+
+## CI default selections
+
+Some DeadlyStream posts list several archives and the guide explicitly leaves the
+choice to the reader. `tools/modsync-ci/archive_selections.json` pins one file for
+each so CI fails closed on everything else. Entries of this kind say so in their
+`reason` (`guide leaves choice to user; CI default = ...`) and follow one rule:
+base or first-listed file, 1920x1080 at 30fps for resolution packs. Where the guide
+names no file at all, the `reason` says that instead. These are CI defaults, not
+recommendations; change the entry if a build needs a different variant.
+
+Left unpinned on purpose, so they still fail closed: post 2503 (K2 cutscenes; the
+guide wants a main file plus a matching `_mods` file, which a single-file selector
+cannot express) and post 1258 (K1 Community Patch; the guide names no file).

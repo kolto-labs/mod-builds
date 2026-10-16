@@ -56,6 +56,18 @@
       "file": "hd_npc_portraits-v2.0.7z",
       "reason": "guide: download the V2 option"
     },
+    "1217": {
+      "file": "KOTOR2-Citadel-Station-Backdrop_v2.0.0_4k.zip",
+      "reason": "guide names no file for this mod; CI default = first-listed 4k variant (the 2k file is the smaller alternative)"
+    },
+    "1258": {
+      "file": "K1_Community_Patch_v1.10.0.zip",
+      "reason": "guide names no file; CI default = main patch archive, not the hotfix or translation add-ons"
+    },
+    "1793": {
+      "file": "HQSkyboxesII_TSL.7z",
+      "reason": "guide leaves choice to user (TSL.7z or TSL_1k.7z, 'whether you use the 1k version is your choice'); CI default = base (non-1k) main file, never the compatches"
+    },
     "1860": {
       "file": "Droid special weapons fix for TSL v2.0.7z",
       "reason": "guide: use the V2 version"
@@ -63,6 +75,10 @@
     "1909": {
       "file": "Random HD UI Elements.zip",
       "reason": "guide: download just the main download, not the optional request"
+    },
+    "1925": {
+      "file": "PLC_CompPnl.rar",
+      "reason": "guide leaves choice to user ('which version to use is up to you'); CI default = first-listed original download, not the Vurt Visual Resurgence variant"
     },
     "1929": {
       "file": "Stylized_Portraits_KOTOR_Light.7z",
@@ -80,9 +96,21 @@
       "file": "Kiosk HD 15.03.2024.rar",
       "reason": "guide: download the dated 15.03.2024 version"
     },
+    "2299": {
+      "file": "Visas Less Clipping.7z",
+      "reason": "guide leaves choice to user ('either option is fine'); CI default = first-listed and smallest (non-Hipoly) file"
+    },
     "2355": {
       "file": "TSL Transparent Cockpit Windows v1_1_2 - Reskin Friendly.7z",
       "reason": "guide recommends the reskin-friendly version"
+    },
+    "2380": {
+      "file": "k1rs_30fps_1920x1080.7z",
+      "reason": "guide leaves choice to user (resolution matching the monitor) but strongly recommends 30fps over 60fps; CI default = 1920x1080 30fps"
+    },
+    "2382": {
+      "file": "Ithorian HD.rar",
+      "reason": "guide leaves choice to user (base install vs Vurt retexture); CI default = base install"
     },
     "2430": {
       "file": "Stun baton HD.rar",
@@ -95,6 +123,14 @@
     "2516": {
       "file": "NPC clothing M.rar",
       "reason": "guide: ignore the txi.rar file"
+    },
+    "2622": {
+      "file": "load_1920x1080.7z",
+      "reason": "guide names no file for this mod; CI default = 1920x1080 resolution pack"
+    },
+    "2635": {
+      "file": "CK-Red floating lightsabers.zip",
+      "reason": "guide names no file for this mod; CI default = base file, which matches the guide description (red, immune to fear/paralysis/stun) without the extra Force Jump variant"
     },
     "2659": {
       "file": "Upscale+ Character Fixes - KotOR V0.52 (2x tpc).7z",
