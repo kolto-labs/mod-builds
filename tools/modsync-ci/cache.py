@@ -37,6 +37,11 @@ LOOSE = "file"
 LOOSE_SUFFIX = re.compile(r"\.[A-Za-z0-9]{1,8}$")
 HTML_REJECTED = "not a supported archive (HTML and unknown payloads rejected)"
 TOOL_PROVIDERS = ("mega", "google-drive")
+PINS_PATH = Path(__file__).with_name("seed_pins.json")
+PIN_PROVIDERS = ("nexus", "gamefront")
+PIN_PROVENANCE = "operator-local-download"
+PIN_EXTENSIONS = ("zip", "7z", "rar", LOOSE)
+SHA256 = re.compile(r"[a-f0-9]{64}")
 NEXUS_REASON = "nexus requires NEXUS_API_KEY (no headless adapter; CAPTCHA is never bypassed); blocked-pending-user-action"
 
 
@@ -666,6 +671,63 @@ def local_valid(root, entry):
     return bool(objects) and all(object_valid(root, each) for each in objects)
 
 
+def pin_entry(identity, value):
+    if not isinstance(value, dict) or value.get("provider") not in PIN_PROVIDERS:
+        return None
+    if value.get("provenance") != PIN_PROVENANCE or not isinstance(value.get("url"), str):
+        return None
+    if key_for(value["url"]) != identity:
+        return None
+    objects = value.get("objects")
+    if not isinstance(objects, list) or not objects:
+        return None
+    for each in objects:
+        if (not isinstance(each, dict) or not isinstance(each.get("sha256"), str)
+                or not SHA256.fullmatch(each["sha256"]) or not isinstance(each.get("size"), int)
+                or isinstance(each["size"], bool) or each["size"] < 0
+                or each.get("extension") not in PIN_EXTENSIONS
+                or not isinstance(each.get("archive_name"), str) or not each["archive_name"]):
+            return None
+    return {"url": value["url"], "provider": value["provider"], "provenance": value["provenance"],
+            "objects": [{key: each[key] for key in ("archive_name", "sha256", "size", "extension")}
+                        for each in objects]}
+
+
+def load_pins(path=None):
+    path = Path(path or PINS_PATH)
+    if not path.exists():
+        return {}
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if (not isinstance(document, dict) or document.get("schema") != 1
+            or not isinstance(document.get("entries"), dict)):
+        raise ValueError("unsupported seed pins schema")
+    pins = {}
+    for identity, value in document["entries"].items():
+        pin = pin_entry(identity, value)
+        if pin:
+            pins[identity] = pin
+    return pins
+
+
+def is_pinned(item, entry, pins=None):
+    if not isinstance(entry, dict) or entry.get("status") != "pinned" or entry.get("evidence") != "operator-seed":
+        return False
+    if item.get("provider") not in PIN_PROVIDERS:
+        return False
+    try:
+        pin = (load_pins() if pins is None else pins).get(item["id"])
+    except (ValueError, OSError):
+        return False
+    if not pin or pin["provider"] != item["provider"]:
+        return False
+    objects = entry_objects(entry)
+    if not objects:
+        return False
+    if {each.get("sha256") for each in objects} != {each["sha256"] for each in pin["objects"]}:
+        return False
+    return objects_match_selection(item, entry)
+
+
 def bundle(objects):
     fresh = all(each.get("status") == "fresh" for each in objects)
     return {"objects": objects, "size": sum(each["size"] for each in objects),
@@ -875,7 +937,7 @@ def existing_archive_path(archive_root, filename):
     return path
 
 
-def import_object(item, filename, source, loose, root, args, old_object, known):
+def import_object(item, filename, source, loose, root, args, old_object, known, expected_sha256=None):
     expected_size = source.stat().st_size
     if expected_size < 0 or expected_size > args.max_bytes:
         raise ValueError("archive exceeds size limit")
@@ -917,8 +979,10 @@ def import_object(item, filename, source, loose, root, args, old_object, known):
                 os.close(source_fd)
         if size != expected_size:
             raise ValueError("archive changed during import")
-        kind = validate(staged, args.integrity_timeout, loose=loose)
         sha = digest_state.hexdigest()
+        if expected_sha256 is not None and sha != expected_sha256:
+            return "pin-mismatch", None, sha, size
+        kind = validate(staged, args.integrity_timeout, loose=loose)
         object_file = objects / sha
         if known:
             if (not isinstance(old_object, dict) or old_object.get("sha256") != sha or old_object.get("size") != size
@@ -938,9 +1002,11 @@ def import_object(item, filename, source, loose, root, args, old_object, known):
             if digest(object_file) != sha:
                 raise ValueError("cache object conflict")
             validate(object_file, args.integrity_timeout, loose=loose)
+        pinned = expected_sha256 is not None
         return "imported", {"sha256": sha, "size": size, "extension": kind,
-                            "archive_name": filename, "status": "stale-unknown",
-                            "metadata_unknown": True, "evidence": "local-import",
+                            "archive_name": filename, "status": "pinned" if pinned else "stale-unknown",
+                            "metadata_unknown": True,
+                            "evidence": "operator-seed" if pinned else "local-import",
                             "imported_at": time.time()}, sha, size
     finally:
         if descriptor >= 0:
@@ -948,7 +1014,13 @@ def import_object(item, filename, source, loose, root, args, old_object, known):
         staged.unlink(missing_ok=True)
 
 
-def import_existing(item, resource_entries, archive_root, root, args):
+def expected_for(expected_sha256, filename):
+    if isinstance(expected_sha256, dict):
+        return expected_sha256.get(filename)
+    return expected_sha256
+
+
+def import_existing(item, resource_entries, archive_root, root, args, expected_sha256=None):
     matches = [(key, value) for key, value in resource_entries.items()
                if isinstance(value, dict)
                and isinstance(value.get("HandlerMetadata"), dict)
@@ -982,6 +1054,16 @@ def import_existing(item, resource_entries, archive_root, root, args):
         return {"id": item["id"], "status": "unresolved", "reason": safe_reason(error)}
     entry = {"id": item["id"], "status": "planned"}
     entry.update({"archive_names": filenames} if selectors else {"archive_name": filenames[0]})
+    pinned = expected_sha256 is not None
+    if pinned:
+        try:
+            for filename, source, loose in planned:
+                expected = expected_for(expected_sha256, filename)
+                if expected is None or digest(source) != expected:
+                    entry["status"] = "pin-mismatch"
+                    return entry
+        except OSError as error:
+            return {"id": item["id"], "status": "unresolved", "reason": safe_reason(error)}
     manifest_path = root / "manifest.json"
     manifest = args.import_manifest
     known = item["id"] in manifest
@@ -999,9 +1081,14 @@ def import_existing(item, resource_entries, archive_root, root, args):
                 old_object = next((each for each in candidates if each.get("listed_name") == filename), None)
             else:
                 old_object = candidates[0] if len(candidates) == 1 else None
-            outcomes.append(import_object(item, filename, source, loose, root, args, old_object, known) + (filename,))
+            outcomes.append(import_object(item, filename, source, loose, root, args, old_object, known,
+                                          expected_for(expected_sha256, filename) if pinned else None)
+                            + (filename,))
+        mismatches = [outcome for outcome in outcomes if outcome[0] == "pin-mismatch"]
         conflicts = [outcome for outcome in outcomes if outcome[0] == "manifest-conflict"]
-        if conflicts:
+        if mismatches:
+            entry.update(status="pin-mismatch", sha256=mismatches[0][2], size=mismatches[0][3])
+        elif conflicts:
             entry.update(status="manifest-conflict", sha256=conflicts[0][2], size=conflicts[0][3])
         elif known:
             entry.update(status="already-present", sha256=outcomes[0][2], size=outcomes[0][3])
@@ -1010,7 +1097,8 @@ def import_existing(item, resource_entries, archive_root, root, args):
                         for outcome in outcomes]
             document = imported[0] if not selectors else {
                 "objects": imported, "size": sum(each["size"] for each in imported),
-                "status": "stale-unknown", "metadata_unknown": True, "evidence": "local-import",
+                "status": "pinned" if pinned else "stale-unknown", "metadata_unknown": True,
+                "evidence": "operator-seed" if pinned else "local-import",
                 "imported_at": time.time()}
             manifest[item["id"]] = document
             try:
@@ -1094,6 +1182,8 @@ def main(argv=None):
     parser.add_argument("--destination", type=Path, help="archive directory for either installer")
     parser.add_argument("--resource-index", type=Path, help="resource index for import-existing")
     parser.add_argument("--archive-dir", type=Path, help="existing archive directory for import-existing")
+    parser.add_argument("--expected-sha256", action="append", default=[], metavar="FILENAME=SHA256",
+                        help="import-existing: pin this archive file to an exact SHA256 (repeatable)")
     parser.add_argument("--max-items", type=int, default=20,
                         help="maximum exact-URL matched candidates to inspect (1..500)")
     parser.add_argument("--offset", type=int, default=0,
@@ -1128,6 +1218,12 @@ def main(argv=None):
             parser.error("import-existing does not support --remote")
     elif args.apply:
         parser.error("--apply is only valid with import-existing")
+    expected_hashes = {}
+    for pair in args.expected_sha256:
+        name, _, sha = pair.rpartition("=")
+        if args.command != "import-existing" or not name or not SHA256.fullmatch(sha):
+            parser.error("--expected-sha256 must be FILENAME=SHA256 and is only valid with import-existing")
+        expected_hashes[name] = sha
     guides = args.guide or ["content/k1/full.md", "content/k2/full.md"]
     items = discover(guides)
     if not items:
@@ -1158,14 +1254,15 @@ def main(argv=None):
         args.import_manifest_document = manifest
         start = min(args.offset, len(matched_items))
         selected = matched_items[start:start + args.max_items]
-        report["entries"] = [import_existing(item, resource_entries, archive_root, root, args)
+        report["entries"] = [import_existing(item, resource_entries, archive_root, root, args,
+                                                    expected_hashes or None)
                               for item in selected]
         report["candidate_count"] = len(matched_items)
         report["next_offset"] = start + len(selected)
         report["unmatched_urls"] = len(items) - len(matched_items)
         report["truncated"] = report["next_offset"] < len(matched_items)
         report["ok"] = all(entry["status"] in (
-            "planned", "existing-association", "already-present", "stale-unknown")
+            "planned", "existing-association", "already-present", "stale-unknown", "pinned")
                            for entry in report["entries"])
     else:
         root = args.cache_dir.resolve()
@@ -1177,6 +1274,10 @@ def main(argv=None):
             raise ValueError("unsupported manifest schema")
         restored_names = {}
         repaired = False
+        try:
+            pins = load_pins()
+        except (ValueError, OSError):
+            pins = {}
         for item in items:
             old = manifest["entries"].get(item["id"], {})
             entry = {"id": item["id"], "url": clean_url(item["url"]), "provider": item["provider"]}
@@ -1186,10 +1287,11 @@ def main(argv=None):
                 upstream_checked = old.get("status") == "fresh" or (
                     old.get("status") == "verified" and
                     old.get("evidence") == "download-without-upstream-metadata")
-                fresh = (valid and upstream_checked and 0 <= age < args.max_age_days * 86400
-                         and objects_match_selection(item, old))
+                pinned = valid and is_pinned(item, old, pins)
+                fresh = pinned or (valid and upstream_checked and 0 <= age < args.max_age_days * 86400
+                                   and objects_match_selection(item, old))
                 if args.command == "refresh":
-                    cached = old if fresh and not args.force else refresh_one(item, old, root, args)
+                    cached = old if pinned or (fresh and not args.force) else refresh_one(item, old, root, args)
                     manifest["entries"][item["id"]] = cached
                     entry.update(cached)
                     atomic_json(manifest_path, manifest)
@@ -1215,13 +1317,15 @@ def main(argv=None):
                         raise
                     entry.update(status="restored", metadata_unknown=old.get("metadata_unknown", not bool(
                         old.get("etag") or old.get("last_modified"))))
+                    if pinned:
+                        entry.update(pinned=True, metadata_unknown=True)
                     if "objects" in old:
                         entry["files"] = restored
                     else:
                         entry.update(sha256=restored[0]["sha256"], file=restored[0]["file"])
             except (ValueError, OSError, HTTPException, subprocess.SubprocessError, zipfile.BadZipFile) as error:
                 entry.update(status="unresolved", reason=safe_reason(error))
-                if args.command == "refresh" and old:
+                if args.command == "refresh" and old and not is_pinned(item, old, pins):
                     manifest["entries"][item["id"]] = {**old, "status": "stale-unknown"}
                     atomic_json(manifest_path, manifest)
             report["entries"].append(entry)
@@ -1230,7 +1334,7 @@ def main(argv=None):
         elif repaired:
             rclone(args, "push", root)
     if args.command != "import-existing":
-        report["ok"] = all(entry.get("status") in ("fresh", "verified", "restored")
+        report["ok"] = all(entry.get("status") in ("fresh", "verified", "restored", "pinned")
                            for entry in report["entries"]) if args.command != "discover" else True
     if args.report:
         atomic_json(args.report, report)

@@ -113,7 +113,9 @@ def upload_object(path, remote_path):
         raise ValueError("object source changed during upload")
 
 
-def is_due(entry, now, item=None):
+def is_due(entry, now, item=None, pins=None):
+    if item is not None and cache.is_pinned(item, entry, pins):
+        return False
     upstream_checked = entry.get("status") == "fresh" or (
         entry.get("status") == "verified" and entry.get("evidence") == "download-without-upstream-metadata")
     current = item is None or cache.objects_match_selection(item, entry)
@@ -237,7 +239,8 @@ def totals(entries, manifest, started, stop, ok, persisted, max_items):
                 stage["source_frames"].append(entry["source_frames"])
     return {
         "max_items": max_items, "state": stop, "reported_entries": len(entries),
-        "fresh": counts["fresh"], "verified": counts["verified"], "stale_unknown": counts["stale-unknown"],
+        "fresh": counts["fresh"], "verified": counts["verified"], "pinned": counts["pinned"],
+        "stale_unknown": counts["stale-unknown"],
         "unresolved": counts["unresolved"], "manifest_checked": len(checked),
         "verified_downloads": len(verified), "verified_bytes": sum(entry.get("size", 0) for entry in verified),
         "refresh_complete": int(ok and persisted and stop == "finished"), "persistence_succeeded": int(persisted),
@@ -319,12 +322,16 @@ def main(argv=None):
 
         if not args.candidate_id:
             attempts, entries_by_id = manifest["refresh_attempts"], manifest["entries"]
+            try:
+                pins = cache.load_pins()
+            except (ValueError, OSError):
+                pins = {}
 
             def priority(item):
                 attempted = attempts.get(item["id"], entries_by_id.get(item["id"], {}).get("checked_at", 0))
                 return bool(attempted), attempted, item["id"]
 
-            items = sorted((item for item in items if is_due(entries_by_id.get(item["id"], {}), started, item)),
+            items = sorted((item for item in items if is_due(entries_by_id.get(item["id"], {}), started, item, pins)),
                            key=priority)[:args.max_items]
 
         entries, ok, stop = [], True, "finished"
@@ -338,7 +345,7 @@ def main(argv=None):
                     break
                 item_entries, item_ok = run_item(item, root, remote, bool(args.candidate_id))
                 entries += item_entries
-                ok = ok and item_ok and all(entry.get("status") in ("fresh", "verified") for entry in item_entries)
+                ok = ok and item_ok and all(entry.get("status") in ("fresh", "verified", "pinned") for entry in item_entries)
         except Stop as reason:
             stop, ok = f"{reason}; partial progress", False
         finally:
