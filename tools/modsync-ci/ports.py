@@ -50,13 +50,21 @@ def run(command, source, private, stage, report, env):
         raise Blocked(stage + "_failed")
 
 
-def coverage(guide, converted, report=None):
+IMPLEMENTATION_SECTIONS = {
+    "rust": frozenset(),
+    "typescript": frozenset({"CRITICAL: PC Version Differences & Fixes"}),
+}
+
+
+def coverage(guide, converted, report=None, implementation="rust"):
     text = guide.read_text(encoding="utf-8")
+    if implementation not in IMPLEMENTATION_SECTIONS:
+        raise Blocked("implementation_unknown")
     allowed_sections = {
         "Mod List",
         "Optional Widescreen & Extended Widescreen Support Mods",
         "Enhanced Widescreen Support Mods",
-    }
+    } | IMPLEMENTATION_SECTIONS[implementation]
     section = None
     headings = []
     sections = {}
@@ -89,6 +97,51 @@ def coverage(guide, converted, report=None):
            for component, heading in zip(components, headings)):
         raise Blocked("guide_component_order_or_heading_mismatch")
     return len(components)
+
+
+def select_base_components(converted):
+    """Write IsSelected=true for every base-phase, platform-neutral component.
+
+    Widescreen and Aspyr-only components stay unselected: the GUI driver
+    refuses them, and the CLI installs them through its own phase flow.
+    """
+    text = converted.read_text(encoding="utf-8")
+    document = tomllib.loads(text)
+    key = "thisMod" if "thisMod" in document else "Components"
+    components = document.get(key)
+    if not isinstance(components, list) or not components:
+        raise Blocked("selection_components_missing")
+    expected = [not (component.get("IsWidescreen", False)
+                     or component.get("AspyrOnly", False))
+                for component in components]
+    header = "[[" + key + "]]"
+    index = -1
+    inside = False
+    seen = 0
+    lines = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("["):
+            inside = stripped == header
+            if inside:
+                index += 1
+        elif inside and re.fullmatch(r"IsSelected\s*=\s*(true|false)", stripped):
+            line = "IsSelected = " + ("true" if expected[index] else "false") + "\n"
+            seen += 1
+        lines.append(line)
+    if index + 1 != len(components) or seen != len(components):
+        raise Blocked("selection_rewrite_incomplete")
+    rewritten = "".join(lines)
+    updated = tomllib.loads(rewritten)
+    if [component.get("IsSelected") for component in updated[key]] != expected:
+        raise Blocked("selection_rewrite_mismatch")
+    for document_part in (document, updated):
+        for component in document_part[key]:
+            component.pop("IsSelected", None)
+    if updated != document:
+        raise Blocked("selection_rewrite_changed_other_fields")
+    converted.write_text(rewritten, encoding="utf-8")
+    return sum(expected)
 
 
 def guid(value):
@@ -204,7 +257,8 @@ def execute(args, report):
             source, private, "build", report, env)
         command = [str(private / "target/debug/modsync")]
         run(command + ["convert", str(guide), str(converted),
-                       "--format", "toml", "--parse-directions"],
+                       "--format", "toml", "--parse-directions",
+                       "--auto-generate-local", "--source-path", str(archives)],
             source, private, "convert", report, env)
     else:
         if not (source / "packages/cli/src/main.ts").is_file():
@@ -215,13 +269,16 @@ def execute(args, report):
             raise Blocked("guide_target_game_unknown")
         target_game = {"k1": "kotor1", "k2": "kotor2"}[guide.parent.name]
         run(command + ["import-md", str(guide), "--output", str(converted),
-                       "--game", target_game],
+                       "--game", target_game,
+                       "--source-url", "content/" + guide.parent.name + "/full.md"],
             source, private, "convert", report, env)
+        report["selected_component_count"] = select_base_components(converted)
     if digest(guide) != report["guide_sha256"]:
         raise Blocked("guide_changed_during_conversion")
     report["converted_sha256"] = digest(converted)
     report["stage"] = "coverage"
-    report["component_count"] = coverage(guide, converted, report)
+    report["component_count"] = coverage(
+        guide, converted, report, args.implementation)
     if args.implementation == "typescript":
         report["stage"] = "review"
         choices = review_manifest(args.review_manifest, guide, converted)
