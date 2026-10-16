@@ -282,8 +282,19 @@ jobs:
       - name: Install the full guide
         env:
           REVIEW: ci/${{ matrix.game }}-${{ matrix.implementation }}-review.json
+          SOURCE_TOKEN: ${{ matrix.implementation == 'rust' && secrets.MODSYNC_SOURCE_TOKEN || '' }}
         run: |
           review=(); if [[ -f "$REVIEW" ]]; then review=(--review-manifest "$REVIEW"); fi
+          if [[ '${{ matrix.implementation }}' == rust ]]; then
+            credential_file="$RUNNER_TEMP/git-credentials"
+            git_config_file="$RUNNER_TEMP/git-config"
+            umask 077
+            printf '%s\n' "https://x-access-token:${SOURCE_TOKEN}@github.com" > "$credential_file"
+            printf '[credential]\n\thelper = store --file=%s\n' "$credential_file" > "$git_config_file"
+            export GIT_CONFIG_GLOBAL="$git_config_file"
+            export CARGO_NET_GIT_FETCH_WITH_CLI=true
+            trap 'rm -f "$credential_file" "$git_config_file"' EXIT
+          fi
           python tools/modsync-ci/ports.py \
             --implementation '${{ matrix.implementation }}' --mode '${{ matrix.mode }}' \
             --source .modsync-source --guide "content/$GAME/full.md" \
