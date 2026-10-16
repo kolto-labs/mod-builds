@@ -171,6 +171,7 @@ Names only.
 | `STEAM_CONFIG_VDF` | secret, optional | Saved SteamCMD login, so CI needs no Steam Guard approval |
 | `STEAM_GUARD_CODES` | secret, optional | Single-use Steam backup codes, tried after the other sign-ins fail |
 | `CACHE_ENCRYPTION_KEY` | secret | Seals and unseals the game cache (not the archive bucket) |
+| `DIAGNOSTICS_ENCRYPTION_KEY` | secret | Seals the `install` lane report and convert log before upload ([ports.md](ports.md#diagnosing-a-coverage-failure)) |
 | `MOD_CACHE_S3_ACCESS_KEY_ID`, `MOD_CACHE_S3_SECRET_ACCESS_KEY` | secret | R2 read/write, `mods` job only |
 | `MOD_CACHE_S3_READ_ACCESS_KEY_ID`, `MOD_CACHE_S3_READ_SECRET_ACCESS_KEY` | secret | R2 read only, `install` and `manual` |
 | `MOD_CACHE_S3_ENDPOINT` | secret | S3-compatible (R2) endpoint |

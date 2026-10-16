@@ -142,6 +142,41 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
   Success needs visible completion, no failed or skipped mods, and physical
   checkpoint receipts. Manifest choices are not forwarded to this driver.
 
+## Diagnosing a coverage failure
+
+`modsync convert --auto-generate-local` writes a JSON array to **stderr** (one entry per
+component: `ComponentGuid`, `ComponentName`, `Success`, `InstructionsGenerated`,
+`SkipReason`), even when it also exits nonzero. `ports.py` reads it back out of
+`convert.log` after the convert step, whether or not the step failed, and records:
+
+- `convert_skips`: `total`, `generated`, `by_cause` and `components` (guid, name, cause,
+  converter `reason`; components that already had instructions are only counted).
+- `steps_without_instructions`, when `guide_steps_without_instructions` blocks the lane:
+  one record per guide step lacking instructions with `heading`, `component_guid`,
+  `urls` (the component's links, with any `#fragment` removed because a MEGA fragment is
+  the decryption key) and `skip_reason` (the converter's reason, `null` if it gave none).
+
+Causes: `no_archive_matched`, `mapped_file_missing` (the `--archive-map` file is not in
+the archive directory), `reader_rejection` (no supported files or patcher data, bounds,
+unsafe names), `patcher_path_refusal` (patcher tree without an identifiable installer
+executable), `already_had_instructions`, `no_mod_links`, and `other` for wording this
+table does not know.
+
+The same information goes to stderr, so one CI log read is enough:
+
+```text
+ports: convert generated instructions for 0 of 197 components; not generated: already_had_instructions=44, no_archive_matched=153
+::error::ports: 153 guide steps have no instructions
+  - Example Mod [00000000-0000-0000-0000-000000000001] No matching archive found for 'example-mod' <https://example.invalid/files/1-example-mod/>
+```
+
+The `install` job seals `report.json` and every `convert.log` with `seal.py` and uploads
+the result (`ports-diagnostics-<game>-<impl>-<mode>`, 7 days) even when the lane fails.
+The key is the `DIAGNOSTICS_ENCRYPTION_KEY` secret, passed to `seal.py` as
+`CACHE_ENCRYPTION_KEY` (at least 32 bytes). Without the secret, the step warns and nothing
+is uploaded: never upload the plain files. To read one, run `seal.py unseal --source
+lane-diagnostics.seal --destination DIR` with the same key.
+
 ## Output
 
 Each run writes logs, the converted TOML and GUI evidence to a private `ports-*`

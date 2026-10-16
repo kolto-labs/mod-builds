@@ -12,6 +12,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from urllib.parse import urldefrag
 import uuid
 
 
@@ -50,6 +51,71 @@ def run(command, source, private, stage, report, env):
         raise Blocked(stage + "_failed")
 
 
+SKIP_CAUSES = (
+    ("already_had_instructions", ("already has instructions",)),
+    ("no_mod_links", ("no mod links",)),
+    ("mapped_file_missing", ("was not found in the source directory",)),
+    ("no_archive_matched", ("no matching archive",)),
+    ("patcher_path_refusal", ("patcher tree", "installer", "namespace")),
+    ("reader_rejection", ("no supported", "exceeds", "unsafe", "does not exist",
+                          "no extension", "not utf-8")),
+)
+
+
+def skip_cause(reason):
+    lowered = reason.lower()
+    for cause, needles in SKIP_CAUSES:
+        if any(needle in lowered for needle in needles):
+            return cause
+    return "other"
+
+
+def record_convert_skips(log, report):
+    """Keep the converter's per-component skip report (a JSON array on stderr, merged into the log)."""
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    decoder = json.JSONDecoder()
+    for start in (match.start() for match in re.finditer(r"^\[$", text, re.MULTILINE)):
+        try:
+            results, _ = decoder.raw_decode(text, start)
+        except ValueError:
+            continue
+        if (isinstance(results, list) and results
+                and all(isinstance(item, dict) and "ComponentGuid" in item for item in results)):
+            break
+    else:
+        return
+    skipped = [{"component_guid": str(item["ComponentGuid"]).lower(),
+                "name": item.get("ComponentName"),
+                "cause": skip_cause(str(item.get("SkipReason") or "")),
+                "reason": item.get("SkipReason")}
+               for item in results if item.get("Success") is not True]
+    causes = {}
+    for item in skipped:
+        causes[item["cause"]] = causes.get(item["cause"], 0) + 1
+    report["convert_skips"] = {
+        "total": len(results), "generated": len(results) - len(skipped), "by_cause": causes,
+        "components": [item for item in skipped if item["cause"] != "already_had_instructions"]}
+
+
+def print_diagnostics(report):
+    """Put the skip causes and every uncovered step in the CI log so one read is enough."""
+    skips = report.get("convert_skips")
+    if skips:
+        causes = ", ".join(f"{cause}={count}" for cause, count in sorted(skips["by_cause"].items()))
+        print(f"ports: convert generated instructions for {skips['generated']} of {skips['total']}"
+              f" components; not generated: {causes or 'none'}", file=sys.stderr)
+    uncovered = report.get("steps_without_instructions")
+    if uncovered:
+        print(f"::error::ports: {len(uncovered)} guide steps have no instructions", file=sys.stderr)
+        for step in uncovered:
+            print(f"  - {step['heading']} [{step['component_guid']}] "
+                  f"{step['skip_reason'] or 'no convert skip reason recorded'} "
+                  f"<{' '.join(step['urls'])}>", file=sys.stderr)
+
+
 IMPLEMENTATION_SECTIONS = {
     "rust": frozenset(),
     "typescript": frozenset({"CRITICAL: PC Version Differences & Fixes"}),
@@ -86,6 +152,20 @@ def load_policy_skips(path, guide):
         if step["url"] not in record["urls"]:
             record["urls"].append(step["url"])
     return list(merged.values())
+
+
+def uncovered_steps(report, headings, components, indexes):
+    """Heading, GUID, links and the converter's skip reason for each step lacking instructions."""
+    reasons = {item["component_guid"]: item["reason"]
+               for item in report.get("convert_skips", {}).get("components", [])}
+    steps = []
+    for index in indexes:
+        component = components[index] if isinstance(components[index], dict) else {}
+        identity = str(component.get("Guid", "")).lower()
+        steps.append({"heading": headings[index], "component_guid": identity,
+                      "urls": [urldefrag(url).url for url in component.get("ResourceRegistry", {})],
+                      "skip_reason": reasons.get(identity)})
+    return steps
 
 
 def coverage(guide, converted, report=None, implementation="rust", skipped=()):
@@ -151,9 +231,13 @@ def coverage(guide, converted, report=None, implementation="rust", skipped=()):
         records.append(record)
     if report is not None:
         report[SKIPPED_REPORT_KEY] = records
-    if any(index not in exempt and (not isinstance(component, dict)
-                                    or not component.get("Instructions"))
-           for index, component in enumerate(components)):
+    uncovered = [index for index, component in enumerate(components)
+                 if index not in exempt and (not isinstance(component, dict)
+                                             or not component.get("Instructions"))]
+    if uncovered:
+        if report is not None:
+            report["steps_without_instructions"] = uncovered_steps(
+                report, headings, components, uncovered)
         raise Blocked("guide_steps_without_instructions")
     if any(component.get("Heading", component.get("Name")) != heading
            for component, heading in zip(components, headings)):
@@ -321,10 +405,13 @@ def execute(args, report):
         archive_map = []
         if args.archive_map:
             archive_map = ["--archive-map", str(args.archive_map.resolve(strict=True))]
-        run(command + ["convert", str(guide), str(converted),
-                       "--format", "toml", "--parse-directions",
-                       "--auto-generate-local", "--source-path", str(archives)] + archive_map,
-            source, private, "convert", report, env)
+        try:
+            run(command + ["convert", str(guide), str(converted),
+                           "--format", "toml", "--parse-directions",
+                           "--auto-generate-local", "--source-path", str(archives)] + archive_map,
+                source, private, "convert", report, env)
+        finally:
+            record_convert_skips(private / "convert.log", report)
     else:
         if not (source / "packages/cli/src/main.ts").is_file():
             raise Blocked("typescript_source_entrypoint_missing")
@@ -518,6 +605,7 @@ def main(argv=None):
             json.dump(report, output, indent=2)
             output.write("\n")
         print(json.dumps(report))
+        print_diagnostics(report)
         return 0 if report["status"] == "installed" else 1
     except OSError:
         print("ports: unable to write sanitized report", file=sys.stderr)

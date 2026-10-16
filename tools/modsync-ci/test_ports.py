@@ -1,5 +1,7 @@
 import argparse
+import contextlib
 import hashlib
+import io
 import json
 from pathlib import Path
 import tempfile
@@ -369,6 +371,111 @@ class RealK2GuideCutsceneSkipTests(unittest.TestCase):
         converted, _ = self.converted_from_guide(directory, instructed=False)
         with self.assertRaisesRegex(ports.Blocked, "guide_steps_without_instructions"):
             ports.coverage(self.GUIDE, converted, {}, "rust", skips)
+
+
+CONVERT_REPORT = [
+    {"ComponentGuid": "40000000-0000-0000-0000-000000000001", "ComponentName": "Mod One",
+     "Success": True, "InstructionsGenerated": 2, "SkipReason": ""},
+    {"ComponentGuid": "40000000-0000-0000-0000-000000000002", "ComponentName": "Mod Two",
+     "Success": False, "InstructionsGenerated": 0,
+     "SkipReason": "No matching archive found for 'mod-two'"},
+    {"ComponentGuid": "40000000-0000-0000-0000-000000000003", "ComponentName": "Mod Three",
+     "Success": False, "InstructionsGenerated": 0,
+     "SkipReason": "Mapped archive 'three.zip' for link 'https://example.invalid/3' was not found in the source directory"},
+    {"ComponentGuid": "40000000-0000-0000-0000-000000000004", "ComponentName": "Mod Four",
+     "Success": False, "InstructionsGenerated": 0,
+     "SkipReason": "No supported game files or patcher data found in mapped archive 'four.zip'"},
+    {"ComponentGuid": "40000000-0000-0000-0000-000000000005", "ComponentName": "Mod Five",
+     "Success": False, "InstructionsGenerated": 0,
+     "SkipReason": "Archive patcher tree has no identifiable sibling installer executable"},
+    {"ComponentGuid": "40000000-0000-0000-0000-000000000006", "ComponentName": "Mod Six",
+     "Success": False, "InstructionsGenerated": 0, "SkipReason": "Component already has instructions"},
+]
+
+
+def convert_log(path, results=CONVERT_REPORT, tail="Error: unsupported unit type\n"):
+    path.write_text("warning: noise\n" + json.dumps(results, indent=2) + "\n" + tail, encoding="utf-8")
+    return path
+
+
+class ConvertSkipReportTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.directory))
+
+    def test_causes_are_bucketed_and_already_had_instructions_is_only_counted(self):
+        report = {}
+        ports.record_convert_skips(convert_log(self.directory / "convert.log"), report)
+        skips = report["convert_skips"]
+        self.assertEqual((skips["total"], skips["generated"]), (6, 1))
+        self.assertEqual(skips["by_cause"], {
+            "no_archive_matched": 1, "mapped_file_missing": 1, "reader_rejection": 1,
+            "patcher_path_refusal": 1, "already_had_instructions": 1})
+        self.assertEqual([item["name"] for item in skips["components"]],
+                         ["Mod Two", "Mod Three", "Mod Four", "Mod Five"])
+        self.assertEqual(ports.skip_cause("something new"), "other")
+
+    def test_missing_or_unparseable_log_records_nothing(self):
+        report = {}
+        ports.record_convert_skips(self.directory / "absent.log", report)
+        (self.directory / "bad.log").write_text("[\n  {broken\n", encoding="utf-8")
+        ports.record_convert_skips(self.directory / "bad.log", report)
+        self.assertEqual(report, {})
+
+    def test_uncovered_steps_carry_heading_guid_links_and_converter_reason(self):
+        guide = self.directory / "full.md"
+        guide.write_text(GUIDE, encoding="utf-8")
+        converted = self.directory / "converted.toml"
+        converted.write_text(document(
+            component("Mod One", "40000000-0000-0000-0000-000000000001"),
+            "[[thisMod]]\nGuid = \"40000000-0000-0000-0000-000000000002\"\nName = \"Mod Two\"\n"
+            "[thisMod.ResourceRegistry.\"https://example.invalid/files/two/\".Files]\n"
+            "[thisMod.ResourceRegistry.\"https://example.invalid/files/two-patch/#fragment-key\".Files]\n",
+        ).replace("Platform Fix A", "Mod One"), encoding="utf-8")
+        guide.write_text(GUIDE.replace("## CRITICAL: Platform Notes\n\n### Platform Fix A\n\n", ""),
+                         encoding="utf-8")
+        report = {}
+        ports.record_convert_skips(convert_log(self.directory / "convert.log"), report)
+        with self.assertRaisesRegex(ports.Blocked, "guide_steps_without_instructions"):
+            ports.coverage(guide, converted, report)
+        self.assertEqual(report["steps_without_instructions"], [{
+            "heading": "Mod Two", "component_guid": "40000000-0000-0000-0000-000000000002",
+            "urls": ["https://example.invalid/files/two/", "https://example.invalid/files/two-patch/"],
+            "skip_reason": "No matching archive found for 'mod-two'"}])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        text = stderr.getvalue()
+        self.assertIn("convert generated instructions for 1 of 6 components", text)
+        self.assertIn("no_archive_matched=1", text)
+        self.assertIn("- Mod Two [40000000-0000-0000-0000-000000000002] No matching archive found for 'mod-two'"
+                      " <https://example.invalid/files/two/ https://example.invalid/files/two-patch/>", text)
+
+    def test_skip_report_survives_a_failed_convert_and_reaches_the_lane_report(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        content = root / "content" / "k1"
+        content.mkdir(parents=True)
+        (content / "full.md").write_text(GUIDE, encoding="utf-8")
+        for name in ("source", "game", "archives"):
+            (root / name).mkdir()
+        (root / "source" / "Cargo.toml").write_text("", encoding="utf-8")
+        args = argparse.Namespace(
+            implementation="rust", mode="cli", review_manifest=None, archive_map=None,
+            restore_report=None, source=root / "source", guide=content / "full.md",
+            game_dir=root / "game", archives=root / "archives", work_dir=root / "work",
+            report=root / "report.json")
+
+        def failing_convert(command, source, private, stage, report, env):
+            if stage == "convert":
+                convert_log(private / "convert.log")
+                raise ports.Blocked("convert_failed")
+
+        report = {"commands": []}
+        with mock.patch.object(ports, "run", failing_convert):
+            with self.assertRaisesRegex(ports.Blocked, "convert_failed"):
+                ports.execute(args, report)
+        self.assertEqual(report["convert_skips"]["by_cause"]["no_archive_matched"], 1)
 
 
 class SelectionTests(unittest.TestCase):

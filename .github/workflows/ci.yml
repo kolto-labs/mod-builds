@@ -404,6 +404,31 @@ jobs:
             --archive-map "$RUNNER_TEMP/archive-map.json" \
             --work-dir "$RUNNER_TEMP/work" --report "$RUNNER_TEMP/report.json" "${review[@]}"
 
+      - name: Seal lane diagnostics
+        if: always()
+        env:
+          DIAGNOSTICS_ENCRYPTION_KEY: ${{ secrets.DIAGNOSTICS_ENCRYPTION_KEY }}
+        run: |
+          if [[ -z "$DIAGNOSTICS_ENCRYPTION_KEY" ]]; then
+            echo "::warning::DIAGNOSTICS_ENCRYPTION_KEY is not set; the lane report and convert log are not uploaded."
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/diagnostics-plain" "$RUNNER_TEMP/diagnostics"
+          if [[ -f "$RUNNER_TEMP/report.json" ]]; then cp -- "$RUNNER_TEMP/report.json" "$RUNNER_TEMP/diagnostics-plain/"; fi
+          for log in "$RUNNER_TEMP"/work/ports-*/convert.log; do
+            if [[ -f "$log" ]]; then cp -- "$log" "$RUNNER_TEMP/diagnostics-plain/"; fi
+          done
+          CACHE_ENCRYPTION_KEY="$DIAGNOSTICS_ENCRYPTION_KEY" python tools/modsync-ci/seal.py seal \
+            --source "$RUNNER_TEMP/diagnostics-plain" --destination "$RUNNER_TEMP/diagnostics/lane-diagnostics.seal"
+      - name: Upload sealed lane diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ports-diagnostics-${{ matrix.game }}-${{ matrix.implementation }}-${{ matrix.mode }}
+          path: ${{ runner.temp }}/diagnostics/lane-diagnostics.seal
+          retention-days: 7
+          if-no-files-found: ignore
+
   manual:
     name: manual (${{ matrix.game }})
     needs: [game, mods]
