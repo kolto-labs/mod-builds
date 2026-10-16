@@ -43,6 +43,10 @@ def run(command, source, private, stage, report, env):
             raise Blocked("command_interrupted_or_timed_out") from None
     report["commands"].append({"stage": stage, "exit_code": code})
     if code:
+        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]
+        print(f"::group::{stage} output (last 80 lines)", file=sys.stderr)
+        print("\n".join(lines), file=sys.stderr)
+        print("::endgroup::", file=sys.stderr)
         raise Blocked(stage + "_failed")
 
 
