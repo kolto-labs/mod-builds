@@ -221,9 +221,18 @@ jobs:
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
+          set +e
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
             --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
             --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
+          remote_status=$?
+          if [[ "$remote_status" -ne 0 ]]; then
+            echo "::warning::R2 restore or repair persistence failed; retrying from the local verified cache."
+            python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
+              --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives"
+            local_status=$?
+            if [[ "$local_status" -ne 0 ]]; then exit "$local_status"; fi
+          fi
 
       - name: Install the full guide
         env:
@@ -301,9 +310,18 @@ jobs:
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
+          set +e
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
             --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
             --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
+          remote_status=$?
+          if [[ "$remote_status" -ne 0 ]]; then
+            echo "::warning::R2 restore or repair persistence failed; retrying from the local verified cache."
+            python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
+              --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives"
+            local_status=$?
+            if [[ "$local_status" -ne 0 ]]; then exit "$local_status"; fi
+          fi
       - name: Install the full guide manually with the original patchers
         if: steps.plan.outputs.present == 'true'
         run: |
