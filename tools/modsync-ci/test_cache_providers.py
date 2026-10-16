@@ -1836,6 +1836,152 @@ class ArchiveMapTests(MultiFileRestoreTests):
             cache.main(["refresh", "--guide", str(self.guide), "--archive-map", str(self.base / "m.json")])
 
 
+class DirectLinkTests(unittest.TestCase):
+    PAGE = "https://example.com/?page_id=7"
+    DIRECT = "https://example.com/files/example_tool.zip"
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.base = Path(self.directory.name)
+        self.root = self.base / "cache"
+        (self.root / "objects").mkdir(parents=True)
+        self.payload = self.zip_bytes()
+        self.selections = self.base / "selections.json"
+        self.write_links({self.PAGE: self.link()})
+        patcher = mock.patch.object(cache, "SELECTIONS_PATH", self.selections)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.guide = self.base / "guide.md"
+        self.guide.write_text("[Tool](%s)\n[Other](https://example.com/about)\n" % self.PAGE, encoding="utf-8")
+
+    def zip_bytes(self):
+        path = self.base / "payload.zip"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr("tool.exe", b"MZ" + bytes(range(200)))
+        return path.read_bytes()
+
+    def link(self, **overrides):
+        value = {"url": self.DIRECT, "file": "example_tool.zip",
+                 "sha256": cache.hashlib.sha256(self.payload).hexdigest(), "size": len(self.payload),
+                 "reason": "static vendor zip"}
+        value.update(overrides)
+        return value
+
+    def write_links(self, links):
+        self.selections.write_text(json.dumps({"direct_links": links}), encoding="utf-8")
+
+    def response(self, payload, url=None):
+        response = mock.MagicMock()
+        response.__enter__.return_value = response
+        response.code = 200
+        response.headers = {"Content-Type": "application/zip", "Content-Length": str(len(payload))}
+        response.geturl.return_value = url or self.DIRECT
+        stream = [payload, b""]
+        response.read.side_effect = lambda size=-1: stream.pop(0) if stream else b""
+        return response
+
+    def test_reviewed_landing_link_is_an_archive_link_and_others_are_not(self):
+        self.assertTrue(cache.archive_link(self.PAGE))
+        self.assertFalse(cache.archive_link("https://example.com/?page_id=8"))
+        self.assertFalse(cache.archive_link("https://example.com/about"))
+
+    def test_unreviewed_landing_link_is_dropped_without_the_table(self):
+        self.selections.write_text("{}", encoding="utf-8")
+        self.assertFalse(cache.archive_link(self.PAGE))
+        self.assertEqual(cache.discover([self.guide]), [])
+
+    def test_discover_keeps_only_the_reviewed_link(self):
+        items = cache.discover([self.guide])
+        self.assertEqual([(item["url"], item["provider"]) for item in items], [(self.PAGE, "http")])
+
+    def test_resolve_returns_the_reviewed_direct_url_without_fetching_the_page(self):
+        with mock.patch.object(cache, "request", side_effect=AssertionError("page must not be fetched")):
+            self.assertEqual(cache.resolve(item_for(self.PAGE), args_for()), self.DIRECT)
+
+    def test_refresh_stores_the_reviewed_file_name_and_hash(self):
+        with mock.patch.object(cache, "request", return_value=self.response(self.payload)) as opened:
+            entry = cache.refresh_one(item_for(self.PAGE), {}, self.root, args_for())
+        self.assertEqual(opened.call_args.args[0], self.DIRECT)
+        self.assertEqual((entry["archive_name"], entry["extension"], entry["size"]),
+                         ("example_tool.zip", "zip", len(self.payload)))
+        self.assertEqual(entry["sha256"], self.link()["sha256"])
+        self.assertTrue(cache.local_valid(self.root, entry))
+
+    def test_refresh_rejects_content_that_differs_from_the_reviewed_hash(self):
+        changed = self.zip_bytes() + b"\x00"
+        with mock.patch.object(cache, "request", return_value=self.response(changed)):
+            with self.assertRaisesRegex(ValueError, "reviewed direct link"):
+                cache.refresh_one(item_for(self.PAGE), {}, self.root, args_for())
+        self.assertEqual(list((self.root / "objects").iterdir()), [])
+
+    def test_refresh_rejects_a_size_that_differs_from_the_review(self):
+        self.write_links({self.PAGE: self.link(size=len(self.payload) + 1)})
+        with mock.patch.object(cache, "request", return_value=self.response(self.payload)):
+            with self.assertRaisesRegex(ValueError, "reviewed direct link"):
+                cache.refresh_one(item_for(self.PAGE), {}, self.root, args_for())
+
+    def test_restore_writes_the_archive_map_entry_for_the_link(self):
+        with mock.patch.object(cache, "request", return_value=self.response(self.payload)):
+            entry = cache.refresh_one(item_for(self.PAGE), {}, self.root, args_for())
+        item = item_for(self.PAGE)
+        (self.root / "manifest.json").write_text(json.dumps({"schema": 1, "entries": {item["id"]: entry}}),
+                                                 encoding="utf-8")
+        map_path = self.base / "archive-map.json"
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            code = cache.main(["restore", "--guide", str(self.guide), "--cache-dir", str(self.root),
+                               "--destination", str(self.base / "mods"), "--archive-map", str(map_path)])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(map_path.read_text()), {cache.clean_url(self.PAGE): "example_tool.zip"})
+        self.assertEqual((self.base / "mods" / "example_tool.zip").read_bytes(), self.payload)
+
+    def test_schema_rejects_unsafe_or_incomplete_entries(self):
+        for override in ({"url": "http://example.com/files/example_tool.zip"},
+                         {"url": "https://other.example.org/files/example_tool.zip"},
+                         {"url": "https://example.com/files/example_tool.zip?x=1"},
+                         {"url": "https://example.com/files/page.html"},
+                         {"file": "../example_tool.zip"}, {"file": "example_tool.exe"},
+                         {"sha256": "A" * 64}, {"sha256": "abc"}, {"size": 0}, {"size": True},
+                         {"reason": " "}):
+            self.write_links({self.PAGE: self.link(**override)})
+            with self.assertRaises(ValueError, msg=str(override)):
+                cache.load_direct_links()
+        incomplete = self.link()
+        del incomplete["reason"]
+        self.write_links({self.PAGE: incomplete})
+        with self.assertRaises(ValueError):
+            cache.load_direct_links()
+        self.write_links({"ftp://example.com/x": self.link()})
+        with self.assertRaises(ValueError):
+            cache.load_direct_links()
+
+    def test_other_providers_never_use_the_table(self):
+        self.write_links({DS_PAGE: self.link(url="https://deadlystream.com/files/a.zip")})
+        self.assertIsNone(cache.reviewed_direct(item_for(DS_PAGE)))
+
+
+class ShippedDirectLinkTests(unittest.TestCase):
+    ROOT = Path(cache.__file__).resolve().parents[2]
+    POLICY = Path(cache.__file__).with_name("archive_selections.json")
+
+    def test_every_shipped_direct_link_is_valid_and_reaches_discovery_in_both_games(self):
+        shipped = cache.load_direct_links(self.POLICY)
+        self.assertTrue(shipped)
+        for game in ("k1", "k2"):
+            found = {item["id"]: item for item in cache.discover([str(self.ROOT / "content" / game / "full.md")])}
+            for identity, link in shipped.items():
+                self.assertIn(identity, found, game)
+                self.assertEqual(found[identity]["provider"], "http")
+                self.assertEqual(cache.resolve(found[identity], args_for()), link["url"])
+
+    def test_shipped_direct_links_are_hash_pinned_archives(self):
+        for link in cache.load_direct_links(self.POLICY).values():
+            self.assertRegex(link["sha256"], r"^[a-f0-9]{64}$")
+            self.assertTrue(cache.ARCHIVE.search(link["file"]))
+            self.assertGreater(link["size"], 0)
+
+
 class DropboxTests(unittest.TestCase):
     def test_dropbox_preview_link_resolves_to_direct_download(self):
         url = "https://www.dropbox.com/scl/fi/abc/pack.zip?rlkey=KEY&dl=0"

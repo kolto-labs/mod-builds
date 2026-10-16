@@ -213,5 +213,14 @@
       "loose": true,
       "reason": "reviewed loose file: Google Drive file serves a single loose .dlg (about 65 KB), not an archive"
     }
+  },
+  "direct_links": {
+    "https://ntcore.com/?page_id=371": {
+      "url": "https://ntcore.com/files/4gb_patch.zip",
+      "file": "4gb_patch.zip",
+      "sha256": "1e13c263dc55e85cf62e3e30c6b2ce936d4c7e16e3bba3e311a5a8bed4be16ca",
+      "size": 21464,
+      "reason": "the guide link redirects to the vendor page https://ntcore.com/4gb-patch/, which links one static zip (Last-Modified 2020-10-17); the zip is pinned by SHA-256 and matches the operator copy"
+    }
   }
 }

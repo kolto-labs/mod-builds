@@ -104,6 +104,8 @@ def archive_link(url):
         return bool(re.match(r"^/games/[^/]+/file/[^/]+", parsed.path))
     if kind == "dropbox":
         return bool(re.match(r"^/(?:s/[^/]+|scl/fi/[^/]+)/[^/]+", parsed.path))
+    if kind == "http":
+        return key_for(url) in load_direct_links()
     return False
 
 
@@ -498,6 +500,54 @@ def load_uncached(path=None):
     return uncached
 
 
+def direct_link_key(key):
+    key = str(key).strip()
+    try:
+        checked_url(key)
+    except ValueError:
+        raise ValueError("direct link key must be an http(s) guide link URL") from None
+    return key_for(key)
+
+
+def review_direct_link(key, value):
+    if not isinstance(value, dict) or set(value) != {"url", "file", "sha256", "size", "reason"}:
+        raise ValueError("direct link for " + str(key) + " must be exactly {url, file, sha256, size, reason}")
+    url, name = value["url"], value["file"]
+    if not isinstance(url, str):
+        raise ValueError("direct link for " + str(key) + ": url must be a string")
+    parsed = urlsplit(checked_url(url))
+    if (parsed.scheme != "https" or parsed.query or parsed.fragment or not ARCHIVE.search(parsed.path)
+            or (parsed.hostname or "").lower() != (urlsplit(str(key).strip()).hostname or "").lower()):
+        raise ValueError("direct link for " + str(key) + " must be an https archive URL on the guide link's host")
+    if not isinstance(name, str) or not ARCHIVE.search(name) or safe_archive_name(
+            name, name.rsplit(".", 1)[-1].lower()) != name:
+        raise ValueError("direct link for " + str(key) + " must name a filesystem-safe archive file")
+    if not isinstance(value["sha256"], str) or not SHA256.fullmatch(value["sha256"]):
+        raise ValueError("direct link for " + str(key) + " needs a lowercase SHA-256")
+    if not isinstance(value["size"], int) or isinstance(value["size"], bool) or value["size"] <= 0:
+        raise ValueError("direct link for " + str(key) + " needs a positive size")
+    if not isinstance(value["reason"], str) or not value["reason"].strip():
+        raise ValueError("direct link for " + str(key) + " must carry a non-empty reason")
+    return {"url": url, "file": name, "sha256": value["sha256"], "size": value["size"],
+            "reason": value["reason"].strip()}
+
+
+def load_direct_links(path=None):
+    path = Path(path or SELECTIONS_PATH)
+    if not path.exists():
+        return {}
+    declared = json.loads(path.read_text(encoding="utf-8")).get("direct_links", {})
+    if not isinstance(declared, dict):
+        raise ValueError("direct_links must be an object keyed by guide link URL")
+    return {direct_link_key(key): review_direct_link(key, value) for key, value in declared.items()}
+
+
+def reviewed_direct(item, path=None):
+    if item["provider"] != "http":
+        return None
+    return load_direct_links(path).get(item["id"])
+
+
 def uncached_reason(item, path=None):
     if item["provider"] == "deadlystream":
         match = FILE_ID.search(urlsplit(item["url"]).path)
@@ -709,6 +759,9 @@ def resolve(item, args):
     if item["provider"] in TOOL_PROVIDERS:
         tool_base(item["provider"])
         return item["url"]
+    reviewed = reviewed_direct(item)
+    if reviewed:
+        return reviewed["url"]
     if item["direct"]:
         return item["url"]
     with request(item["url"], args) as response:
@@ -1026,6 +1079,12 @@ def fetch_item(item, old, root, args, endpoint=None, depth=0):
             name = archive_name(item, kind, response.geturl(),
                                 response.headers.get("Content-Disposition"), reviewed)
             sha = digest(path)
+            pinned_direct = reviewed_direct(item)
+            if pinned_direct:
+                if sha != pinned_direct["sha256"] or size != pinned_direct["size"]:
+                    raise ValueError("downloaded file does not match the reviewed direct link; "
+                                     "re-review archive_selections.json")
+                name = pinned_direct["file"]
             if not (valid and old.get("sha256") == sha):
                 os.replace(path, root / "objects" / sha)
             etag = response.headers.get("ETag")

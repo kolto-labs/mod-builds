@@ -270,6 +270,26 @@ first-listed file, 1920x1080 at 30fps for resolution packs. Where the guide name
 no file, the `reason` says that instead. These are CI defaults, not
 recommendations; change the entry if a build needs a different variant.
 
+### Direct links
+
+A guide link that is a plain vendor page (not a `.zip`/`.7z`/`.rar` URL and not a
+supported host) is dropped by `discover`, so it never reaches restore or
+`--archive-map`. Top-level `direct_links` in `archive_selections.json` is the
+reviewed exception, keyed by the exact guide link URL:
+
+```json
+"direct_links": {"<guide link>": {"url": "https://same-host/path/file.zip", "file": "file.zip",
+                                  "sha256": "<64 hex>", "size": 1234, "reason": "..."}}
+```
+
+All five fields are required. `url` is an https archive URL without query on the
+same host as the guide link; `file` is the filesystem-safe name restore writes;
+`sha256` and `size` pin the content. Such a link is kept by `discover`, resolved
+to `url` without fetching the landing page, and a download whose hash or size
+differs from the entry is rejected (re-review the entry). The `mods` job must run
+once to populate the cache; restore never fetches an unknown link. The archive map
+key is the guide link without its query, as for every link.
+
 ## Operator seed (Nexus Mods and GameFront)
 
 Nexus Mods and GameFront cannot be fetched by the `mods` job (see
