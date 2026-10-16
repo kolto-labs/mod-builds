@@ -18,8 +18,9 @@ For each game:
 2. Installs Wine, Xvfb and archive tools.
 3. Restores `game-<game>-v1` and runs `game_cache.py unpack`, which verifies every
    file. See [steam.md](steam.md).
-4. Restores archives with `cache.py restore`. This is best effort; a missing
-   archive fails the step that needs it. See [cache.md](cache.md).
+4. Restores archives from GitHub Actions cache first and R2 when configured. This
+   is best effort; a missing archive fails the step that needs it. See
+   [cache.md](cache.md).
 5. Runs `xvfb-run -a python tools/modsync-ci/manual.py --plan <plan> --guide
    content/<game>/full.md --game-dir ... --archives ... --work-dir ... --report ...`.
 

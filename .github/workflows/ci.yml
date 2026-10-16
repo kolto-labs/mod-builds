@@ -210,7 +210,20 @@ jobs:
         run: |
           python tools/modsync-ci/game_cache.py unpack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
-      - name: Restore required mod archives
+      - id: archive-cache-week
+        name: Set archive cache week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore archives from GitHub Actions cache
+        id: archive-cache
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/archives
+          key: mod-archives-${{ matrix.game }}-${{ steps.archive-cache-week.outputs.week }}-${{ hashFiles(format('content/{0}/full.md', matrix.game)) }}
+      - name: Restore archives from R2 when the Actions cache misses
+        id: archive-restore
+        if: steps.archive-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         env:
           RCLONE_CONFIG_MODCACHE_TYPE: s3
           RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
@@ -221,9 +234,26 @@ jobs:
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
+          echo "complete=false" >> "$GITHUB_OUTPUT"
+          rm -rf "$RUNNER_TEMP/archives"
+          mkdir -p "$RUNNER_TEMP/archives"
+          if [[ -z "$RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID" || \
+                -z "$RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY" || \
+                -z "$RCLONE_CONFIG_MODCACHE_ENDPOINT" || -z "$MOD_CACHE_BUCKET" ]]; then
+            echo "::notice::R2 is not configured; using only any archives already in the Actions cache."
+            exit 0
+          fi
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
             --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
             --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
+          echo "complete=true" >> "$GITHUB_OUTPUT"
+      - name: Save archives to GitHub Actions cache
+        if: ${{ steps.archive-restore.outputs.complete == 'true' && steps.archive-cache.outputs.cache-hit != 'true' && matrix.implementation == 'rust' && matrix.mode == 'cli' }}
+        uses: actions/cache/save@v4
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/archives
+          key: mod-archives-${{ matrix.game }}-${{ steps.archive-cache-week.outputs.week }}-${{ hashFiles(format('content/{0}/full.md', matrix.game)) }}
 
       - name: Install the full guide
         env:
@@ -287,7 +317,20 @@ jobs:
         run: |
           python tools/modsync-ci/game_cache.py unpack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
-      - name: Restore required mod archives
+      - id: archive-cache-week
+        name: Set archive cache week
+        run: echo "week=$(date -u +%G-W%V)" >> "$GITHUB_OUTPUT"
+      - name: Restore archives from GitHub Actions cache
+        id: archive-cache
+        uses: actions/cache/restore@v4
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/archives
+          key: mod-archives-${{ matrix.game }}-${{ steps.archive-cache-week.outputs.week }}-${{ hashFiles(format('content/{0}/full.md', matrix.game)) }}
+      - name: Restore archives from R2 when the Actions cache misses
+        id: archive-restore
+        if: steps.archive-cache.outputs.cache-hit != 'true'
+        continue-on-error: true
         env:
           RCLONE_CONFIG_MODCACHE_TYPE: s3
           RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
@@ -298,9 +341,19 @@ jobs:
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
+          echo "complete=false" >> "$GITHUB_OUTPUT"
+          rm -rf "$RUNNER_TEMP/archives"
+          mkdir -p "$RUNNER_TEMP/archives"
+          if [[ -z "$RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID" || \
+                -z "$RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY" || \
+                -z "$RCLONE_CONFIG_MODCACHE_ENDPOINT" || -z "$MOD_CACHE_BUCKET" ]]; then
+            echo "::notice::R2 is not configured; using only any archives already in the Actions cache."
+            exit 0
+          fi
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
             --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
             --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
+          echo "complete=true" >> "$GITHUB_OUTPUT"
       - name: Install the full guide manually with the original patchers
         run: |
           xvfb-run -a python tools/modsync-ci/manual.py --plan "$PLAN" \
