@@ -1,5 +1,11 @@
 {
   "uncached": {
+    "nexus:1214": {
+      "reason": "Windows registry helper (Quicker TSLPatching) from the optional install-assistant section; the guide documents it does not work on Mac or Linux and nothing in the build consumes its output"
+    },
+    "nexus:1306": {
+      "reason": "Tier 4 optional Remastered Cutscenes (loose .bik movies); mutually exclusive with the installed Cutscenes Rescaled post (DeadlyStream 2380) and video is never cached"
+    },
     "2503": {
       "reason": "Bink video, about 25.7 GB for the reviewed main and _mods files; video is never cached and the CI game baseline carries no movies"
     }

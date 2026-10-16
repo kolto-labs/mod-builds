@@ -123,18 +123,29 @@ If any link remains unresolved or uncached by policy, the command exits 1 and th
 restore step, before any install work. A lane therefore cannot start with a
 guide whose archives are not all present.
 
-The one exception is opt-in and per lane: `--allow-uncached-by-policy SECTION`
-(repeatable, `restore` only). `SECTION` is the exact `##` heading of a guide
-section the lane does not install. A policy-uncached link is then reported as
-`uncached-skipped` and does not fail the command only if every `###` step that
-references it sits under one of the named sections. A reference in any other
-section, under no `###` step, or in no step at all keeps `uncached-by-policy`
-and exit 1; so does every unresolved link that is not on the `uncached` list.
+The one exception is opt-in and per lane: `--allow-uncached-by-policy VALUE`
+(repeatable, `restore` only). `VALUE` is one of:
+
+- `SECTION`: the exact `##` heading of a guide section the lane does not install.
+  Covers every `###` step under it.
+- `SECTION::STEP`: the exact `##` heading, then `::`, then the exact `###`
+  heading of one step (for example
+  `--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching"`).
+  Covers only that step. Matching is exact and case-sensitive; an empty side,
+  a missing side or more than one `::` is a usage error.
+
+A policy-uncached link is then reported as `uncached-skipped` and does not fail
+the command only if every `###` step that references it is covered by some
+`VALUE`. A reference in any other step or section, under no `###` step, or in no
+step at all keeps `uncached-by-policy` and exit 1; so does every unresolved link
+that is not on the `uncached` list. The step form claims nothing about the rest
+of its section, so a second step that references the same link, or another
+policy link in a neighbouring step, still fails unless it is named too.
 The report lists each skipped step in a top-level `skipped_steps` array
 (`guide`, `section`, `heading`, `url`, `reason`), and the entry carries the same
 steps in `skipped_steps`. Use `--report` to keep it with the lane's artifacts.
 The flag asserts what the lane installs; restore cannot check that, so pass it
-only after confirming the lane never installs the named section (see
+only after confirming the lane never installs the named section or step (see
 [ci.md](ci.md#install-lanes-and-uncached-links)).
 
 ## Freshness and providers
@@ -191,7 +202,12 @@ with `<` (HTML). Its name must match the reviewed name exactly; restore refuses 
 ## Never cached by policy
 
 Top-level `uncached` in `archive_selections.json` is keyed by DeadlyStream file id
-(or file page URL); each entry needs a non-empty `reason`. A listed link is never
+(or file page URL) or, for Nexus Mods, `nexus:<mod id>` (any game) or
+`nexus:<game>/<mod id>` (for example `nexus:kotor/1214`; the game is the first path
+segment of the mod URL, compared case-insensitively). Each entry needs a non-empty
+`reason`. Only reviewed entries belong here: a link is listed because the guide
+documents it as optional or unusable for the lane and nothing the build installs
+reads its output, not because it is hard to download. A listed link is never
 fetched, never uploaded and never restored:
 
 - `refresh_archives.py` removes it from the work list before any network or bucket
@@ -201,12 +217,29 @@ fetched, never uploaded and never restored:
 - `cache.py refresh` reports `uncached-by-policy` (not a failure), `import-existing`
   never copies it, and `refresh_one` raises before opening a connection.
 - `cache.py restore` reports `uncached-by-policy` and exits 1 (fail-closed, see
-  above) unless `--allow-uncached-by-policy` names the section holding every
-  step that references the link; the status is then `uncached-skipped`.
+  above) unless `--allow-uncached-by-policy` names the section (or `SECTION::STEP`) covering
+  every step that references the link; the status is then `uncached-skipped`.
 
-Today the list holds one post, K2 file 2503: Bink video, about 25.7 GB for the
-pinned main and `_mods` files. Its `selections` entry stays so the exact files are
-on record if the policy is ever lifted.
+Today the list holds three reviewed entries:
+
+| Key | Link | Why it is never cached | Referencing steps (`##` / `###`) |
+| --- | --- | --- | --- |
+| `2503` | DeadlyStream K2 cutscene videos | Bink video, about 25.7 GB for the pinned main and `_mods` files; its `selections` entry stays so the exact files are on record if the policy is ever lifted | K2: `Enhanced Widescreen Support Mods` / `K2 Cutscenes Rescaled` |
+| `nexus:1214` | Quicker TSLPatching (Nexus mod 1214) | Windows registry helper; the guide documents that it does not work on Mac or Linux, and nothing in the build consumes its output | K1 and K2: `Optional Install Assistant - Quicker TSLPatching` / `Quicker TSLPatching` |
+| `nexus:1306` | KOTOR Remastered Cutscenes (Nexus mod 1306) | Tier 4 optional, loose movie `.bik` files, never cached; mutually exclusive with the installed Cutscenes Rescaled post (DeadlyStream 2380) | K1: `Optional Widescreen & Extended Widescreen Support Mods` / `Remastered Cutscenes` |
+
+Exact flag strings for a lane that proves it does not install those steps (not
+wired into any workflow yet, see [ci.md](ci.md#install-lanes-and-uncached-links)):
+
+- K1 restore:
+  `--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching" --allow-uncached-by-policy "Optional Widescreen & Extended Widescreen Support Mods::Remastered Cutscenes"`
+- K2 restore:
+  `--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching"`
+  (K2 still fails on post 2503 unless the lane also passes
+  `--allow-uncached-by-policy "Enhanced Widescreen Support Mods"`.)
+
+The shipped-policy tests assert that these flags skip exactly the steps above and
+nothing else in either real guide.
 
 ## Reviewed selections
 

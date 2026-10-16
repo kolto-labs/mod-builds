@@ -65,10 +65,11 @@ K2 cutscene post, reported as `uncached-by-policy`; see
 
 ### Install lanes and uncached links
 
-`cache.py restore --allow-uncached-by-policy SECTION` lets a lane proceed past a
+`cache.py restore --allow-uncached-by-policy VALUE` lets a lane proceed past a
 policy-uncached link (see [cache.md](cache.md#restoring-install-and-manual-jobs)) when every guide step that
-references it is in a section the lane does not install. Only a lane that never
-installs that section may pass it. Checked against the lane code on the current
+references it is covered by a `VALUE`. `VALUE` is a `##` section name (whole section) or
+`<## section>::<### heading>` (one step only). Only a lane that never installs the
+named section or step may pass it. Checked against the lane code on the current
 `ModSync.rs` and `ModSync.ts` sources:
 
 | Lane | Installs the K2 `Enhanced Widescreen Support Mods` section? | Flag |
@@ -77,6 +78,23 @@ installs that section may pass it. Checked against the lane code on the current
 | `rust` + `gui` | No, but only because `gui_rust.py` refuses any input with widescreen-only components, so the K2 lane cannot complete | Not wired |
 | `typescript` + `cli`/`gui` | Not selected for install (`select_base_components`), but `validate --all` selects every mod, and both lanes require a reviewed manifest and an installer that is unavailable | Not wired |
 | `manual` | Unknown: depends on the human-reviewed `ci/<game>-manual-plan.json`, which does not exist | Not wired |
+
+Reviewed policy for the Nexus links (step-scoped, **not wired yet**: no workflow
+passes these, pending a check that the Rust and TypeScript converters leave the
+steps unselected and not installable):
+
+| Link | Game | Step (`##` / `###`) | Reason |
+| --- | --- | --- | --- |
+| `nexus:1214` Quicker TSLPatching | K1, K2 | `Optional Install Assistant - Quicker TSLPatching` / `Quicker TSLPatching` | Windows registry helper, documented not to work on Mac or Linux; nothing consumes its output |
+| `nexus:1306` Remastered Cutscenes | K1 | `Optional Widescreen & Extended Widescreen Support Mods` / `Remastered Cutscenes` | Tier 4 optional loose `.bik` movies, never cached; mutually exclusive with the installed Cutscenes Rescaled post (DeadlyStream 2380) |
+
+Flag strings, when a lane is cleared to use them:
+
+- K1: `--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching" --allow-uncached-by-policy "Optional Widescreen & Extended Widescreen Support Mods::Remastered Cutscenes"`
+- K2: `--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching"`
+
+Every other Nexus and GameFront link, and K2 post 2503 without its own section
+flag, still fails restore.
 
 No workflow step passes the flag today. The restore report (`--report`) is where a
 skipped step is recorded; a lane that passes the flag must keep that report with

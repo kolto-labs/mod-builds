@@ -1418,7 +1418,8 @@ class UncachedPolicyTests(MultiFileFixture):
     def test_shipped_policy_link_is_only_in_the_k2_widescreen_section(self):
         guide = Path(cache.__file__).resolve().parents[2] / "content" / "k2" / "full.md"
         item = next(each for each in cache.discover([str(guide)])
-                    if cache.uncached_reason(each, Path(cache.__file__).with_name("archive_selections.json")))
+                    if cache.uncached_reason(each, Path(cache.__file__).with_name("archive_selections.json"))
+                    and "/files/file/2503" in each["url"])
         steps, outside = cache.skippable_steps(item, {"Enhanced Widescreen Support Mods"})
         self.assertEqual([step["section"] for step in steps], ["Enhanced Widescreen Support Mods"])
         self.assertTrue(steps[0]["heading"])
@@ -1463,6 +1464,224 @@ class UncachedPolicyTests(MultiFileFixture):
                 mock.patch.object(refresh_archives.cache, "main", fake_main):
             list(refresh_archives.refresh_item(other, self.root, "remote:bucket", False))
         self.assertEqual(seen, [cache.MAX_LINK_BYTES])
+
+
+NEXUS_POLICY_URL = "https://www.nexusmods.com/examplegame/mods/777?tab=description"
+NEXUS_OTHER_URL = "https://www.nexusmods.com/examplegame/mods/778"
+
+
+class NexusStepPolicyTests(unittest.TestCase):
+    REASON = "example registry helper; documented optional and nothing consumes its output"
+    SECTION = "Optional Section"
+
+    def setUp(self):
+        self.directory = tempfile.TemporaryDirectory()
+        self.addCleanup(self.directory.cleanup)
+        self.base = Path(self.directory.name)
+        self.root = self.base / "cache"
+        (self.root / "objects").mkdir(parents=True)
+        self.selections = self.base / "selections.json"
+        self.write_policy({"nexus:777": {"reason": self.REASON}})
+        patcher = mock.patch.object(cache, "SELECTIONS_PATH", self.selections)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        self.guide = self.base / "guide.md"
+        self.destination = self.base / "mods"
+
+    def write_policy(self, uncached):
+        self.selections.write_text(json.dumps({"uncached": uncached}), encoding="utf-8")
+
+    def write_guide(self, text):
+        self.guide.write_text(text, encoding="utf-8")
+
+    def restore(self, *allowances):
+        extra = [value for allowance in allowances for value in ("--allow-uncached-by-policy", allowance)]
+        output = io.StringIO()
+        with mock.patch.object(cache, "request", side_effect=AssertionError("network used")), \
+                contextlib.redirect_stdout(output):
+            code = cache.main(["restore", "--guide", str(self.guide), "--cache-dir", str(self.root),
+                               "--destination", str(self.destination), "--retries", "0", *extra])
+        return code, json.loads(output.getvalue())
+
+    def statuses(self, report):
+        return {entry["url"].rsplit("/", 1)[-1]: entry["status"] for entry in report["entries"]}
+
+    def two_steps(self):
+        self.write_guide("## %s\n\n### Step A\n\n[mod](%s)\n\n### Step B\n\n[mod](%s)\n"
+                         % (self.SECTION, NEXUS_POLICY_URL, NEXUS_POLICY_URL))
+
+    def test_nexus_lookup_is_limited_to_the_listed_mod(self):
+        self.assertEqual(cache.uncached_reason(item_for(NEXUS_POLICY_URL)), self.REASON)
+        self.assertEqual(cache.uncached_reason(item_for("https://www.nexusmods.com/othergame/mods/777")), self.REASON)
+        self.assertIsNone(cache.uncached_reason(item_for(NEXUS_OTHER_URL)))
+        self.assertIsNone(cache.uncached_reason(item_for("https://deadlystream.com/files/file/777-example/")))
+
+    def test_game_qualified_key_matches_only_that_game(self):
+        self.write_policy({"nexus:ExampleGame/777": {"reason": self.REASON}})
+        self.assertEqual(cache.uncached_reason(item_for(NEXUS_POLICY_URL)), self.REASON)
+        self.assertIsNone(cache.uncached_reason(item_for("https://www.nexusmods.com/othergame/mods/777")))
+
+    def test_malformed_nexus_policy_is_rejected(self):
+        for value in ({"nexus:777": {}}, {"nexus:777": {"reason": " "}}, {"nexus:777": "no"},
+                      {"nexus:": {"reason": "x"}}, {"nexus:abc": {"reason": "x"}},
+                      {"nexus:a/b/777": {"reason": "x"}}, {"nexus:777?tab=files": {"reason": "x"}}):
+            self.write_policy(value)
+            with self.assertRaises(ValueError):
+                cache.load_uncached()
+
+    def test_nexus_link_is_not_fetched_or_imported(self):
+        item = item_for(NEXUS_POLICY_URL)
+        with mock.patch.object(cache, "request", side_effect=AssertionError("network used")):
+            with self.assertRaises(ValueError) as caught:
+                cache.refresh_one(item, {}, self.root, args_for())
+        self.assertIn("by policy", str(caught.exception))
+        self.assertEqual(cache.import_existing(item, {}, self.base, self.root, args_for())["status"], cache.UNCACHED)
+
+    def test_without_the_flag_the_link_fails_closed(self):
+        self.two_steps()
+        code, report = self.restore()
+        self.assertEqual(code, 1)
+        self.assertEqual(self.statuses(report), {"777": cache.UNCACHED})
+        self.assertNotIn("skipped_steps", report)
+
+    def test_step_form_skips_only_the_named_step(self):
+        self.write_guide("## %s\n\n### Step A\n\n[mod](%s)\n" % (self.SECTION, NEXUS_POLICY_URL))
+        code, report = self.restore(self.SECTION + "::Step A")
+        self.assertEqual(code, 0)
+        self.assertEqual(self.statuses(report), {"777": cache.UNCACHED_SKIPPED})
+        step = {"guide": str(self.guide), "section": self.SECTION, "heading": "Step A"}
+        self.assertEqual(report["entries"][0]["skipped_steps"], [step])
+        self.assertEqual(report["skipped_steps"], [{**step, "url": cache.clean_url(NEXUS_POLICY_URL),
+                                                    "reason": report["entries"][0]["reason"]}])
+
+    def test_step_form_does_not_cover_a_second_referencing_step(self):
+        self.two_steps()
+        code, report = self.restore(self.SECTION + "::Step A")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.statuses(report), {"777": cache.UNCACHED})
+        self.assertIn("Step B", report["entries"][0]["reason"])
+        self.assertNotIn("skipped_steps", report)
+
+    def test_every_referencing_step_named_individually_is_accepted(self):
+        self.two_steps()
+        code, report = self.restore(self.SECTION + "::Step A", self.SECTION + "::Step B")
+        self.assertEqual(code, 0)
+        self.assertEqual([step["heading"] for step in report["skipped_steps"]], ["Step A", "Step B"])
+
+    def test_bare_section_form_still_covers_every_step_in_it(self):
+        self.two_steps()
+        code, report = self.restore(self.SECTION)
+        self.assertEqual(code, 0)
+        self.assertEqual([step["heading"] for step in report["skipped_steps"]], ["Step A", "Step B"])
+
+    def test_step_form_requires_the_exact_section_and_heading(self):
+        self.write_guide("## %s\n\n### Step A\n\n[mod](%s)\n\n## Other Section\n\n### Step B\n\nprose\n"
+                         % (self.SECTION, NEXUS_POLICY_URL))
+        for allowance in ("Other Section::Step A", self.SECTION + "::Step B", self.SECTION + "::step a",
+                          self.SECTION + "::Step"):
+            code, report = self.restore(allowance)
+            self.assertEqual(code, 1, allowance)
+            self.assertEqual(self.statuses(report), {"777": cache.UNCACHED}, allowance)
+
+    def test_reference_outside_any_step_is_not_covered_by_a_step_form(self):
+        self.write_guide("[mod](%s)\n\n## %s\n\n### Step A\n\n[mod](%s)\n"
+                         % (NEXUS_POLICY_URL, self.SECTION, NEXUS_POLICY_URL))
+        code, report = self.restore(self.SECTION + "::Step A")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.statuses(report), {"777": cache.UNCACHED})
+
+    def test_step_form_does_not_cover_other_policy_links_in_the_section(self):
+        self.write_policy({"nexus:777": {"reason": self.REASON}, "nexus:778": {"reason": self.REASON}})
+        self.write_guide("## %s\n\n### Step A\n\n[mod](%s)\n\n### Step B\n\n[mod](%s)\n"
+                         % (self.SECTION, NEXUS_POLICY_URL, NEXUS_OTHER_URL))
+        code, report = self.restore(self.SECTION + "::Step A")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.statuses(report), {"777": cache.UNCACHED_SKIPPED,
+                                                 "778": cache.UNCACHED})
+
+    def test_malformed_step_form_is_a_usage_error(self):
+        self.two_steps()
+        for allowance in (self.SECTION + "::", "::Step A", "   ", self.SECTION + "::Step A::Extra"):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                self.restore(allowance)
+
+    def test_unlisted_nexus_link_in_the_named_step_is_still_unresolved(self):
+        self.write_guide("## %s\n\n### Step A\n\n[mod](%s) [other](%s)\n"
+                         % (self.SECTION, NEXUS_POLICY_URL, NEXUS_OTHER_URL))
+        code, report = self.restore(self.SECTION + "::Step A")
+        self.assertEqual(code, 1)
+        self.assertEqual(self.statuses(report), {"777": cache.UNCACHED_SKIPPED,
+                                                 "778": "unresolved"})
+
+
+class ShippedNexusPolicyTests(unittest.TestCase):
+    ROOT = Path(cache.__file__).resolve().parents[2]
+    POLICY = Path(cache.__file__).with_name("archive_selections.json")
+    ASSISTANT = "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching"
+    CUTSCENES = "Optional Widescreen & Extended Widescreen Support Mods::Remastered Cutscenes"
+    def policy_items(self, game):
+        guide = self.ROOT / "content" / game / "full.md"
+        return [item for item in cache.discover([str(guide)]) if cache.uncached_reason(item, self.POLICY)]
+
+    def test_shipped_policy_lists_both_nexus_links_with_reasons(self):
+        declared = cache.load_uncached(self.POLICY)
+        for key in ("nexus:1214", "nexus:1306", "2503"):
+            self.assertTrue(declared[key], key)
+
+    def test_exactly_the_reviewed_steps_are_skipped_and_nothing_else(self):
+        for game, allowances in (("k1", (self.ASSISTANT, self.CUTSCENES)), ("k2", (self.ASSISTANT,))):
+            skipped = {}
+            kept = []
+            for item in self.policy_items(game):
+                steps, outside = cache.skippable_steps(item, allowances)
+                if steps and not outside:
+                    skipped[cache.clean_url(item["url"])] = sorted((step["section"], step["heading"]) for step in steps)
+                else:
+                    kept.append(item["url"])
+            with self.subTest(game=game):
+                self.assertEqual(skipped, {
+                    "https://www.nexusmods.com/kotor/mods/1214": [
+                        ("Optional Install Assistant - Quicker TSLPatching", "Quicker TSLPatching")],
+                    **({"https://www.nexusmods.com/kotor/mods/1306": [
+                        ("Optional Widescreen & Extended Widescreen Support Mods", "Remastered Cutscenes")]}
+                       if game == "k1" else {})})
+                self.assertEqual(len(kept), 0 if game == "k1" else 1)
+                for url in kept:
+                    self.assertIn("/files/file/2503", url)
+
+    def test_the_assistant_flag_alone_leaves_the_cutscene_links_uncached(self):
+        for item in self.policy_items("k1"):
+            if item["url"].endswith("/mods/1306"):
+                steps, outside = cache.skippable_steps(item, (self.ASSISTANT,))
+                self.assertEqual(outside, steps)
+
+    def test_restore_reports_the_reviewed_steps_skipped_in_each_real_guide(self):
+        for game, allowances in (("k1", (self.ASSISTANT, self.CUTSCENES)), ("k2", (self.ASSISTANT,))):
+            guide = self.ROOT / "content" / game / "full.md"
+            with tempfile.TemporaryDirectory() as directory:
+                root = Path(directory) / "cache"
+                (root / "objects").mkdir(parents=True)
+                extra = [value for each in allowances for value in ("--allow-uncached-by-policy", each)]
+                output = io.StringIO()
+                with mock.patch.object(cache, "request", side_effect=AssertionError("network used")), \
+                        contextlib.redirect_stdout(output):
+                    code = cache.main(["restore", "--guide", str(guide), "--cache-dir", str(root),
+                                       "--destination", str(Path(directory) / "mods"), "--retries", "0", *extra])
+            report = json.loads(output.getvalue())
+            with self.subTest(game=game):
+                self.assertEqual(code, 1)
+                skipped = sorted(entry["url"] for entry in report["entries"] if entry["status"] == cache.UNCACHED_SKIPPED)
+                self.assertEqual(skipped, self.EXPECTED_SKIPPED[game])
+                self.assertEqual(sorted(step["heading"] for step in report["skipped_steps"]),
+                                 sorted(self.EXPECTED_HEADINGS[game]))
+                kept = [entry["url"] for entry in report["entries"] if entry["status"] == cache.UNCACHED]
+                self.assertEqual(len(kept), 0 if game == "k1" else 1)
+
+    EXPECTED_SKIPPED = {
+        "k1": ["https://www.nexusmods.com/kotor/mods/1214",
+               "https://www.nexusmods.com/kotor/mods/1306"],
+        "k2": ["https://www.nexusmods.com/kotor/mods/1214"]}
+    EXPECTED_HEADINGS = {"k1": ["Quicker TSLPatching", "Remastered Cutscenes"], "k2": ["Quicker TSLPatching"]}
 
 
 class SiblingLinkRestoreNameTests(unittest.TestCase):

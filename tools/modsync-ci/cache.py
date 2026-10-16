@@ -185,9 +185,34 @@ def referencing_steps(item):
     return steps
 
 
-def skippable_steps(item, sections):
+STEP_SCOPE = "::"
+
+
+def parse_allowance(value):
+    text = str(value)
+    if STEP_SCOPE not in text:
+        section = text.strip()
+        if not section:
+            raise ValueError("--allow-uncached-by-policy needs a non-empty section name")
+        return section, None
+    section, _, heading = text.partition(STEP_SCOPE)
+    section, heading = section.strip(), heading.strip()
+    if not section or not heading or STEP_SCOPE in heading:
+        raise ValueError("--allow-uncached-by-policy step form must be '<## section>::<### heading>': " + text)
+    return section, heading
+
+
+def skippable_steps(item, allowances):
+    sections, steps_allowed = set(), set()
+    for value in allowances:
+        section, heading = parse_allowance(value)
+        if heading is None:
+            sections.add(section)
+        else:
+            steps_allowed.add((section, heading))
     steps = referencing_steps(item)
-    outside = [step for step in steps if step["heading"] is None or step["section"] not in sections]
+    outside = [step for step in steps if step["heading"] is None or not (
+        step["section"] in sections or (step["section"], step["heading"]) in steps_allowed)]
     return steps, outside
 
 
@@ -442,6 +467,20 @@ def load_reviewed(path=None):
     return reviewed
 
 
+NEXUS_KEY = re.compile(r"^nexus:(?:([A-Za-z0-9_-]+)/)?([0-9]+)$")
+NEXUS_MOD = re.compile(r"^/([^/]+)/mods/([0-9]+)(?:/|$)")
+
+
+def uncached_key(key):
+    text = str(key).strip()
+    if text.startswith("nexus:"):
+        match = NEXUS_KEY.match(text)
+        if not match:
+            raise ValueError("uncached nexus key must look like nexus:<mod id> or nexus:<game>/<mod id>")
+        return "nexus:" + (match[1].lower() + "/" if match[1] else "") + match[2]
+    return selection_key(text)
+
+
 def load_uncached(path=None):
     path = Path(path or SELECTIONS_PATH)
     if not path.exists():
@@ -449,21 +488,27 @@ def load_uncached(path=None):
     document = json.loads(path.read_text(encoding="utf-8"))
     declared = document.get("uncached", {})
     if not isinstance(declared, dict):
-        raise ValueError("uncached must be an object keyed by DeadlyStream file id")
+        raise ValueError("uncached must be an object keyed by DeadlyStream file id or nexus:<mod id>")
     uncached = {}
     for key, value in declared.items():
         reason = value.get("reason") if isinstance(value, dict) else None
         if not isinstance(reason, str) or not reason.strip():
             raise ValueError("uncached entry for " + str(key) + " must carry a non-empty reason")
-        uncached[selection_key(key)] = reason.strip()
+        uncached[uncached_key(key)] = reason.strip()
     return uncached
 
 
 def uncached_reason(item, path=None):
-    if item["provider"] != "deadlystream":
-        return None
-    match = FILE_ID.search(urlsplit(item["url"]).path)
-    return load_uncached(path).get(match[1]) if match else None
+    if item["provider"] == "deadlystream":
+        match = FILE_ID.search(urlsplit(item["url"]).path)
+        return load_uncached(path).get(match[1]) if match else None
+    if item["provider"] == "nexus":
+        match = NEXUS_MOD.match(urlsplit(item["url"]).path)
+        if not match:
+            return None
+        declared = load_uncached(path)
+        return declared.get("nexus:" + match[1].lower() + "/" + match[2]) or declared.get("nexus:" + match[2])
+    return None
 
 
 def uncached_entry(item, reason):
@@ -1338,13 +1383,19 @@ def main(argv=None):
     parser.add_argument("--backend-timeout", type=float, default=1800)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--max-bytes", type=int, default=MAX_LINK_BYTES)
-    parser.add_argument("--allow-uncached-by-policy", action="append", default=[], metavar="SECTION",
+    parser.add_argument("--allow-uncached-by-policy", action="append", default=[], metavar="SECTION[::STEP]",
                         help="restore only: accept an uncached-by-policy link when every guide step that "
-                             "references it sits under this '##' section (repeatable); the lane must not "
-                             "install that section")
+                             "references it is covered by this value (repeatable): a '##' section name "
+                             "covers all of its '###' steps, '<## section>::<### heading>' covers only "
+                             "that one step; the lane must not install what is named")
     args = parser.parse_args(argv)
     if args.allow_uncached_by_policy and args.command != "restore":
         parser.error("--allow-uncached-by-policy is only valid with restore")
+    for allowance in args.allow_uncached_by_policy:
+        try:
+            parse_allowance(allowance)
+        except ValueError as error:
+            parser.error(str(error))
     if args.archive_map and args.command != "restore":
         parser.error("--archive-map is only valid with restore")
     if not 0 <= args.retries <= 5 or not 0 < args.max_age_days <= 14:
@@ -1433,13 +1484,13 @@ def main(argv=None):
             if policy:
                 entry = uncached_entry(item, policy)
                 if args.command == "restore" and args.allow_uncached_by_policy:
-                    steps, outside = skippable_steps(item, set(args.allow_uncached_by_policy))
+                    steps, outside = skippable_steps(item, args.allow_uncached_by_policy)
                     if steps and not outside:
                         entry.update(status=UNCACHED_SKIPPED, skipped_steps=steps)
                         report.setdefault("skipped_steps", []).extend(
                             {**step, "url": entry["url"], "reason": entry["reason"]} for step in steps)
                     else:
-                        entry["reason"] += "; referenced outside the allowed sections: " + json.dumps(
+                        entry["reason"] += "; referenced outside the allowed sections or steps: " + json.dumps(
                             outside or "no guide step", sort_keys=True)
                 report["entries"].append(entry)
                 if args.command == "refresh" and manifest["entries"].pop(item["id"], None) is not None:
