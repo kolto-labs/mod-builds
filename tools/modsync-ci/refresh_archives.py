@@ -7,8 +7,9 @@ under a 3 GiB disk reserve, uploads the object and manifest, then evicts it.
 Only sanitized totals are printed: no URLs, remote paths, rclone output or secrets.
 
 Exit codes: 0 run completed (unresolved links are totals, not errors) or cache not
-configured; 1 infrastructure failure (incomplete config, backend unreachable,
-corrupt manifest, persistence failed); 2 usage error.
+configured; 1 infrastructure failure (backend unreachable,
+corrupt manifest, persistence failed); 2 usage error. A partly configured backend
+is reported as a warning and exits 0 so a configuration gap cannot fail the pipeline.
 """
 import argparse
 import contextlib
@@ -74,7 +75,7 @@ def rclone(*args, timeout=600):
             message = diagnostics.read(65536).decode("utf-8", errors="replace").lower()
             error.failure_category = next((name for name, markers in FAILURE_MARKERS
                                            if any(marker in message for marker in markers)), "unclassified")
-            print("rclone", args[0], "failed:", message.strip().splitlines()[-1:] or "", file=sys.stderr)
+            print("rclone", args[0], "failed:", error.failure_category, f"(exit {error.returncode})", file=sys.stderr)
             raise
 
 
@@ -270,8 +271,8 @@ def main(argv=None):
         return 0
     bucket = os.environ.get("MOD_CACHE_BUCKET", "")
     if not all(configured) or not bucket:
-        print("Incomplete private backend configuration.", file=sys.stderr)
-        return 1
+        print("::warning::Archive cache backend is only partly configured; skipping refresh.")
+        return 0
     remote = f"MODCACHE:{bucket}/modsync-archives"
 
     guides = args.guide or ["content/k1/full.md", "content/k2/full.md"]

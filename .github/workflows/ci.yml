@@ -6,36 +6,36 @@ name: CI
 on:
   push:
     branches: [dev]
-    paths-ignore: ['**.md', '!content/**', 'meta.json', 'docs/**']
+    paths-ignore: ['docs/**', 'meta.json', 'README.md']
   pull_request:
   release:
     types: [published]
   schedule:
-    - cron: '23 4 * * 1'
+    - cron: '23 4 * * 1,4'
   workflow_dispatch:
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ci-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  # Fork pull requests get no secrets, so they skip every job (install jobs need game).
+  # Fork and dependabot pull requests get no secrets, so they skip every job (install jobs need game).
   game:
     name: game (${{ matrix.game }})
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
+      fail-fast: false
       max-parallel: 1  # one Steam account
       matrix:
         game: [k1, k2]
     env:
       GAME: ${{ matrix.game }}
       APP_ID: ${{ matrix.game == 'k1' && '32370' || '208580' }}
-      CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -47,7 +47,6 @@ jobs:
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: game-${{ matrix.game }}-v1
-          restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
           lookup-only: true
 
       - name: Download game with SteamCMD
@@ -56,20 +55,27 @@ jobs:
         env:
           STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
           STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
         run: |
-          echo "::notice::Approve the Steam sign-in in the Steam mobile app if prompted."
+          set -euo pipefail
           sudo apt-get install -y -qq lib32gcc-s1 >/dev/null
           mkdir -p "$RUNNER_TEMP/steamcmd"
           curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz | tar -xz -C "$RUNNER_TEMP/steamcmd"
-          # Each attempt sends a new approval request to the Steam mobile app.
-          for _ in 1 2 3; do
-            "$RUNNER_TEMP/steamcmd/steamcmd.sh" \
-              +@sSteamCmdForcePlatformType windows \
-              +force_install_dir "$RUNNER_TEMP/game" \
-              +login "$STEAM_USERNAME" "$STEAM_PASSWORD" \
-              +app_update "$APP_ID" validate \
-              +quit && test -f "$RUNNER_TEMP/game/chitin.key" && break
-          done
+          steamcmd="$RUNNER_TEMP/steamcmd/steamcmd.sh"
+          "$steamcmd" +quit </dev/null >/dev/null
+          options=(+@ShutdownOnFailedCommand 1 +@sSteamCmdForcePlatformType windows
+            +force_install_dir "$RUNNER_TEMP/game")
+          install=(+app_update "$APP_ID" validate +quit)
+          if [[ -n "$STEAM_CONFIG_VDF" ]]; then
+            umask 077
+            mkdir -p "$HOME/Steam/config"
+            printf '%s' "$STEAM_CONFIG_VDF" | base64 -d > "$HOME/Steam/config/config.vdf"
+            "$steamcmd" "${options[@]}" +@NoPromptForPassword 1 +login "$STEAM_USERNAME" "${install[@]}" </dev/null
+          else
+            printf '%s\n' "$STEAM_PASSWORD" | "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "${install[@]}"
+          fi
+          test -f "$RUNNER_TEMP/game/chitin.key"
           python tools/modsync-ci/game_cache.py pack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
 
@@ -81,18 +87,13 @@ jobs:
           key: game-${{ matrix.game }}-v1
 
   mods:
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event_name != 'pull_request'
+    continue-on-error: true  # a stale archive cache must never block the install lanes
+    concurrency:
+      group: mod-cache-writer
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 55
-    env:
-      RCLONE_CONFIG_MODCACHE_TYPE: s3
-      RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
-      RCLONE_CONFIG_MODCACHE_REGION: auto
-      RCLONE_CONFIG_MODCACHE_NO_CHECK_BUCKET: 'true'
-      RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_ACCESS_KEY_ID }}
-      RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_SECRET_ACCESS_KEY }}
-      RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
-      MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -102,11 +103,21 @@ jobs:
           sudo apt-get install -y -qq p7zip-full >/dev/null
           python3 tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone"
       - name: Download new or changed mod archives into the cache
+        env:
+          RCLONE_CONFIG_MODCACHE_TYPE: s3
+          RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
+          RCLONE_CONFIG_MODCACHE_REGION: auto
+          RCLONE_CONFIG_MODCACHE_NO_CHECK_BUCKET: 'true'
+          RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
+          MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: python tools/modsync-ci/refresh_archives.py --max-items 20
 
   install:
     name: install (${{ matrix.game }}, ${{ matrix.implementation }}, ${{ matrix.mode }})
     needs: [game, mods]
+    if: ${{ !cancelled() && needs.game.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
@@ -117,24 +128,35 @@ jobs:
         mode: [cli, gui]
     env:
       GAME: ${{ matrix.game }}
-      CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
-      RCLONE_CONFIG_MODCACHE_TYPE: s3
-      RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
-      RCLONE_CONFIG_MODCACHE_REGION: auto
-      RCLONE_CONFIG_MODCACHE_NO_CHECK_BUCKET: 'true'
-      RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_READ_ACCESS_KEY_ID }}
-      RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_READ_SECRET_ACCESS_KEY }}
-      RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
-      MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
 
+      - name: Resolve ModSync source repository
+        id: source
+        env:
+          IMPLEMENTATION: ${{ matrix.implementation }}
+          RUST_REPOSITORY: ${{ vars.MODSYNC_RS_REPOSITORY }}
+          TYPESCRIPT_REPOSITORY: ${{ vars.MODSYNC_TS_REPOSITORY }}
+          SOURCE_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ "$IMPLEMENTATION" == rust ]]; then repository="$RUST_REPOSITORY"; else repository="$TYPESCRIPT_REPOSITORY"; fi
+          if [[ -z "$repository" ]]; then
+            echo "::error::The repository variable for the $IMPLEMENTATION ModSync source is empty."
+            exit 1
+          fi
+          if [[ -z "$SOURCE_TOKEN" ]]; then
+            echo "::error::MODSYNC_SOURCE_TOKEN is empty."
+            exit 1
+          fi
+          echo "repository=$repository" >> "$GITHUB_OUTPUT"
+
       - name: Check out ModSync (${{ matrix.implementation }})
         uses: actions/checkout@v4
         with:
-          repository: ${{ matrix.implementation == 'rust' && vars.MODSYNC_RS_REPOSITORY || vars.MODSYNC_TS_REPOSITORY }}
+          repository: ${{ steps.source.outputs.repository }}
           token: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
           path: .modsync-source
           persist-credentials: false
@@ -170,14 +192,28 @@ jobs:
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: game-${{ matrix.game }}-v1
-          restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
-      - name: Unpack game and mod archives
+          fail-on-cache-miss: true
+      - name: Unpack game
+        env:
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
         run: |
           python tools/modsync-ci/game_cache.py unpack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
+      - name: Restore mod archives (best effort; a missing archive fails only the install step that needs it)
+        env:
+          RCLONE_CONFIG_MODCACHE_TYPE: s3
+          RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
+          RCLONE_CONFIG_MODCACHE_REGION: auto
+          RCLONE_CONFIG_MODCACHE_NO_CHECK_BUCKET: 'true'
+          RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_READ_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_READ_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
+          MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
+        run: |
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
             --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
-            --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
+            --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives" || echo "::warning::partial archive cache"
+          mkdir -p "$RUNNER_TEMP/archives"
 
       - name: Install the full guide
         env:
@@ -193,6 +229,7 @@ jobs:
   manual:
     name: manual (${{ matrix.game }})
     needs: [game, mods]
+    if: ${{ !cancelled() && needs.game.result == 'success' }}
     runs-on: ubuntu-latest
     timeout-minutes: 360
     strategy:
@@ -202,15 +239,6 @@ jobs:
     env:
       GAME: ${{ matrix.game }}
       PLAN: ci/${{ matrix.game }}-manual-plan.json
-      CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
-      RCLONE_CONFIG_MODCACHE_TYPE: s3
-      RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
-      RCLONE_CONFIG_MODCACHE_REGION: auto
-      RCLONE_CONFIG_MODCACHE_NO_CHECK_BUCKET: 'true'
-      RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_READ_ACCESS_KEY_ID }}
-      RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_READ_SECRET_ACCESS_KEY }}
-      RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
-      MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
       WINEPREFIX: /home/runner/.wine-modsync
       WINEDEBUG: '-all'
       WINEDLLOVERRIDES: 'mscoree,mshtml='
@@ -218,9 +246,17 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Require reviewed manual plan
-        run: test -f "$PLAN" || { echo "::error::Missing $PLAN (human-reviewed manual install plan)."; exit 1; }
+      - name: Check for a reviewed manual plan
+        id: plan
+        env:
+          HAS_PLAN: ${{ hashFiles(format('ci/{0}-manual-plan.json', matrix.game)) != '' }}
+        run: |
+          echo "present=$HAS_PLAN" >> "$GITHUB_OUTPUT"
+          if [[ "$HAS_PLAN" != true ]]; then
+            echo "::notice::Skipping manual install: $PLAN (human-reviewed manual install plan) is absent."
+          fi
       - name: Install Wine and tools, free disk space
+        if: steps.plan.outputs.present == 'true'
         run: |
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
           sudo dpkg --add-architecture i386
@@ -228,19 +264,37 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends wine wine64 wine32:i386 xvfb xauth p7zip-full >/dev/null
           python3 tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone"
       - name: Restore game cache
+        if: steps.plan.outputs.present == 'true'
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: game-${{ matrix.game }}-v1
-          restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
-      - name: Unpack game and mod archives
+          fail-on-cache-miss: true
+      - name: Unpack game
+        if: steps.plan.outputs.present == 'true'
+        env:
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
         run: |
           python tools/modsync-ci/game_cache.py unpack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
+      - name: Restore mod archives (best effort; a missing archive fails only the install step that needs it)
+        if: steps.plan.outputs.present == 'true'
+        env:
+          RCLONE_CONFIG_MODCACHE_TYPE: s3
+          RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
+          RCLONE_CONFIG_MODCACHE_REGION: auto
+          RCLONE_CONFIG_MODCACHE_NO_CHECK_BUCKET: 'true'
+          RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_READ_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_READ_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
+          MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
+        run: |
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
             --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
-            --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
+            --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives" || echo "::warning::partial archive cache"
+          mkdir -p "$RUNNER_TEMP/archives"
       - name: Install the full guide manually with the original patchers
+        if: steps.plan.outputs.present == 'true'
         run: |
           xvfb-run -a python tools/modsync-ci/manual.py --plan "$PLAN" \
             --guide "content/$GAME/full.md" --game-dir "$RUNNER_TEMP/game" \
