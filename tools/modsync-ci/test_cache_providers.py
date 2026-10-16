@@ -1260,5 +1260,13 @@ class DropboxTests(unittest.TestCase):
 
 
 
+class CommentFormRecaptchaTests(unittest.TestCase):
+    def test_guest_comment_form_is_not_a_challenge(self):
+        page = '<html><title>x</title><textarea id="g-recaptcha-response" class="g-recaptcha-response"></textarea></html>'
+        self.assertIsNone(cache.re.search(r"cf-turnstile|g-recaptcha(?!-response)|h-captcha", page, cache.re.I))
+        self.assertIsNotNone(cache.re.search(r"cf-turnstile|g-recaptcha(?!-response)|h-captcha",
+                                             '<div class="g-recaptcha" data-sitekey="k"></div>', cache.re.I))
+
+
 if __name__ == "__main__":
     unittest.main()

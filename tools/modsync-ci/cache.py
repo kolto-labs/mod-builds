@@ -521,7 +521,7 @@ def page_rows(response, item, selections=None):
     if len(body) > 2 * 1024 * 1024:
         raise ValueError("landing page too large")
     source = body.decode("utf-8", errors="replace")
-    if re.search(r"cf-turnstile|g-recaptcha|h-captcha|/cdn-cgi/challenge-platform|<title>\s*Just a moment", source, re.I):
+    if re.search(r"cf-turnstile|g-recaptcha(?!-response)|h-captcha|/cdn-cgi/challenge-platform|<title>\s*Just a moment", source, re.I):
         raise ValueError("provider challenge/CAPTCHA; blocked-pending-user-action")
     parser = Links()
     parser.feed(source)
