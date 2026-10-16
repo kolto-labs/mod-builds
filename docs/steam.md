@@ -20,8 +20,8 @@ Steam account. Fork and Dependabot pull requests get no secrets and skip it.
    signs in with `STEAM_USERNAME` and `STEAM_PASSWORD`, and Steam sends an
    approval request to the Steam mobile app. There is no retry.
 3. `tools/modsync-ci/game_cache.py pack` drops every `*.bik` movie, checks for
-   `chitin.key`, `dialog.tlk`, the game executable and `modules/`, records a
-   SHA-256 inventory, and encrypts the tree with `CACHE_ENCRYPTION_KEY`.
+   `chitin.key`, `dialog.tlk`, and the game executable, records a SHA-256
+   inventory, and encrypts the tree with `CACHE_ENCRYPTION_KEY`.
 4. Save the result under `game-<game>-v1`.
 
 The job fails only if the game is still missing after these steps. Nothing partial

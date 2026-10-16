@@ -37,8 +37,6 @@ def require_game(game, directory):
     for name in ("chitin.key", "dialog.tlk", EXECUTABLE[game]):
         if not (directory / name).is_file():
             raise SystemExit(f"{game} game is incomplete: {name} is missing")
-    if not any((directory / "modules").glob("*")):
-        raise SystemExit(f"{game} game is incomplete: modules/ is empty")
 
 
 def seal(command, source, destination):
