@@ -35,11 +35,11 @@ time.
 ## Refreshing: the `mods` job
 
 Skipped on pull requests. Marked `continue-on-error`, so a failure never blocks an
-install. Runs `tools/modsync-ci/refresh_archives.py --max-items 20`, on every push
+install. Runs `tools/modsync-ci/refresh_archives.py --max-items 500`, on every push
 to `dev`, on the Monday and Thursday schedule and on manual dispatch:
 
 1. Pull `manifest.json` from R2.
-2. Pick up to 20 due links from both full guides: never attempted first, then the
+2. Pick up to 500 due links from both full guides: never attempted first, then the
    oldest attempt. Stop early at the time limit or when under 3 GiB of disk is free.
 3. For each link, fetch it with `cache.py`, verify the archive, upload the object
    and the manifest, then delete the local copy.
