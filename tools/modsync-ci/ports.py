@@ -56,7 +56,39 @@ IMPLEMENTATION_SECTIONS = {
 }
 
 
-def coverage(guide, converted, report=None, implementation="rust"):
+SKIPPED_BY_POLICY = "skipped-by-reviewed-policy"
+SKIPPED_REPORT_KEY = "skipped_by_reviewed_policy"
+
+
+def load_policy_skips(path, guide):
+    """Read cache.py restore --report and return its reviewed skipped steps.
+
+    Each step is {guide, section, heading, url, reason}; steps naming the same
+    section and heading are merged into one record carrying every URL.
+    """
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(document, dict) or document.get("ok") is not True:
+        raise Blocked("restore_report_not_ok")
+    steps = document.get("skipped_steps", [])
+    if not isinstance(steps, list):
+        raise Blocked("restore_report_skipped_steps_invalid")
+    merged = {}
+    for step in steps:
+        if (not isinstance(step, dict)
+                or any(not isinstance(step.get(key), str) or not step[key].strip()
+                       for key in ("guide", "section", "heading", "url", "reason"))):
+            raise Blocked("restore_report_skipped_step_invalid")
+        if Path(step["guide"]).resolve() != guide:
+            raise Blocked("restore_report_guide_mismatch")
+        record = merged.setdefault((step["section"], step["heading"]), {
+            "section": step["section"], "heading": step["heading"],
+            "reason": step["reason"], "urls": []})
+        if step["url"] not in record["urls"]:
+            record["urls"].append(step["url"])
+    return list(merged.values())
+
+
+def coverage(guide, converted, report=None, implementation="rust", skipped=()):
     text = guide.read_text(encoding="utf-8")
     if implementation not in IMPLEMENTATION_SECTIONS:
         raise Blocked("implementation_unknown")
@@ -67,6 +99,8 @@ def coverage(guide, converted, report=None, implementation="rust"):
     } | IMPLEMENTATION_SECTIONS[implementation]
     section = None
     headings = []
+    steps = []
+    guide_steps = set()
     sections = {}
     for line in text.splitlines():
         if line.startswith("# "):
@@ -75,9 +109,12 @@ def coverage(guide, converted, report=None, implementation="rust"):
             section = line[3:].strip()
             if section in allowed_sections:
                 sections.setdefault(section, 0)
-        elif line.startswith("### ") and section in allowed_sections:
-            headings.append(line[4:].strip())
-            sections[section] += 1
+        elif line.startswith("### "):
+            guide_steps.add((section, line[4:].strip()))
+            if section in allowed_sections:
+                headings.append(line[4:].strip())
+                steps.append((section, line[4:].strip()))
+                sections[section] += 1
     if "Mod List" not in sections:
         raise Blocked("unsupported_guide_structure")
     document = tomllib.loads(converted.read_text(encoding="utf-8"))
@@ -90,8 +127,33 @@ def coverage(guide, converted, report=None, implementation="rust"):
         )
     if not headings or not isinstance(components, list) or len(components) != len(headings):
         raise Blocked("guide_component_coverage_mismatch")
-    if any(not isinstance(component, dict) or not component.get("Instructions")
-           for component in components):
+    exempt = set()
+    records = []
+    for skip in skipped:
+        key = (skip["section"], skip["heading"])
+        if key not in guide_steps:
+            raise Blocked("policy_skipped_step_not_in_guide")
+        record = {"status": SKIPPED_BY_POLICY, **skip, "component_guid": None}
+        if key in steps:
+            if steps.count(key) != 1:
+                raise Blocked("policy_skipped_step_ambiguous")
+            index = steps.index(key)
+            component = components[index]
+            if not isinstance(component, dict) or not component.get("Guid"):
+                raise Blocked("policy_skipped_component_unidentified")
+            identity = guid(component["Guid"])
+            if any(isinstance(other, dict) and identity in [
+                    str(each).lower() for each in other.get("Dependencies", [])]
+                   for other in components if other is not component):
+                raise Blocked("policy_skipped_component_has_dependents")
+            record["component_guid"] = identity
+            exempt.add(index)
+        records.append(record)
+    if report is not None:
+        report[SKIPPED_REPORT_KEY] = records
+    if any(index not in exempt and (not isinstance(component, dict)
+                                    or not component.get("Instructions"))
+           for index, component in enumerate(components)):
         raise Blocked("guide_steps_without_instructions")
     if any(component.get("Heading", component.get("Name")) != heading
            for component, heading in zip(components, headings)):
@@ -280,8 +342,19 @@ def execute(args, report):
         raise Blocked("guide_changed_during_conversion")
     report["converted_sha256"] = digest(converted)
     report["stage"] = "coverage"
+    skipped = []
+    if args.restore_report is not None:
+        if args.implementation != "rust":
+            raise Blocked("policy_skips_supported_for_rust_only")
+        skipped = load_policy_skips(args.restore_report.resolve(strict=True), guide)
     report["component_count"] = coverage(
-        guide, converted, report, args.implementation)
+        guide, converted, report, args.implementation, skipped)
+    deselect = []
+    for record in report.get(SKIPPED_REPORT_KEY, []):
+        if record["component_guid"] is not None:
+            deselect += ["--deselect", record["component_guid"]]
+    if deselect and args.mode == "gui":
+        raise Blocked("gui_cannot_deselect_policy_skipped_components")
     if args.implementation == "typescript":
         report["stage"] = "review"
         choices = review_manifest(args.review_manifest, guide, converted)
@@ -360,7 +433,7 @@ def execute(args, report):
         return
     directories = ["--input", str(converted), "--game-dir", str(game),
                    "--source-dir", str(archives)]
-    run(command + ["validate"] + directories,
+    run(command + ["validate"] + directories + deselect,
         source, private, "validate", report, env)
     if args.mode == "gui":
         if (digest(guide) != report["guide_sha256"]
@@ -400,7 +473,8 @@ def execute(args, report):
         report["status"] = "installed"
         report["reason"] = result["reason"]
         return
-    run(command + ["install"] + directories + ["--non-interactive", "--phase", "all"],
+    run(command + ["install"] + directories + deselect
+        + ["--non-interactive", "--phase", "all"],
         source, private, "install", report, env)
     report["status"] = "installed"
     report["reason"] = "native_install_command_succeeded"
@@ -414,6 +488,9 @@ def main(argv=None):
                         help="separately authored hash-bound JSON review (TypeScript required)")
     parser.add_argument("--archive-map", type=Path,
                         help="cache.py restore --archive-map JSON passed to the Rust convert (ignored by TypeScript)")
+    parser.add_argument("--restore-report", type=Path,
+                        help="cache.py restore --report JSON; its reviewed skipped_steps are exempted from "
+                             "coverage, recorded in the report and deselected (Rust only; TypeScript is refused)")
     for name in ("source", "guide", "game-dir", "archives", "work-dir", "report"):
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args(argv)

@@ -228,8 +228,9 @@ Today the list holds three reviewed entries:
 | `nexus:1214` | Quicker TSLPatching (Nexus mod 1214) | Windows registry helper; the guide documents that it does not work on Mac or Linux, and nothing in the build consumes its output | K1 and K2: `Optional Install Assistant - Quicker TSLPatching` / `Quicker TSLPatching` |
 | `nexus:1306` | KOTOR Remastered Cutscenes (Nexus mod 1306) | Tier 4 optional, loose movie `.bik` files, never cached; mutually exclusive with the installed Cutscenes Rescaled post (DeadlyStream 2380) | K1: `Optional Widescreen & Extended Widescreen Support Mods` / `Remastered Cutscenes` |
 
-Exact flag strings for a lane that proves it does not install those steps (not
-wired into any workflow yet, see [ci.md](ci.md#install-lanes-and-uncached-links)):
+Exact flag strings the Rust install lanes pass (wired in `ci.yml`; `ports.py`
+exempts, records and deselects the steps, see
+[ci.md](ci.md#install-lanes-and-uncached-links)):
 
 - K1 restore:
   `--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching" --allow-uncached-by-policy "Optional Widescreen & Extended Widescreen Support Mods::Remastered Cutscenes"`
@@ -374,8 +375,8 @@ is deliberately not seeded and not in `seed_pins.json`. It is listed under
 cached, by `game_cache.py` or by this archive cache. `cache.py restore` reports it
 as `uncached-by-policy` and exits 1 for the K2 guide.
 `--allow-uncached-by-policy "<section>"` is the opt-in escape for a lane that never
-installs the section holding the referencing step; it is not wired into any lane
-today (see [ci.md](ci.md#install-lanes-and-uncached-links)).
+installs the section holding the referencing step; the section form for this post
+is not wired into any lane (see [ci.md](ci.md#install-lanes-and-uncached-links)).
 
 ## Known gaps
 
@@ -402,5 +403,5 @@ Nexus or GameFront link above stays blocked.
   `--allow-uncached-by-policy "Enhanced Widescreen Support Mods"`. The only step
   that references the post is `K2 Cutscenes Rescaled` in that section. The CI game
   baseline has no movies, and no other guide step reads them. No lane passes the
-  flag today: the Rust CLI lane installs that section (see
+  flag: the Rust CLI lane installs that section (see
   [ci.md](ci.md#install-lanes-and-uncached-links)).

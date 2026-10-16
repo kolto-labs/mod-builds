@@ -15,7 +15,9 @@ Each lane:
 3. Restores archives with `cache.py restore --archive-map`. This is best effort; a missing
    archive fails the install step that needs it. See [cache.md](cache.md).
 4. Runs `ports.py`, passing `--review-manifest ci/<game>-<impl>-review.json` when
-   that file exists. TypeScript requires it; Rust ignores it.
+   that file exists. TypeScript requires it; Rust ignores it. Rust lanes also pass
+   `--restore-report`, the `cache.py restore --report` JSON of step 3 (see
+   [Reviewed policy skips](#reviewed-policy-skips)).
 
 Lanes run on Linux only: the adapters and GUI drivers are POSIX and Xvfb only.
 
@@ -47,9 +49,11 @@ Rust (`cargo build --locked --bin modsync`, isolated target directory):
 
 ```text
 convert full.md converted.toml --format toml --parse-directions
-validate --input converted.toml --game-dir GAME --source-dir ARCHIVES
-install --input converted.toml --game-dir GAME --source-dir ARCHIVES --non-interactive --phase all
+validate --input converted.toml --game-dir GAME --source-dir ARCHIVES [--deselect GUID ...]
+install --input converted.toml --game-dir GAME --source-dir ARCHIVES [--deselect GUID ...] --non-interactive --phase all
 ```
+
+`validate` takes the same `--deselect GUID` flags (see below).
 
 TypeScript (`pnpm build`, then the built CLI; the guide's parent directory selects
 `kotor1` or `kotor2`):
@@ -83,6 +87,45 @@ longer matches and must be reviewed again.
 
 The check is structural: it matches records, hashes and UUID coverage. It does not
 prove the review is correct and does not bypass the port's own install gates.
+
+## Reviewed policy skips
+
+Rust lanes restore with the reviewed Nexus `--allow-uncached-by-policy` flags
+(see [ci.md](ci.md#install-lanes-and-uncached-links)); the restore only asserts
+the link is skipped. `ports.py --restore-report restore-report.json` makes the lane
+guarantee it. It reads the report's `skipped_steps` (refusing a report that is not
+`ok` or names another guide) and, for each exact `<## section>::<### heading>`:
+
+- **Coverage.** The guide's component count and heading order checks are
+  unchanged. Only the converted component for that step is exempt from
+  `guide_steps_without_instructions` (it has none: no archive was restored for it,
+  so the converter cannot draft instructions). Every other component still needs
+  instructions. A step that is not a heading of the guide, appears twice in the
+  counted sections, or whose component another component lists in `Dependencies`
+  blocks the lane.
+- **Selection.** `validate` and `install` receive `--deselect <component Guid>`
+  for exactly those components. The Rust CLI selects every top-level component by
+  default and does not read `IsSelected` (no `--use-file-selection`), so the flag is
+  the control; `convert` has no deselect option and is unchanged.
+- **Report.** The lane report gets `skipped_by_reviewed_policy`: one record per
+  step with `status: "skipped-by-reviewed-policy"`, `section`, `heading`, the
+  restore `reason`, `urls`, and `component_guid` (`null` when the converter makes
+  no component for the step).
+
+Measured on the real guides with the Rust converter (`--parse-directions`; K1 has
+197 components, K2 151):
+
+| Step | Converter output |
+| --- | --- |
+| `Quicker TSLPatching` (K1, K2) | Not a component. Its `##` section is outside the counted sections (`Mod List` and the two widescreen sections), so it adds no heading and no component; recorded only, no deselect |
+| K1 `Remastered Cutscenes` | Component 197 of 197: `IsSelected = true`, `WidescreenOnly = true`, no `Instructions`, no `Options`, `DraftReview.RequiresReview = true` with `DraftInstructionCount = 0`. Even with `--auto-generate-local` and an archive map it stays instruction-free (`No matching archive found for '1306'`). Selected and not deselected, validate stops with `unreviewed draft instructions`; deselected on its own, validate reports `No components are selected` |
+
+`--restore-report` is refused for `--implementation typescript`
+(`policy_skips_supported_for_rust_only`): those lanes have no deselect mechanism
+and `validate --all` would select the step, so `ci.yml` does not pass the flags to
+them. The Rust `gui` lane also stops (`gui_cannot_deselect_policy_skipped_components`)
+when a component would need deselecting, because `gui_rust.py` takes no selection
+argument; K1 `gui` already stops on its widescreen-only components.
 
 ## GUI mode
 

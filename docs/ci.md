@@ -58,10 +58,12 @@ lane stops before `ports.py`. The install job's restore also writes
 filenames relative to the archives directory, restored links only. `ports.py
 --archive-map` passes it to the Rust `modsync convert --archive-map`; the
 TypeScript lanes ignore it. The install lanes never acquire a link the cache has
-not already recorded; only `mods` does. Today that means every lane stops at
-restore for a guide that contains an uncached link (Nexus Mods, GameFront and the
-K2 cutscene post, reported as `uncached-by-policy`; see
-[cache.md](cache.md#known-gaps)).
+not already recorded; only `mods` does. A guide link that is uncached by policy
+(Nexus Mods, GameFront and the K2 cutscene post, reported as `uncached-by-policy`;
+see [cache.md](cache.md#known-gaps)) stops restore unless the lane passes
+`--allow-uncached-by-policy` for it; the Rust lanes do so for the reviewed Nexus
+steps below. The restore also writes `$RUNNER_TEMP/restore-report.json`
+(`--report`), which Rust lanes hand to `ports.py --restore-report`.
 
 ### Install lanes and uncached links
 
@@ -79,26 +81,33 @@ named section or step may pass it. Checked against the lane code on the current
 | `typescript` + `cli`/`gui` | Not selected for install (`select_base_components`), but `validate --all` selects every mod, and both lanes require a reviewed manifest and an installer that is unavailable | Not wired |
 | `manual` | Unknown: depends on the human-reviewed `ci/<game>-manual-plan.json`, which does not exist | Not wired |
 
-Reviewed policy for the Nexus links (step-scoped, **not wired yet**: no workflow
-passes these, pending a check that the Rust and TypeScript converters leave the
-steps unselected and not installable):
+Reviewed policy for the Nexus links (step-scoped). **Wired for the Rust install
+lanes** (`rust` + `cli` and `rust` + `gui`) in the `Restore required mod archives`
+step; the `manual` lane and the TypeScript lanes do not pass them:
 
 | Link | Game | Step (`##` / `###`) | Reason |
 | --- | --- | --- | --- |
-| `nexus:1214` Quicker TSLPatching | K1, K2 | `Optional Install Assistant - Quicker TSLPatching` / `Quicker TSLPatching` | Windows registry helper, documented not to work on Mac or Linux; nothing consumes its output |
-| `nexus:1306` Remastered Cutscenes | K1 | `Optional Widescreen & Extended Widescreen Support Mods` / `Remastered Cutscenes` | Tier 4 optional loose `.bik` movies, never cached; mutually exclusive with the installed Cutscenes Rescaled post (DeadlyStream 2380) |
+| `nexus:1214` Quicker TSLPatching | K1, K2 | `Optional Install Assistant - Quicker TSLPatching` / `Quicker TSLPatching` | Windows registry helper, documented not to work on Mac or Linux; nothing consumes its output. Not a component in the converter output |
+| `nexus:1306` Remastered Cutscenes | K1 | `Optional Widescreen & Extended Widescreen Support Mods` / `Remastered Cutscenes` | Tier 4 optional loose `.bik` movies, never cached; mutually exclusive with the installed Cutscenes Rescaled post (DeadlyStream 2380). A selected, widescreen-only component without instructions in the converter output |
 
-Flag strings, when a lane is cleared to use them:
+Flags `ci.yml` passes to `cache.py restore` in Rust lanes:
 
 - K1: `--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching" --allow-uncached-by-policy "Optional Widescreen & Extended Widescreen Support Mods::Remastered Cutscenes"`
 - K2: `--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching"`
 
-Every other Nexus and GameFront link, and K2 post 2503 without its own section
-flag, still fails restore.
+Restore only asserts the skip. `ports.py --restore-report` makes the lane enforce
+it: the skipped steps are exempted from the `guide_steps_without_instructions`
+coverage check, recorded in the lane report as `skipped_by_reviewed_policy`, and
+their components are passed to `validate` and `install` as `--deselect <Guid>`;
+see [ports.md](ports.md#reviewed-policy-skips) for the converter evidence.
 
-No workflow step passes the flag today. The restore report (`--report`) is where a
-skipped step is recorded; a lane that passes the flag must keep that report with
-its other artifacts.
+K2 `Enhanced Widescreen Support Mods` (post 2503) is **not** allowed in any lane:
+the section flag is an open decision, so the K2 Rust lanes still stop at restore
+on that link. Every other Nexus and GameFront link also still fails restore.
+
+The `typescript` lanes get neither the flags nor `--restore-report`: they require
+a reviewed manifest that does not exist and cannot complete an install, and
+`validate --all` would select the skipped step.
 
 - **`typescript` lanes** first require `ci/<game>-typescript-review.json`, a
   human-reviewed manifest. If it is missing, the job fails; it never passes

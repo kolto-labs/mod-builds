@@ -364,16 +364,27 @@ jobs:
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
           set +e
+          # Reviewed Nexus policy skips (docs/ci.md). Rust lanes only: ports.py deselects
+          # the skipped component; the TypeScript lanes have no deselect mechanism.
+          policy=()
+          if [[ '${{ matrix.implementation }}' == rust ]]; then
+            policy+=(--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching")
+            if [[ "$GAME" == k1 ]]; then
+              policy+=(--allow-uncached-by-policy "Optional Widescreen & Extended Widescreen Support Mods::Remastered Cutscenes")
+            fi
+          fi
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
             --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
-            --archive-map "$RUNNER_TEMP/archive-map.json" \
+            --archive-map "$RUNNER_TEMP/archive-map.json" --report "$RUNNER_TEMP/restore-report.json" \
+            "${policy[@]}" \
             --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
           remote_status=$?
           if [[ "$remote_status" -ne 0 ]]; then
             echo "::warning::R2 restore or repair persistence failed; retrying from the local verified cache."
             python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
               --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
-              --archive-map "$RUNNER_TEMP/archive-map.json"
+              --archive-map "$RUNNER_TEMP/archive-map.json" --report "$RUNNER_TEMP/restore-report.json" \
+              "${policy[@]}"
             local_status=$?
             if [[ "$local_status" -ne 0 ]]; then exit "$local_status"; fi
           fi
@@ -383,6 +394,7 @@ jobs:
           REVIEW: ci/${{ matrix.game }}-${{ matrix.implementation }}-review.json
         run: |
           review=(); if [[ -f "$REVIEW" ]]; then review=(--review-manifest "$REVIEW"); fi
+          if [[ '${{ matrix.implementation }}' == rust ]]; then review+=(--restore-report "$RUNNER_TEMP/restore-report.json"); fi
           python tools/modsync-ci/ports.py \
             --implementation '${{ matrix.implementation }}' --mode '${{ matrix.mode }}' \
             --source .modsync-source --guide "content/$GAME/full.md" \
