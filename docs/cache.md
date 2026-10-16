@@ -115,6 +115,20 @@ If any link remains unresolved or uncached by policy, the command exits 1 and th
 restore step, before any install work. A lane therefore cannot start with a
 guide whose archives are not all present.
 
+The one exception is opt-in and per lane: `--allow-uncached-by-policy SECTION`
+(repeatable, `restore` only). `SECTION` is the exact `##` heading of a guide
+section the lane does not install. A policy-uncached link is then reported as
+`uncached-skipped` and does not fail the command only if every `###` step that
+references it sits under one of the named sections. A reference in any other
+section, under no `###` step, or in no step at all keeps `uncached-by-policy`
+and exit 1; so does every unresolved link that is not on the `uncached` list.
+The report lists each skipped step in a top-level `skipped_steps` array
+(`guide`, `section`, `heading`, `url`, `reason`), and the entry carries the same
+steps in `skipped_steps`. Use `--report` to keep it with the lane's artifacts.
+The flag asserts what the lane installs; restore cannot check that, so pass it
+only after confirming the lane never installs the named section (see
+[ci.md](ci.md#install-lanes-and-uncached-links)).
+
 ## Freshness and providers
 
 - A conditional GET (ETag or Last-Modified) answered with 304 for a verified
@@ -176,7 +190,8 @@ fetched, never uploaded and never restored:
 - `cache.py refresh` reports `uncached-by-policy` (not a failure), `import-existing`
   never copies it, and `refresh_one` raises before opening a connection.
 - `cache.py restore` reports `uncached-by-policy` and exits 1 (fail-closed, see
-  above).
+  above) unless `--allow-uncached-by-policy` names the section holding every
+  step that references the link; the status is then `uncached-skipped`.
 
 Today the list holds one post, K2 file 2503: Bink video, about 25.7 GB for the
 pinned main and `_mods` files. Its `selections` entry stays so the exact files are
@@ -224,6 +239,9 @@ around.
   its `_mods` file, 1920x1080 at 30fps. The two together are about 25.7 GB of Bink
   video. It is listed under `uncached` (see
   [Never cached by policy](#never-cached-by-policy)), so restore reports
-  `uncached-by-policy` and fails for the K2 guide. The CI game baseline has no
-  movies, and no other guide step reads them; the step has no archive-free
-  substitute in the lanes yet.
+  `uncached-by-policy` and fails for the K2 guide unless the lane passes
+  `--allow-uncached-by-policy "Enhanced Widescreen Support Mods"`. The only step
+  that references the post is `K2 Cutscenes Rescaled` in that section. The CI game
+  baseline has no movies, and no other guide step reads them. No lane passes the
+  flag today: the Rust CLI lane installs that section (see
+  [ci.md](ci.md#install-lanes-and-uncached-links)).

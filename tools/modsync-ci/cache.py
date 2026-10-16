@@ -43,6 +43,7 @@ PIN_PROVENANCE = "operator-local-download"
 PIN_EXTENSIONS = ("zip", "7z", "rar", LOOSE)
 SHA256 = re.compile(r"[a-f0-9]{64}")
 UNCACHED = "uncached-by-policy"
+UNCACHED_SKIPPED = "uncached-skipped"
 MAX_LINK_BYTES = 20 * 1024 ** 3
 NEXUS_REASON = "nexus requires NEXUS_API_KEY (no headless adapter; CAPTCHA is never bypassed); blocked-pending-user-action"
 
@@ -130,16 +131,23 @@ def version_id(url):
     return match[1] if match else None
 
 
+def guide_source(guide):
+    source = Path(guide).read_text(encoding="utf-8")
+    source = re.sub(r"```.*?```|~~~.*?~~~", "", source, flags=re.S)
+    return re.sub(r"`[^`\n]*`", "", source)
+
+
+def link_urls(source):
+    for match in LINK.finditer(source):
+        url = html.unescape(next(value for value in match.groups() if value)).strip("<>")
+        if url.startswith(("https://", "http://")):
+            yield url
+
+
 def discover(guides):
     found = {}
     for guide in guides:
-        source = Path(guide).read_text(encoding="utf-8")
-        source = re.sub(r"```.*?```|~~~.*?~~~", "", source, flags=re.S)
-        source = re.sub(r"`[^`\n]*`", "", source)
-        for match in LINK.finditer(source):
-            url = html.unescape(next(value for value in match.groups() if value)).strip("<>")
-            if not url.startswith(("https://", "http://")):
-                continue
+        for url in link_urls(guide_source(guide)):
             checked_url(url)
             if not archive_link(url):
                 continue
@@ -151,6 +159,36 @@ def discover(guides):
             if str(guide) not in found[identity]["guides"]:
                 found[identity]["guides"].append(str(guide))
     return list(found.values())
+
+
+def referencing_steps(item):
+    steps = []
+    for guide in item["guides"]:
+        section = heading = None
+        blocks = [(None, None, [])]
+        for line in guide_source(guide).splitlines(keepends=True):
+            if line.startswith("# "):
+                section = heading = None
+            elif line.startswith("## "):
+                section, heading = line[3:].strip(), None
+            elif line.startswith("### "):
+                heading = line[4:].strip()
+            else:
+                blocks[-1][2].append(line)
+                continue
+            blocks.append((section, heading, []))
+        for section, heading, lines in blocks:
+            if item["url"] in set(link_urls("".join(lines))):
+                step = {"guide": str(guide), "section": section, "heading": heading}
+                if step not in steps:
+                    steps.append(step)
+    return steps
+
+
+def skippable_steps(item, sections):
+    steps = referencing_steps(item)
+    outside = [step for step in steps if step["heading"] is None or step["section"] not in sections]
+    return steps, outside
 
 
 def atomic_json(path, value):
@@ -1236,7 +1274,13 @@ def main(argv=None):
     parser.add_argument("--backend-timeout", type=float, default=1800)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--max-bytes", type=int, default=MAX_LINK_BYTES)
+    parser.add_argument("--allow-uncached-by-policy", action="append", default=[], metavar="SECTION",
+                        help="restore only: accept an uncached-by-policy link when every guide step that "
+                             "references it sits under this '##' section (repeatable); the lane must not "
+                             "install that section")
     args = parser.parse_args(argv)
+    if args.allow_uncached_by_policy and args.command != "restore":
+        parser.error("--allow-uncached-by-policy is only valid with restore")
     if not 0 <= args.retries <= 5 or not 0 < args.max_age_days <= 14:
         parser.error("retries must be 0..5; max-age-days must be >0 and <=14")
     if any(value <= 0 for value in (args.timeout, args.download_timeout, args.integrity_timeout,
@@ -1320,7 +1364,17 @@ def main(argv=None):
             entry = {"id": item["id"], "url": clean_url(item["url"]), "provider": item["provider"]}
             policy = uncached_reason(item)
             if policy:
-                report["entries"].append(uncached_entry(item, policy))
+                entry = uncached_entry(item, policy)
+                if args.command == "restore" and args.allow_uncached_by_policy:
+                    steps, outside = skippable_steps(item, set(args.allow_uncached_by_policy))
+                    if steps and not outside:
+                        entry.update(status=UNCACHED_SKIPPED, skipped_steps=steps)
+                        report.setdefault("skipped_steps", []).extend(
+                            {**step, "url": entry["url"], "reason": entry["reason"]} for step in steps)
+                    else:
+                        entry["reason"] += "; referenced outside the allowed sections: " + json.dumps(
+                            outside or "no guide step", sort_keys=True)
+                report["entries"].append(entry)
                 if args.command == "refresh" and manifest["entries"].pop(item["id"], None) is not None:
                     atomic_json(manifest_path, manifest)
                 continue
@@ -1377,7 +1431,8 @@ def main(argv=None):
         elif repaired:
             rclone(args, "push", root)
     if args.command != "import-existing":
-        accepted = ("fresh", "verified", "restored", "pinned") + ((UNCACHED,) if args.command == "refresh" else ())
+        accepted = ("fresh", "verified", "restored", "pinned") + (
+            (UNCACHED,) if args.command == "refresh" else (UNCACHED_SKIPPED,) if args.command == "restore" else ())
         report["ok"] = all(entry.get("status") in accepted
                            for entry in report["entries"]) if args.command != "discover" else True
     if args.report:

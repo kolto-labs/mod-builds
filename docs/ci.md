@@ -58,6 +58,25 @@ restore for a guide that contains an uncached link (Nexus Mods, GameFront and th
 K2 cutscene post, reported as `uncached-by-policy`; see
 [cache.md](cache.md#known-gaps)).
 
+### Install lanes and uncached links
+
+`cache.py restore --allow-uncached-by-policy SECTION` lets a lane proceed past a
+policy-uncached link (see [cache.md](cache.md#restoring-install-and-manual-jobs)) when every guide step that
+references it is in a section the lane does not install. Only a lane that never
+installs that section may pass it. Checked against the lane code on the current
+`ModSync.rs` and `ModSync.ts` sources:
+
+| Lane | Installs the K2 `Enhanced Widescreen Support Mods` section? | Flag |
+| --- | --- | --- |
+| `rust` + `cli` | Yes. `ports.py` runs `install --phase all`; the converter leaves widescreen components selected (`IsSelected = true`, `WidescreenOnly = true`) | Not allowed |
+| `rust` + `gui` | No, but only because `gui_rust.py` refuses any input with widescreen-only components, so the K2 lane cannot complete | Not wired |
+| `typescript` + `cli`/`gui` | Not selected for install (`select_base_components`), but `validate --all` selects every mod, and both lanes require a reviewed manifest and an installer that is unavailable | Not wired |
+| `manual` | Unknown: depends on the human-reviewed `ci/<game>-manual-plan.json`, which does not exist | Not wired |
+
+No workflow step passes the flag today. The restore report (`--report`) is where a
+skipped step is recorded; a lane that passes the flag must keep that report with
+its other artifacts.
+
 - **`typescript` lanes** first require `ci/<game>-typescript-review.json`, a
   human-reviewed manifest. If it is missing, the job fails; it never passes
   without one. `ports.py` then validates it against the guide hashes. Even with a

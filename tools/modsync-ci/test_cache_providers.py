@@ -1321,6 +1321,85 @@ class UncachedPolicyTests(MultiFileFixture):
         self.assertIn("not cached by policy", report["entries"][0]["reason"])
         self.assertFalse(self.destination.exists() and any(self.destination.iterdir()))
 
+    WIDE = "Widescreen Section"
+
+    def guide_with(self, base_steps="", wide_steps=""):
+        self.guide.write_text(
+            "# Guide\n\n## Base Section\n\n### Base Step\n\n" + base_steps
+            + "\n## %s\n\n### Wide Step\n\n[mod](%s)\n\n" % (self.WIDE, POST_URL) + wide_steps,
+            encoding="utf-8")
+
+    def restore_allowing(self, *sections):
+        extra = [value for section in sections for value in ("--allow-uncached-by-policy", section)]
+        report_path = self.base / "report.json"
+        with mock.patch.object(cache, "request", side_effect=AssertionError("network used")):
+            code, report = self.run_main("restore", "--destination", str(self.destination), "--retries", "0",
+                                         "--report", str(report_path), *extra)
+        self.assertEqual(json.loads(report_path.read_text()), report)
+        return code, report
+
+    def test_allowed_section_skips_the_link_and_records_the_step(self):
+        self.guide_with()
+        code, report = self.restore_allowing(self.WIDE)
+        self.assertEqual(code, 0)
+        self.assertTrue(report["ok"])
+        self.assertEqual([entry["status"] for entry in report["entries"]], [cache.UNCACHED_SKIPPED])
+        step = {"guide": str(self.guide), "section": self.WIDE, "heading": "Wide Step"}
+        self.assertEqual(report["entries"][0]["skipped_steps"], [step])
+        self.assertEqual(report["skipped_steps"], [{**step, "url": POST_URL, "reason": report["entries"][0]["reason"]}])
+        self.assertIn(self.REASON, report["skipped_steps"][0]["reason"])
+        self.assertFalse(self.destination.exists() and any(self.destination.iterdir()))
+
+    def test_without_the_flag_the_same_guide_still_fails(self):
+        self.guide_with()
+        code, report = self.run_main("restore", "--destination", str(self.destination), "--retries", "0")
+        self.assertEqual(code, 1)
+        self.assertEqual([entry["status"] for entry in report["entries"]], [cache.UNCACHED])
+        self.assertNotIn("skipped_steps", report)
+
+    def test_reference_outside_the_allowed_section_still_fails(self):
+        self.guide_with(base_steps="[mod](%s)\n" % POST_URL)
+        code, report = self.restore_allowing(self.WIDE)
+        self.assertEqual(code, 1)
+        self.assertEqual([entry["status"] for entry in report["entries"]], [cache.UNCACHED])
+        self.assertIn("Base Step", report["entries"][0]["reason"])
+        self.assertNotIn("skipped_steps", report)
+
+    def test_other_section_name_does_not_allow_the_link(self):
+        self.guide_with()
+        code, report = self.restore_allowing("Base Section")
+        self.assertEqual(code, 1)
+        self.assertEqual([entry["status"] for entry in report["entries"]], [cache.UNCACHED])
+
+    def test_reference_outside_any_step_still_fails(self):
+        self.guide.write_text("[mod](%s)\n\n## %s\n\nprose\n" % (POST_URL, self.WIDE), encoding="utf-8")
+        code, report = self.restore_allowing(self.WIDE)
+        self.assertEqual(code, 1)
+        self.assertEqual([entry["status"] for entry in report["entries"]], [cache.UNCACHED])
+
+    def test_an_unrelated_unresolved_link_still_fails_when_policy_links_are_skipped(self):
+        self.guide_with(base_steps="[other](%s)\n" % OTHER_URL)
+        code, report = self.restore_allowing(self.WIDE)
+        self.assertEqual(code, 1)
+        statuses = {entry["url"]: entry["status"] for entry in report["entries"]}
+        self.assertEqual(statuses, {POST_URL: cache.UNCACHED_SKIPPED, OTHER_URL: "unresolved"})
+
+    def test_flag_is_restore_only(self):
+        self.guide_with()
+        for command in ("refresh", "discover", "import-existing"):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                cache.main([command, "--guide", str(self.guide), "--cache-dir", str(self.root),
+                            "--allow-uncached-by-policy", self.WIDE])
+
+    def test_shipped_policy_link_is_only_in_the_k2_widescreen_section(self):
+        guide = Path(cache.__file__).resolve().parents[2] / "content" / "k2" / "full.md"
+        item = next(each for each in cache.discover([str(guide)])
+                    if cache.uncached_reason(each, Path(cache.__file__).with_name("archive_selections.json")))
+        steps, outside = cache.skippable_steps(item, {"Enhanced Widescreen Support Mods"})
+        self.assertEqual([step["section"] for step in steps], ["Enhanced Widescreen Support Mods"])
+        self.assertTrue(steps[0]["heading"])
+        self.assertEqual(outside, [])
+
     def test_import_existing_does_not_copy_a_policy_listed_link(self):
         entry = cache.import_existing(self.item, {}, self.base, self.root, args_for())
         self.assertEqual(entry["status"], cache.UNCACHED)
