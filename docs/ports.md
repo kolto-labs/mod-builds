@@ -158,11 +158,15 @@ component: `ComponentGuid`, `ComponentName`, `Success`, `InstructionsGenerated`,
 
 Causes: `no_archive_matched`, `mapped_file_missing` (the `--archive-map` file is not in
 the archive directory), `reader_rejection` (no supported files or patcher data, bounds,
-unsafe names), `patcher_path_refusal` (patcher tree without an identifiable installer
+unsafe names, archive links and special files, invalid UTF-8 names or streams),
+`skipped_by_reviewed_policy` (a converter skip of a component that is exempt under
+[Reviewed policy skips](#reviewed-policy-skips), matched by GUID, so it is never counted
+as `no_archive_matched`), `patcher_path_refusal` (patcher tree without an identifiable installer
 executable), `already_had_instructions`, `no_mod_links`, and `other` for wording this
 table does not know.
 
-The same information goes to stderr, so one CI log read is enough:
+The same information goes to stderr, so one CI log read is enough (reviewed-policy skips
+are summarised separately as `; reviewed-policy-skipped=N`):
 
 ```text
 ports: convert generated instructions for 0 of 197 components; not generated: already_had_instructions=44, no_archive_matched=153

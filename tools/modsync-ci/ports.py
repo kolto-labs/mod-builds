@@ -58,8 +58,11 @@ SKIP_CAUSES = (
     ("no_archive_matched", ("no matching archive",)),
     ("patcher_path_refusal", ("patcher tree", "installer", "namespace")),
     ("reader_rejection", ("no supported", "exceeds", "unsafe", "does not exist",
-                          "no extension", "not utf-8")),
+                          "no extension", "not utf-8", "invalid utf-8", "non-utf8",
+                          "stream did not contain valid utf-8",
+                          "archive links and special files")),
 )
+POLICY_CAUSE = "skipped_by_reviewed_policy"
 
 
 def skip_cause(reason):
@@ -100,13 +103,31 @@ def record_convert_skips(log, report):
         "components": [item for item in skipped if item["cause"] != "already_had_instructions"]}
 
 
+def reclassify_policy_skips(report, guids):
+    """Move converter skips of reviewed-policy components out of their converter cause bucket."""
+    skips = report.get("convert_skips")
+    if not skips or not guids:
+        return
+    for item in skips["components"]:
+        if item["component_guid"] in guids and item["cause"] != POLICY_CAUSE:
+            counts = skips["by_cause"]
+            counts[item["cause"]] -= 1
+            if not counts[item["cause"]]:
+                del counts[item["cause"]]
+            item["cause"] = POLICY_CAUSE
+            counts[POLICY_CAUSE] = counts.get(POLICY_CAUSE, 0) + 1
+
+
 def print_diagnostics(report):
     """Put the skip causes and every uncovered step in the CI log so one read is enough."""
     skips = report.get("convert_skips")
     if skips:
-        causes = ", ".join(f"{cause}={count}" for cause, count in sorted(skips["by_cause"].items()))
+        causes = ", ".join(f"{cause}={count}" for cause, count in sorted(skips["by_cause"].items())
+                           if cause != POLICY_CAUSE)
+        policy = skips["by_cause"].get(POLICY_CAUSE)
+        suffix = f"; reviewed-policy-skipped={policy}" if policy else ""
         print(f"ports: convert generated instructions for {skips['generated']} of {skips['total']}"
-              f" components; not generated: {causes or 'none'}", file=sys.stderr)
+              f" components; not generated: {causes or 'none'}{suffix}", file=sys.stderr)
     uncovered = report.get("steps_without_instructions")
     if uncovered:
         print(f"::error::ports: {len(uncovered)} guide steps have no instructions", file=sys.stderr)
@@ -231,6 +252,8 @@ def coverage(guide, converted, report=None, implementation="rust", skipped=()):
         records.append(record)
     if report is not None:
         report[SKIPPED_REPORT_KEY] = records
+        reclassify_policy_skips(report, {record["component_guid"] for record in records
+                                         if record["component_guid"] is not None})
     uncovered = [index for index, component in enumerate(components)
                  if index not in exempt and (not isinstance(component, dict)
                                              or not component.get("Instructions"))]

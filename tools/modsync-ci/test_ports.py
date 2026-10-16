@@ -415,6 +415,53 @@ class ConvertSkipReportTests(unittest.TestCase):
                          ["Mod Two", "Mod Three", "Mod Four", "Mod Five"])
         self.assertEqual(ports.skip_cause("something new"), "other")
 
+    def test_reader_wording_variants_are_reader_rejections_and_unknown_stays_other(self):
+        for reason in ("Archive links and special files are forbidden",
+                       "entry 'a.bin' has invalid UTF-8 name",
+                       "non-utf8 entry name",
+                       "stream did not contain valid UTF-8"):
+            self.assertEqual(ports.skip_cause(reason), "reader_rejection", reason)
+        self.assertEqual(ports.skip_cause("unrecognised wording"), "other")
+
+    def test_reviewed_policy_components_get_their_own_bucket_and_summary(self):
+        guide = self.directory / "full.md"
+        guide.write_text(GUIDE_WITH_HELPER, encoding="utf-8")
+        converted = self.directory / "converted.toml"
+        converted.write_text(document(
+            component("Mod One", "40000000-0000-0000-0000-000000000001"),
+            "[[thisMod]]\nGuid = \"40000000-0000-0000-0000-000000000002\"\nName = \"Mod Two\"\n"
+            "IsSelected = false\n",
+            "[[thisMod]]\nGuid = \"" + MOVIES_GUID + "\"\nName = \"Loose Movies\"\n"
+            "IsSelected = true\nWidescreenOnly = true\n"), encoding="utf-8")
+        results = [
+            {"ComponentGuid": "40000000-0000-0000-0000-000000000001", "ComponentName": "Mod One",
+             "Success": True, "InstructionsGenerated": 1, "SkipReason": ""},
+            {"ComponentGuid": MOVIES_GUID.upper(), "ComponentName": "Loose Movies",
+             "Success": False, "InstructionsGenerated": 0,
+             "SkipReason": "No matching archive found for 'loose-movies'"},
+            {"ComponentGuid": "40000000-0000-0000-0000-000000000002", "ComponentName": "Mod Two",
+             "Success": False, "InstructionsGenerated": 0,
+             "SkipReason": "No matching archive found for 'mod-two'"},
+        ]
+        report = {}
+        ports.record_convert_skips(convert_log(self.directory / "convert.log", results), report)
+        report_path = restore_report(self.directory / "restore.json", guide.resolve(), MOVIES)
+        skips = ports.load_policy_skips(report_path, guide.resolve())
+        with self.assertRaisesRegex(ports.Blocked, "guide_steps_without_instructions"):
+            ports.coverage(guide, converted, report, "rust", skips)
+        self.assertEqual(report["convert_skips"]["by_cause"],
+                         {"no_archive_matched": 1, "skipped_by_reviewed_policy": 1})
+        self.assertEqual([item["cause"] for item in report["convert_skips"]["components"]],
+                         ["skipped_by_reviewed_policy", "no_archive_matched"])
+        self.assertEqual([step["heading"] for step in report["steps_without_instructions"]],
+                         ["Mod Two"])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        text = stderr.getvalue()
+        self.assertIn("not generated: no_archive_matched=1; reviewed-policy-skipped=1", text)
+        self.assertIn("- Mod Two [40000000-0000-0000-0000-000000000002]", text)
+
     def test_missing_or_unparseable_log_records_nothing(self):
         report = {}
         ports.record_convert_skips(self.directory / "absent.log", report)
