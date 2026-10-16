@@ -32,6 +32,9 @@ LINK = re.compile(r'\[[^\]]*\]\(\s*(<[^>]+>|[^\s)]+)(?:\s+[^)]*)?\)|<((?:https?)
 HTTP = build_opener(HTTPCookieProcessor(CookieJar()))
 DISK_RESERVE_BYTES = 3 * 1024 ** 3
 MIN_TOOL_ARCHIVE_BYTES = 64
+LOOSE = "file"
+LOOSE_SUFFIX = re.compile(r"\.[A-Za-z0-9]{1,8}$")
+HTML_REJECTED = "not a supported archive (HTML and unknown payloads rejected)"
 TOOL_PROVIDERS = ("mega", "google-drive")
 NEXUS_REASON = "nexus requires NEXUS_API_KEY (no headless adapter; CAPTCHA is never bypassed); blocked-pending-user-action"
 
@@ -154,9 +157,15 @@ def digest(path):
     return result.hexdigest()
 
 
-def validate(path, timeout):
+def validate(path, timeout, loose=False):
     with path.open("rb") as stream:
         magic = stream.read(512)
+    if loose:
+        if path.stat().st_size < MIN_TOOL_ARCHIVE_BYTES:
+            raise ValueError("loose file below minimum size (likely an error page)")
+        if magic.lstrip(b"\xef\xbb\xbf \t\r\n\x0b\x0c").startswith(b"<"):
+            raise ValueError(HTML_REJECTED)
+        return LOOSE
     if magic.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
         subprocess.run([sys.executable, "-c",
                         "import sys,zipfile; archive=zipfile.ZipFile(sys.argv[1]); "
@@ -166,7 +175,7 @@ def validate(path, timeout):
         return "zip"
     kind = "7z" if magic.startswith(b"7z\xbc\xaf\x27\x1c") else "rar" if magic.startswith(b"Rar!\x1a\x07") else None
     if not kind:
-        raise ValueError("not a supported archive (HTML and unknown payloads rejected)")
+        raise ValueError(HTML_REJECTED)
     return run_integrity_tools(path, kind, timeout)
 
 
@@ -280,18 +289,75 @@ def selection_key(key):
     return match[1]
 
 
-def load_selections(path=None):
+TOOL_FILE_ID = {"google-drive": re.compile(r"^/file/d/([A-Za-z0-9_-]+)"),
+                "mega": re.compile(r"^/file/([A-Za-z0-9_-]+)")}
+TOOL_KEY = re.compile(r"^(google-drive|mega):([A-Za-z0-9_-]+)$")
+
+
+def tool_key(url):
+    kind, _ = provider(url)
+    pattern = TOOL_FILE_ID.get(kind)
+    match = pattern.match(urlsplit(url).path) if pattern else None
+    return kind + ":" + match[1] if match else None
+
+
+def tool_selection_key(key):
+    key = str(key).strip()
+    if TOOL_KEY.match(key):
+        return key
+    normalized = tool_key(key) if key.startswith(("https://", "http://")) else None
+    if not normalized:
+        raise ValueError("tool selection key must be google-drive:<file id>, mega:<file id> or a file URL")
+    return normalized
+
+
+def review_entry(key, value, tool=False):
+    name = value if isinstance(value, str) else (value or {}).get("file")
+    loose = value.get("loose", False) if isinstance(value, dict) else False
+    if not isinstance(loose, bool):
+        raise ValueError("selection for " + str(key) + ": loose must be true or false")
+    if loose:
+        if not isinstance(name, str) or safe_archive_name(name, LOOSE) != name:
+            raise ValueError("loose selection for " + str(key) + " must name a plain non-archive file "
+                             "whose name is already filesystem-safe")
+    elif tool:
+        raise ValueError("tool selection for " + str(key) + " must set loose to true")
+    elif not isinstance(name, str) or not ARCHIVE.search(name):
+        raise ValueError("archive selection for " + str(key) + " must name an archive file")
+    return {"file": name, "loose": loose}
+
+
+def load_reviewed(path=None):
     path = Path(path or SELECTIONS_PATH)
+    reviewed = {"selections": {}, "tools": {}}
     if not path.exists():
-        return {}
+        return reviewed
     document = json.loads(path.read_text(encoding="utf-8"))
-    selections = {}
     for key, value in (document.get("selections") or {}).items():
-        name = value if isinstance(value, str) else (value or {}).get("file")
-        if not isinstance(name, str) or not ARCHIVE.search(name):
-            raise ValueError("archive selection for " + str(key) + " must name an archive file")
-        selections[selection_key(key)] = name
-    return selections
+        reviewed["selections"][selection_key(key)] = review_entry(key, value)
+    for key, value in (document.get("tool_selections") or {}).items():
+        reviewed["tools"][tool_selection_key(key)] = review_entry(key, value, tool=True)
+    return reviewed
+
+
+def load_selections(path=None):
+    return {key: entry["file"] for key, entry in load_reviewed(path)["selections"].items()}
+
+
+def reviewed_loose(item, path=None):
+    if item["provider"] == "deadlystream":
+        match = FILE_ID.search(urlsplit(item["url"]).path)
+        key, table = (match[1] if match else None), "selections"
+    elif item["provider"] in TOOL_PROVIDERS:
+        key, table = tool_key(item["url"]), "tools"
+    else:
+        return None
+    entry = load_reviewed(path)[table].get(key) if key else None
+    return entry["file"] if entry and entry["loose"] else None
+
+
+def entry_loose(item, entry, path=None):
+    return entry.get("extension") == LOOSE and reviewed_loose(item, path) is not None
 
 
 def describe_rows(rows):
@@ -466,10 +532,16 @@ def fetch_with_tool(item, root, args):
             raise ValueError("downloaded file below minimum archive size (likely an error page)")
         if size > args.max_bytes:
             raise ValueError("archive exceeds size limit")
-        kind = validate(path, args.integrity_timeout)
+        reviewed = reviewed_loose(item)
+        kind = validate(path, args.integrity_timeout, loose=bool(reviewed))
+        if reviewed:
+            if safe_archive_name(path.name, LOOSE) != reviewed:
+                raise ValueError("downloaded file name does not match the reviewed loose selection")
+            name = reviewed
+        else:
+            name = safe_archive_name(path.name, kind) or archive_name(item, kind, item["url"])
         sha = digest(path)
         os.replace(path, objects / sha)
-        name = safe_archive_name(path.name, kind) or archive_name(item, kind, item["url"])
         return {"sha256": sha, "size": size, "extension": kind, "archive_name": name,
                 "endpoint_id": item["id"], "endpoint": clean_url(item["url"]),
                 "etag": None, "last_modified": None, "version_id": None,
@@ -497,13 +569,18 @@ def local_valid(root, entry):
 def safe_archive_name(value, extension):
     if not isinstance(value, str):
         return None
+    loose = extension == LOOSE
     name = unicodedata.normalize("NFC", value).replace("\\", "/").rsplit("/", 1)[-1]
     name = "".join(character if character.isalnum() or character in " ._-()[]+" else "_"
                    for character in name).strip(" .")
-    if not name or len(name.encode("utf-8")) > 240 or not ARCHIVE.search(name):
+    if not name or len(name.encode("utf-8")) > 240:
+        return None
+    if loose and (ARCHIVE.search(name) or not LOOSE_SUFFIX.search(name)):
+        return None
+    if not loose and not ARCHIVE.search(name):
         return None
     stem, suffix = name.rsplit(".", 1)
-    if not stem.strip(" ._") or suffix.lower() != extension:
+    if not stem.strip(" ._") or (not loose and suffix.lower() != extension):
         return None
     if stem.split(".", 1)[0].upper() in {"CON", "PRN", "AUX", "NUL", *(
             prefix + str(number) for prefix in ("COM", "LPT") for number in range(1, 10))}:
@@ -511,16 +588,26 @@ def safe_archive_name(value, extension):
     return name
 
 
-def archive_name(item, extension, url, disposition=None):
+def disposition_name(disposition, extension):
     if disposition:
         try:
             message = EmailMessage(policy=email_policy)
             message["Content-Disposition"] = disposition
-            name = safe_archive_name(message.get_filename(), extension)
-            if name:
-                return name
+            return safe_archive_name(message.get_filename(), extension)
         except (ValueError, TypeError, IndexError):
             pass
+    return None
+
+
+def archive_name(item, extension, url, disposition=None, reviewed=None):
+    if reviewed:
+        offered = disposition_name(disposition, LOOSE)
+        if offered and offered != reviewed:
+            raise ValueError("downloaded file name does not match the reviewed loose selection")
+        return reviewed
+    name = disposition_name(disposition, extension)
+    if name:
+        return name
     name = safe_archive_name(unquote(urlsplit(url).path.rsplit("/", 1)[-1]), extension)
     if name:
         return name
@@ -547,9 +634,11 @@ def refresh_one(item, old, root, args, endpoint=None, depth=0):
         if response.code == 304:
             if not any(name in headers for name in ("If-None-Match", "If-Modified-Since")) or not valid:
                 raise ValueError("unexpected 304 without a verified cached object")
-            validate(object_path(root, old), args.integrity_timeout)
+            loose = entry_loose(item, old)
+            validate(object_path(root, old), args.integrity_timeout, loose=loose)
             name = archive_name(item, old["extension"], response.geturl(),
-                                response.headers.get("Content-Disposition"))
+                                response.headers.get("Content-Disposition"),
+                                reviewed_loose(item) if loose else None)
             return {**old, "archive_name": old.get("archive_name", name),
                     "checked_at": now, "status": "fresh", "evidence": "conditional-304"}
         if response.code != 200:
@@ -583,7 +672,10 @@ def refresh_one(item, old, root, args, endpoint=None, depth=0):
             expected = response.headers.get("Content-Length")
             if expected is not None and size != int(expected):
                 raise ValueError("truncated archive")
-            kind = validate(path, args.integrity_timeout)
+            reviewed = reviewed_loose(item)
+            kind = validate(path, args.integrity_timeout, loose=bool(reviewed))
+            name = archive_name(item, kind, response.geturl(),
+                                response.headers.get("Content-Disposition"), reviewed)
             sha = digest(path)
             if not (valid and old.get("sha256") == sha):
                 os.replace(path, root / "objects" / sha)
@@ -592,8 +684,7 @@ def refresh_one(item, old, root, args, endpoint=None, depth=0):
             version = version_id(response.geturl())
             known = bool(etag or modified)
             return {"sha256": sha, "size": size, "extension": kind,
-                    "archive_name": archive_name(item, kind, response.geturl(),
-                                                 response.headers.get("Content-Disposition")),
+                    "archive_name": name,
                     "endpoint_id": endpoint_key, "endpoint": clean_url(response.geturl()),
                     "etag": etag, "last_modified": modified, "version_id": version,
                     "checked_at": time.time(), "status": "fresh" if known else "verified",
@@ -633,7 +724,8 @@ def import_existing(item, resource_entries, archive_root, root, args):
     filename = next(iter(files))
     try:
         source = existing_archive_path(archive_root, filename)
-        extension = source.suffix.lower().lstrip(".")
+        loose = reviewed_loose(item) == filename
+        extension = LOOSE if loose else source.suffix.lower().lstrip(".")
         if safe_archive_name(filename, extension) != filename:
             raise ValueError("unsafe archive name")
     except (OSError, ValueError) as error:
@@ -691,7 +783,7 @@ def import_existing(item, resource_entries, archive_root, root, args):
                 os.close(source_fd)
         if size != expected_size:
             raise ValueError("archive changed during import")
-        kind = validate(staged, args.integrity_timeout)
+        kind = validate(staged, args.integrity_timeout, loose=loose)
         sha = digest_state.hexdigest()
         object_file = objects / sha
         if item["id"] in manifest:
@@ -716,7 +808,7 @@ def import_existing(item, resource_entries, archive_root, root, args):
                 raise ValueError("cache object conflict")
             if digest(object_file) != sha:
                 raise ValueError("cache object conflict")
-            validate(object_file, args.integrity_timeout)
+            validate(object_file, args.integrity_timeout, loose=loose)
         imported = {"sha256": sha, "size": size, "extension": kind,
                     "archive_name": filename, "status": "stale-unknown",
                     "metadata_unknown": True, "evidence": "local-import",
@@ -867,16 +959,22 @@ def main(argv=None):
                         if old.get("status") not in ("fresh", "verified") or not local_valid(root, old):
                             raise ValueError("archive refresh did not produce a verified object")
                     source = object_path(root, old)
-                    validate(source, args.integrity_timeout)
-                    args.destination.mkdir(parents=True, exist_ok=True)
-                    if old.get("extension") not in ("zip", "7z", "rar"):
+                    if old.get("extension") not in ("zip", "7z", "rar", LOOSE):
                         raise ValueError("invalid manifest archive extension")
+                    reviewed = reviewed_loose(item) if old["extension"] == LOOSE else None
+                    if old["extension"] == LOOSE and not reviewed:
+                        raise ValueError("loose file is not a reviewed selection")
+                    validate(source, args.integrity_timeout, loose=bool(reviewed))
+                    args.destination.mkdir(parents=True, exist_ok=True)
                     if "archive_name" in old:
                         filename = safe_archive_name(old["archive_name"], old["extension"])
                         if filename is None:
                             raise ValueError("invalid manifest archive name")
                     else:
-                        filename = archive_name(item, old["extension"], old.get("endpoint") or item["url"])
+                        filename = archive_name(item, old["extension"], old.get("endpoint") or item["url"],
+                                                reviewed=reviewed)
+                    if reviewed and filename != reviewed:
+                        raise ValueError("loose file name does not match the reviewed selection")
                     name_key = filename.casefold()
                     if name_key in restored_names and restored_names[name_key] != item["id"]:
                         raise ValueError("archive filename collision")

@@ -134,7 +134,7 @@ def refresh_item(item, root, remote, force):
             if fetch(f"{remote}/objects/{path.name}", temporary):
                 if not matches(temporary, old["sha256"], size):
                     raise ValueError("restored object failed size/SHA256 verification")
-                cache.validate(temporary, 300)
+                cache.validate(temporary, 300, loose=cache.entry_loose(item, old))
                 os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)

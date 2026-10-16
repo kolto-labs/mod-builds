@@ -144,13 +144,30 @@
       "file": "forcecage_updated_1.1.0.zip",
       "reason": "guide: download just this file"
     },
+    "2734": {
+      "file": "3C-FD Tool v4.1.2.exe",
+      "loose": true,
+      "reason": "reviewed loose file: the guide says this page serves a single pre-extracted executable, not an archive"
+    },
     "2739": {
       "file": "Manaan taxi (English).zip",
       "reason": "guide: other languages only if a non-English version is wanted"
     },
+    "2787": {
+      "file": "N_DarthMalak01.tga",
+      "loose": true,
+      "reason": "reviewed loose file: the guide says this page serves a single loose .tga, not an archive"
+    },
     "2812": {
       "file": "CK-Classic Class Attack Bonus.zip",
       "reason": "guide strongly recommends the standard option"
+    }
+  },
+  "tool_selections": {
+    "google-drive:1NuewBFq390wkZuBkbJzN-mN4sIRlvXGd": {
+      "file": "tar02_duelorg021.dlg",
+      "loose": true,
+      "reason": "reviewed loose file: Google Drive file serves a single loose .dlg (about 65 KB), not an archive"
     }
   }
 }
