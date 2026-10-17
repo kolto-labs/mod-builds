@@ -299,6 +299,9 @@ class AlternativeCutsceneSkipTests(unittest.TestCase):
         guide.write_text(GUIDE_WITH_ALTERNATIVES, encoding="utf-8")
         for name in ("source", "game", "archives"):
             (root / name).mkdir()
+        patch = mock.patch.object(ports, "LANE_SKIPS_PATH", root / "no-lane-skips.json")
+        patch.start()
+        self.addCleanup(patch.stop)
         (root / "source" / "Cargo.toml").write_text("", encoding="utf-8")
         args = argparse.Namespace(
             implementation="rust", mode="cli", review_manifest=None, archive_map=None,
@@ -570,6 +573,9 @@ class ExecuteCommandTests(unittest.TestCase):
         guide.write_text(GUIDE, encoding="utf-8")
         for name in ("source", "game", "archives"):
             (root / name).mkdir()
+        patch = mock.patch.object(ports, "LANE_SKIPS_PATH", root / "no-lane-skips.json")
+        patch.start()
+        self.addCleanup(patch.stop)
         (root / "source" / "Cargo.toml").write_text("", encoding="utf-8")
         (root / "source" / "packages" / "cli" / "src").mkdir(parents=True)
         (root / "source" / "packages" / "cli" / "src" / "main.ts").write_text("", encoding="utf-8")
@@ -708,6 +714,271 @@ class ExecuteCommandTests(unittest.TestCase):
             args, document(component("Mod One", "30000000-0000-0000-0000-000000000001")))
         self.assertNotIn("skipped_by_reviewed_policy", report)
         self.assertNotIn("--deselect", dict(commands)["convert"])
+
+
+GUIDE_4GB = """# Guide
+
+## Mod List
+
+### Mod One
+
+### 4GB Patcher
+
+### Mod Two
+"""
+
+FOUR_GB = ("Mod List", "4GB Patcher")
+FOUR_GB_GUID = "50000000-0000-0000-0000-000000000002"
+SHIPPED_LANE_SKIPS = Path(ports.__file__).with_name("archive_selections.json")
+REJECTION = "No supported game files or patcher data found in mapped archive"
+
+
+def four_gb_document(instructed=False, dependents=False, one_instructed=True):
+    patcher = ["[[thisMod]]", 'Guid = "' + FOUR_GB_GUID + '"', 'Name = "4GB Patcher"', "IsSelected = true"]
+    if instructed:
+        patcher += ["[[thisMod.Instructions]]", 'Guid = "50000000-0000-0000-0000-0000000000f9"',
+                    'Action = "Move"']
+    one = component("Mod One", "50000000-0000-0000-0000-000000000001")
+    if not one_instructed:
+        one = one[:one.index("[[thisMod.Instructions]]")]
+    if dependents:
+        one = one.replace("IsSelected = false", 'IsSelected = false\nDependencies = ["' + FOUR_GB_GUID + '"]')
+    return document(one, "\n".join(patcher), component("Mod Two", "50000000-0000-0000-0000-000000000003"))
+
+
+def lane_skips_file(directory, table):
+    path = directory / "lane-skips.json"
+    path.write_text(json.dumps({"lane_skips": table}), encoding="utf-8")
+    return path
+
+
+def lane_entry(**override):
+    entry = {"section": FOUR_GB[0], "heading": FOUR_GB[1], "reason": "reviewed: test"}
+    entry.update(override)
+    return entry
+
+
+class LaneSkipTableTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.directory))
+
+    def test_shipped_table_skips_exactly_the_4gb_patcher_in_both_games(self):
+        for game in ("k1", "k2"):
+            skips = ports.load_lane_skips(game, SHIPPED_LANE_SKIPS)
+            self.assertEqual([(skip["section"], skip["heading"]) for skip in skips], [FOUR_GB], game)
+            self.assertTrue(skips[0]["reason"].strip())
+            self.assertEqual(skips[0]["urls"], [])
+        self.assertEqual(ports.load_lane_skips("k3", SHIPPED_LANE_SKIPS), [])
+
+    def test_shipped_reasons_are_reviewed_text_not_placeholders(self):
+        for game in ("k1", "k2"):
+            reason = ports.load_lane_skips(game, SHIPPED_LANE_SKIPS)[0]["reason"]
+            self.assertIn(REJECTION, reason)
+
+    def test_missing_file_or_table_skips_nothing(self):
+        self.assertEqual(ports.load_lane_skips("k1", self.directory / "absent.json"), [])
+        empty = self.directory / "empty.json"
+        empty.write_text("{}", encoding="utf-8")
+        self.assertEqual(ports.load_lane_skips("k1", empty), [])
+
+    def test_only_the_requested_game_is_returned(self):
+        path = lane_skips_file(self.directory, {"k2": [lane_entry()]})
+        self.assertEqual(ports.load_lane_skips("k1", path), [])
+        self.assertEqual(len(ports.load_lane_skips("k2", path)), 1)
+
+    def test_malformed_tables_block_for_every_game(self):
+        for table in (
+            [],
+            {"k3": [lane_entry()]},
+            {"k2": lane_entry()},
+            {"k2": ["4GB Patcher"]},
+            {"k2": [lane_entry(extra="x")]},
+            {"k2": [{"section": FOUR_GB[0], "heading": FOUR_GB[1]}]},
+            {"k2": [lane_entry(reason="")]},
+            {"k2": [lane_entry(reason="   ")]},
+            {"k2": [lane_entry(heading=" 4GB Patcher")]},
+            {"k2": [lane_entry(section=3)]},
+            {"k2": [lane_entry(), lane_entry(reason="again")]},
+        ):
+            with self.subTest(table=table):
+                path = lane_skips_file(self.directory, table)
+                with self.assertRaisesRegex(ports.Blocked, "lane_skips_(invalid|duplicate)"):
+                    ports.load_lane_skips("k1", path)
+
+    def test_a_restore_report_skip_for_the_same_step_is_not_doubled(self):
+        guide = self.directory / "full.md"
+        restored = ports.load_policy_skips(
+            restore_report(self.directory / "restore.json", guide.resolve(), FOUR_GB), guide.resolve())
+        lane = ports.load_lane_skips("k1", lane_skips_file(self.directory, {"k1": [lane_entry()]}))
+        merged = ports.merge_lane_skips(restored, lane)
+        self.assertEqual(len(merged), 1)
+        self.assertEqual(merged[0]["source"], "restore_report")
+        self.assertEqual(ports.merge_lane_skips([], lane), lane)
+
+
+class LaneSkipLaneTests(unittest.TestCase):
+    prepare = ExecuteCommandTests.prepare
+
+    def run_lane(self, mode="cli", implementation="rust", converted=None, table="shipped",
+                 game="k1", restore=False, log=True):
+        root, args = self.prepare(game)
+        args.guide.write_text(GUIDE_4GB, encoding="utf-8")
+        args.implementation = implementation
+        args.mode = mode
+        if table is not None:
+            path = SHIPPED_LANE_SKIPS if table == "shipped" else lane_skips_file(root, table)
+            patch = mock.patch.object(ports, "LANE_SKIPS_PATH", path)
+            patch.start()
+            self.addCleanup(patch.stop)
+        if restore:
+            args.restore_report = restore_report(root / "restore.json", args.guide.resolve(), FOUR_GB)
+        commands = []
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append((stage, list(command)))
+            if stage == "convert":
+                (private / "converted.toml").write_text(converted or four_gb_document(), encoding="utf-8")
+                if log:
+                    convert_log(private / "convert.log", [
+                        {"ComponentGuid": FOUR_GB_GUID.upper(), "ComponentName": "4GB Patcher",
+                         "Success": False, "InstructionsGenerated": 0, "SkipReason": REJECTION},
+                        {"ComponentGuid": "50000000-0000-0000-0000-000000000001",
+                         "ComponentName": "Mod One", "Success": True, "InstructionsGenerated": 1,
+                         "SkipReason": ""}])
+
+        report = {"commands": []}
+        error = None
+        with mock.patch.object(ports, "run", fake_run):
+            try:
+                ports.execute(args, report)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        return commands, report, error
+
+    def deselected(self, command):
+        return [value for flag, value in zip(command, command[1:]) if flag == "--deselect"]
+
+    def test_both_games_skip_and_deselect_only_the_4gb_patcher_without_a_restore_report(self):
+        for game in ("k1", "k2"):
+            with self.subTest(game=game):
+                commands, report, error = self.run_lane(game=game)
+                self.assertIsNone(error)
+                staged = dict(commands)
+                for stage in ("validate", "install"):
+                    self.assertEqual(self.deselected(staged[stage]), [FOUR_GB_GUID])
+                self.assertNotIn("--deselect", staged["convert"])
+                record, = report["skipped_by_reviewed_policy"]
+                self.assertEqual((record["section"], record["heading"]), FOUR_GB)
+                self.assertEqual(record["status"], "skipped-by-reviewed-policy")
+                self.assertEqual(record["component_guid"], FOUR_GB_GUID)
+                self.assertEqual(record["source"], "lane_skips")
+                self.assertIn(REJECTION, record["reason"])
+                self.assertEqual(report["component_count"], 3)
+
+    def test_the_converter_rejection_is_reported_as_reviewed_policy_not_reader_rejection(self):
+        _, report, error = self.run_lane()
+        self.assertIsNone(error)
+        self.assertEqual(report["convert_skips"]["by_cause"], {"skipped_by_reviewed_policy": 1})
+        self.assertEqual(report["convert_skips"]["components"][0]["name"], "4GB Patcher")
+
+    def test_the_skip_is_applied_even_when_the_converter_generated_instructions(self):
+        commands, report, error = self.run_lane(converted=four_gb_document(instructed=True))
+        self.assertIsNone(error)
+        self.assertEqual(self.deselected(dict(commands)["install"]), [FOUR_GB_GUID])
+        self.assertEqual(report["skipped_by_reviewed_policy"][0]["component_guid"], FOUR_GB_GUID)
+
+    def test_a_restore_report_entry_for_the_same_step_is_reported_once_and_deselected_once(self):
+        commands, report, error = self.run_lane(restore=True)
+        self.assertIsNone(error)
+        self.assertEqual(len(report["skipped_by_reviewed_policy"]), 1)
+        self.assertEqual(self.deselected(dict(commands)["validate"]), [FOUR_GB_GUID])
+
+    def test_the_table_does_not_exempt_any_other_step(self):
+        _, report, error = self.run_lane(converted=four_gb_document(one_instructed=False))
+        self.assertEqual(error, "guide_steps_without_instructions")
+        self.assertEqual([step["heading"] for step in report["steps_without_instructions"]], ["Mod One"])
+
+    def test_without_the_table_the_4gb_patcher_still_blocks_coverage(self):
+        commands, report, error = self.run_lane(table=None)
+        self.assertEqual(error, "guide_steps_without_instructions")
+        self.assertEqual([step["heading"] for step in report["steps_without_instructions"]],
+                         ["4GB Patcher"])
+        self.assertNotIn("validate", dict(commands))
+
+    def test_a_lane_skip_for_a_step_the_guide_lacks_blocks(self):
+        _, _, error = self.run_lane(table={"k1": [lane_entry(heading="Renamed Step")]})
+        self.assertEqual(error, "policy_skipped_step_not_in_guide")
+
+    def test_a_lane_skip_is_scoped_to_its_section(self):
+        _, _, error = self.run_lane(table={"k1": [lane_entry(section="Enhanced Widescreen Support Mods")]})
+        self.assertEqual(error, "policy_skipped_step_not_in_guide")
+
+    def test_a_lane_skip_for_the_other_game_is_ignored(self):
+        _, _, error = self.run_lane(table={"k2": [lane_entry()]})
+        self.assertEqual(error, "guide_steps_without_instructions")
+
+    def test_a_dependent_component_blocks_the_lane_skip(self):
+        _, _, error = self.run_lane(converted=four_gb_document(dependents=True))
+        self.assertEqual(error, "policy_skipped_component_has_dependents")
+
+    def test_rust_gui_stops_like_other_policy_skips(self):
+        commands, _, error = self.run_lane(mode="gui")
+        self.assertEqual(error, "gui_cannot_deselect_policy_skipped_components")
+        self.assertNotIn("validate", dict(commands))
+
+    def test_typescript_lanes_are_not_given_the_lane_skip(self):
+        commands, report, error = self.run_lane(implementation="typescript")
+        self.assertEqual(error, "guide_steps_without_instructions")
+        self.assertEqual(report["skipped_by_reviewed_policy"], [])
+        self.assertTrue(all("--deselect" not in command for _, command in commands))
+
+    def test_malformed_table_blocks_the_rust_lane_before_validate(self):
+        commands, _, error = self.run_lane(table={"k1": [lane_entry(reason="")]})
+        self.assertEqual(error, "lane_skips_invalid")
+        self.assertNotIn("validate", dict(commands))
+
+
+class RealGuideFourGbSkipTests(unittest.TestCase):
+    ROOT = Path(ports.__file__).resolve().parents[2] / "content"
+
+    def converted_from_guide(self, directory, guide):
+        section = None
+        blocks = []
+        self.guid = None
+        for line in guide.read_text(encoding="utf-8").splitlines():
+            if line.startswith("## "):
+                section = line[3:].strip()
+            elif line.startswith("### ") and section in (
+                    "Mod List", "Optional Widescreen & Extended Widescreen Support Mods",
+                    "Enhanced Widescreen Support Mods"):
+                heading = line[4:].strip()
+                guid = "70000000-0000-0000-0000-%012d" % len(blocks)
+                if (section, heading) == FOUR_GB:
+                    self.guid = guid
+                    blocks.append("\n".join(["[[thisMod]]", 'Guid = "' + guid + '"',
+                                             'Name = "' + heading + '"', "IsSelected = true"]))
+                else:
+                    blocks.append(component(heading.replace('"', "'"), guid))
+        path = directory / "converted.toml"
+        path.write_text(document(*blocks), encoding="utf-8")
+        return path
+
+    def test_the_4gb_patcher_is_the_only_exempt_step_in_both_real_guides(self):
+        for game in ("k1", "k2"):
+            with self.subTest(game=game):
+                directory = Path(tempfile.mkdtemp())
+                self.addCleanup(__import__("shutil").rmtree, directory)
+                guide = self.ROOT / game / "full.md"
+                converted = self.converted_from_guide(directory, guide)
+                with self.assertRaisesRegex(ports.Blocked, "guide_steps_without_instructions"):
+                    ports.coverage(guide, converted, {}, "rust", [])
+                skips = ports.load_lane_skips(guide.parent.name, SHIPPED_LANE_SKIPS)
+                report = {}
+                self.assertTrue(ports.coverage(guide, converted, report, "rust", skips))
+                record, = report["skipped_by_reviewed_policy"]
+                self.assertEqual((record["section"], record["heading"], record["component_guid"]),
+                                 (*FOUR_GB, self.guid))
 
 
 if __name__ == "__main__":

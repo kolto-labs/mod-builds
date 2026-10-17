@@ -145,6 +145,9 @@ IMPLEMENTATION_SECTIONS = {
 
 SKIPPED_BY_POLICY = "skipped-by-reviewed-policy"
 SKIPPED_REPORT_KEY = "skipped_by_reviewed_policy"
+LANE_SKIPS_PATH = Path(__file__).with_name("archive_selections.json")
+LANE_SKIP_GAMES = ("k1", "k2")
+LANE_SKIP_KEYS = frozenset({"section", "heading", "reason"})
 
 
 def load_policy_skips(path, guide):
@@ -169,10 +172,51 @@ def load_policy_skips(path, guide):
             raise Blocked("restore_report_guide_mismatch")
         record = merged.setdefault((step["section"], step["heading"]), {
             "section": step["section"], "heading": step["heading"],
-            "reason": step["reason"], "urls": []})
+            "reason": step["reason"], "urls": [], "source": "restore_report"})
         if step["url"] not in record["urls"]:
             record["urls"].append(step["url"])
     return list(merged.values())
+
+
+def load_lane_skips(game, path=None):
+    """Return the reviewed lane skips for one game from archive_selections.json.
+
+    The `lane_skips` table maps k1/k2 to a list of {section, heading, reason}
+    objects. The whole table is validated whatever the game, so a malformed
+    entry for the other game still blocks. A missing file or table skips nothing.
+    """
+    path = Path(path or LANE_SKIPS_PATH)
+    if not path.is_file():
+        return []
+    document = json.loads(path.read_text(encoding="utf-8"))
+    table = document.get("lane_skips", {}) if isinstance(document, dict) else None
+    if not isinstance(table, dict) or not table.keys() <= set(LANE_SKIP_GAMES):
+        raise Blocked("lane_skips_invalid")
+    result = []
+    for name, entries in table.items():
+        if not isinstance(entries, list):
+            raise Blocked("lane_skips_invalid")
+        seen = set()
+        for entry in entries:
+            if (not isinstance(entry, dict) or entry.keys() != LANE_SKIP_KEYS
+                    or any(not isinstance(entry[key], str) or not entry[key].strip()
+                           or entry[key] != entry[key].strip() for key in LANE_SKIP_KEYS)):
+                raise Blocked("lane_skips_invalid")
+            key = (entry["section"], entry["heading"])
+            if key in seen:
+                raise Blocked("lane_skips_duplicate")
+            seen.add(key)
+            if name == game:
+                result.append({"section": entry["section"], "heading": entry["heading"],
+                               "reason": entry["reason"], "urls": [], "source": "lane_skips"})
+    return result
+
+
+def merge_lane_skips(restore_skips, lane_skips):
+    """Restore-report skips first; a lane skip naming the same step adds nothing."""
+    known = {(skip["section"], skip["heading"]) for skip in restore_skips}
+    return list(restore_skips) + [skip for skip in lane_skips
+                                  if (skip["section"], skip["heading"]) not in known]
 
 
 def uncovered_steps(report, headings, components, indexes):
@@ -457,6 +501,8 @@ def execute(args, report):
         if args.implementation != "rust":
             raise Blocked("policy_skips_supported_for_rust_only")
         skipped = load_policy_skips(args.restore_report.resolve(strict=True), guide)
+    if args.implementation == "rust":
+        skipped = merge_lane_skips(skipped, load_lane_skips(guide.parent.name))
     report["component_count"] = coverage(
         guide, converted, report, args.implementation, skipped)
     deselect = []
@@ -600,7 +646,8 @@ def main(argv=None):
                         help="cache.py restore --archive-map JSON passed to the Rust convert (ignored by TypeScript)")
     parser.add_argument("--restore-report", type=Path,
                         help="cache.py restore --report JSON; its reviewed skipped_steps are exempted from "
-                             "coverage, recorded in the report and deselected (Rust only; TypeScript is refused)")
+                             "coverage, recorded in the report and deselected (Rust only; TypeScript is refused). "
+                             "Rust lanes also apply the reviewed lane_skips of archive_selections.json")
     for name in ("source", "guide", "game-dir", "archives", "work-dir", "report"):
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args(argv)

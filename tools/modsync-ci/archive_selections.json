@@ -222,5 +222,21 @@
       "size": 21464,
       "reason": "the guide link redirects to the vendor page https://ntcore.com/4gb-patch/, which links one static zip (Last-Modified 2020-10-17); the zip is pinned by SHA-256 and matches the operator copy"
     }
+  },
+  "lane_skips": {
+    "k1": [
+      {
+        "section": "Mod List",
+        "heading": "4GB Patcher",
+        "reason": "the pinned 4gb_patch.zip ships only the vendor's Windows patcher .exe, so the Rust converter rejects it ('No supported game files or patcher data found in mapped archive') and no instructions can be generated; the guide says to apply it only after all widescreen content and never on the Steam executable unless the widescreen .exe was applied, so the lane skips it explicitly instead of installing it out of guide order"
+      }
+    ],
+    "k2": [
+      {
+        "section": "Mod List",
+        "heading": "4GB Patcher",
+        "reason": "the pinned 4gb_patch.zip ships only the vendor's Windows patcher .exe, so the Rust converter rejects it ('No supported game files or patcher data found in mapped archive') and no instructions can be generated; the guide says to skip it on the Aspyr patch or after 3C-FD, which already applies the same patch, so the lane skips it explicitly instead of installing it out of guide order"
+      }
+    ]
   }
 }

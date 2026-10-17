@@ -124,6 +124,47 @@ pinned Nexus 1066 alternative is the one kept):
 | K2 `K2 Cutscenes Rescaled` (DeadlyStream 2503) | Component 147 of 151 (`Enhanced Widescreen Support Mods`, immediately before `K2 Remastered Cutscenes`, 148): `IsSelected = true`, `WidescreenOnly = true`, no `Instructions`, two spurious prose-derived `Options` (`resolution`, `both the main`, both unselected and instruction-free), `DraftReview.RequiresReview = true` with `DraftInstructionCount = 0`. Its GUID appears nowhere else in the converted TOML: no component lists it in `Dependencies`, `Restrictions`, `InstallBefore` or `InstallAfter`, so the dependents and ambiguity checks pass on the real guide and exactly one `--deselect <Guid>` is emitted. Selected, validate stops with `unreviewed draft instructions`; deselecting it adds no auto-deselection of any other component (compared against the same run without it, with every other component deselected). The alternative `K2 Remastered Cutscenes` (Nexus 1066, component 148) is a separate component with its own GUID, is not skipped and is not deselected |
 | K1 `Remastered Cutscenes` | Component 197 of 197: `IsSelected = true`, `WidescreenOnly = true`, no `Instructions`, no `Options`, `DraftReview.RequiresReview = true` with `DraftInstructionCount = 0`. Even with `--auto-generate-local` and an archive map it stays instruction-free (`No matching archive found for '1306'`). Selected and not deselected, validate stops with `unreviewed draft instructions`; deselected on its own, validate reports `No components are selected` |
 
+### Lane skips: steps that need no restore report
+
+Some reviewed skips are not about an uncached link. The `4GB Patcher` step (K1 and
+K2, `Mod List`) restores fine (`direct_links` pins `4gb_patch.zip`), but that zip
+holds only the vendor's Windows patcher `.exe`. The Rust converter rejects it
+(`No supported game files or patcher data found in mapped archive`), so the
+component never gets instructions and coverage failed with `1 guide steps have no
+instructions` (K2 Rust CLI run 38979799826; K1 passed only because of an archive
+matching tie). The guide also makes the step conditional: K2 says not to run it on
+the Aspyr patch or after 3C-FD, K1 says to run it only after widescreen content and
+never on the Steam executable unless the widescreen `.exe` was applied.
+
+`tools/modsync-ci/archive_selections.json` therefore carries a small `lane_skips`
+table, read by `ports.py` for the **Rust** lanes only (no restore report needed):
+
+```json
+"lane_skips": {"k1": [{"section": "Mod List", "heading": "4GB Patcher", "reason": "..."}],
+               "k2": [{"section": "Mod List", "heading": "4GB Patcher", "reason": "..."}]}
+```
+
+- **Schema.** Keys are `k1` or `k2` (the guide folder name); each value is a list of
+  objects with exactly `section`, `heading` and `reason`, all non-empty strings
+  without surrounding whitespace. A malformed table, an unknown game key, or a
+  repeated step blocks the Rust lane (`lane_skips_invalid`, `lane_skips_duplicate`)
+  whichever game is being run; a missing file or table skips nothing.
+- **Scope.** Only the exact `<## section>::<### heading>` is skipped. A step that is
+  not in the guide, appears twice in the counted sections, or has a dependent
+  component blocks the lane, exactly like a restore-report skip. Every other step
+  still needs instructions.
+- **Same path as restore-report skips.** The entries are merged with the restore
+  report's `skipped_steps` (a step named by both is reported once, as the restore
+  report's), exempted from coverage, reclassified in `convert_skips` as
+  `skipped_by_reviewed_policy` (so the converter's rejection is not counted as a
+  `reader_rejection`), recorded in the lane report's `skipped_by_reviewed_policy`
+  (lane-skip records carry `"source": "lane_skips"` and `urls: []`), and passed to
+  `validate` and `install` as `--deselect <component Guid>`.
+- **Not applied elsewhere.** TypeScript lanes do not read the table (they have no
+  deselect mechanism). The Rust `gui` lane stops with
+  `gui_cannot_deselect_policy_skipped_components` for both games, as it already does
+  for the K2 cutscene skip.
+
 `--restore-report` is refused for `--implementation typescript`
 (`policy_skips_supported_for_rust_only`): those lanes have no deselect mechanism
 and `validate --all` would select the step, so `ci.yml` does not pass the flags to
