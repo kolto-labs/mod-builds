@@ -698,10 +698,110 @@ class ExecuteCommandTests(unittest.TestCase):
         self.assertNotIn("--deselect", dict(commands)["install"])
         self.assertIsNone(report["skipped_by_reviewed_policy"][0]["component_guid"])
 
-    def test_rust_gui_refuses_to_run_a_driver_that_cannot_deselect(self):
-        commands, _, error = self.run_policy_lane("gui")
-        self.assertEqual(error, "gui_cannot_deselect_policy_skipped_components")
-        self.assertNotIn("validate", dict(commands))
+    def run_gui_lane(self, driver, keys=(HELPER, MOVIES), converted=None, guide=GUIDE_WITH_HELPER):
+        root, args = self.prepare("k1")
+        args.guide.write_text(guide, encoding="utf-8")
+        args.implementation = "rust"
+        args.mode = "gui"
+        args.restore_report = restore_report(root / "restore.json", args.guide.resolve(), *keys)
+        commands = []
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append((stage, list(command)))
+            if stage == "convert":
+                (private / "converted.toml").write_text(
+                    converted or helper_document(), encoding="utf-8")
+            if stage == "build":
+                (private / "target" / "debug").mkdir(parents=True)
+                (private / "target" / "debug" / "modsync").write_text("binary", encoding="utf-8")
+            if stage == "gui":
+                converted_path = private / "converted.toml"
+                binary = Path(command[command.index("--binary") + 1])
+                payload = {
+                    "schema_version": 1, "implementation": "rust", "mode": "gui",
+                    "status": "installed", "ui_completed": True,
+                    "reason": "native_gui_completed_and_receipt_verified",
+                    "input_sha256": hashlib.sha256(converted_path.read_bytes()).hexdigest(),
+                    "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
+                    "component_count": 3, "expected_components": 2, "completed_components": 2,
+                    "coverage": "subset", "skipped_by_reviewed_policy": [MOVIES_GUID],
+                    "excluded_widescreen": [], "widescreen_phase": "not_covered_by_gui_lane",
+                    "verified_game_files": 4, "receipt_sha256": "a" * 64}
+                payload.update(driver)
+                Path(command[command.index("--report") + 1]).write_text(
+                    json.dumps(payload), encoding="utf-8")
+
+        report = {"commands": []}
+        error = None
+        with mock.patch.object(ports, "run", fake_run):
+            try:
+                ports.execute(args, report)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        return commands, report, error
+
+    def test_rust_gui_deselects_policy_skips_and_expects_the_reduced_receipt(self):
+        commands, report, error = self.run_gui_lane({})
+        self.assertIsNone(error, report)
+        staged = dict(commands)
+        gui = staged["gui"]
+        self.assertEqual([value for flag, value in zip(gui, gui[1:]) if flag == "--deselect"], [MOVIES_GUID])
+        self.assertIn("--exclude-widescreen", gui)
+        self.assertEqual(report["status"], "installed")
+        self.assertEqual(report["gui_covered_components"], 2)
+        self.assertEqual(report["gui_not_covered"]["widescreen_phase"], "not_covered_by_gui_lane")
+        self.assertEqual(report["gui_not_covered"]["excluded_widescreen"], [])
+        self.assertEqual([record["component_guid"] for record in report["skipped_by_reviewed_policy"]
+                          if record["component_guid"]], [MOVIES_GUID])
+
+    def test_rust_gui_lists_unskipped_widescreen_components_as_not_covered(self):
+        wide = "40000000-0000-0000-0000-0000000000a1"
+        converted = document(
+            component("Mod One", "40000000-0000-0000-0000-000000000001"),
+            component("Mod Two", "40000000-0000-0000-0000-000000000002"),
+            component("Loose Movies", MOVIES_GUID),
+            component("Wide Pack", wide, WidescreenOnly="true"))
+        commands, report, error = self.run_gui_lane({
+            "component_count": 4, "expected_components": 2, "completed_components": 2,
+            "excluded_widescreen": [wide]}, converted=converted,
+            guide=GUIDE_WITH_HELPER + "\n### Wide Pack\n")
+        self.assertIsNone(error, report)
+        staged = dict(commands)
+        deselected = lambda command: sorted(value for flag, value in zip(command, command[1:])
+                                            if flag == "--deselect")
+        self.assertEqual(deselected(staged["validate"]), sorted([MOVIES_GUID, wide]))
+        self.assertEqual(deselected(staged["gui"]), [MOVIES_GUID])
+        self.assertIn("--exclude-widescreen", staged["gui"])
+        self.assertEqual([item["component_guid"] for item in report["gui_not_covered"]["excluded_widescreen"]],
+                         [wide])
+        self.assertEqual(report["gui_covered_components"], 2)
+        self.assertEqual(report["gui_not_covered"]["widescreen_phase"], "not_covered_by_gui_lane")
+
+    def test_rust_gui_rejects_a_driver_report_that_omits_an_excluded_widescreen_component(self):
+        wide = "40000000-0000-0000-0000-0000000000a1"
+        converted = document(
+            component("Mod One", "40000000-0000-0000-0000-000000000001"),
+            component("Mod Two", "40000000-0000-0000-0000-000000000002"),
+            component("Loose Movies", MOVIES_GUID),
+            component("Wide Pack", wide, WidescreenOnly="true"))
+        _, _, error = self.run_gui_lane({
+            "component_count": 4, "expected_components": 2, "completed_components": 2,
+            "excluded_widescreen": []}, converted=converted,
+            guide=GUIDE_WITH_HELPER + "\n### Wide Pack\n")
+        self.assertEqual(error, "gui_completion_not_verified")
+
+    def test_rust_gui_rejects_a_driver_report_that_covers_the_skipped_component(self):
+        _, _, error = self.run_gui_lane({"completed_components": 3, "expected_components": 3})
+        self.assertEqual(error, "gui_completion_not_verified")
+
+    def test_rust_gui_rejects_a_driver_report_with_other_skips_or_exclusions(self):
+        for override in ({"skipped_by_reviewed_policy": []},
+                         {"excluded_widescreen": [MOVIES_GUID]},
+                         {"widescreen_phase": "none_in_input"},
+                         {"coverage": "full"}):
+            with self.subTest(override=override):
+                _, _, error = self.run_gui_lane(override)
+                self.assertEqual(error, "gui_completion_not_verified")
 
     def test_typescript_refuses_policy_skips(self):
         _, _, error = self.run_policy_lane("cli", implementation="typescript")
@@ -922,10 +1022,15 @@ class LaneSkipLaneTests(unittest.TestCase):
         _, _, error = self.run_lane(converted=four_gb_document(dependents=True))
         self.assertEqual(error, "policy_skipped_component_has_dependents")
 
-    def test_rust_gui_stops_like_other_policy_skips(self):
+    def test_rust_gui_deselects_the_lane_skip_in_validate_and_the_driver(self):
         commands, _, error = self.run_lane(mode="gui")
-        self.assertEqual(error, "gui_cannot_deselect_policy_skipped_components")
-        self.assertNotIn("validate", dict(commands))
+        self.assertEqual(error, "gui_completion_report_missing")
+        staged = dict(commands)
+        for stage in ("validate", "gui"):
+            command = staged[stage]
+            self.assertEqual([value for flag, value in zip(command, command[1:]) if flag == "--deselect"],
+                             [FOUR_GB_GUID])
+        self.assertIn("--exclude-widescreen", staged["gui"])
 
     def test_typescript_lanes_are_not_given_the_lane_skip(self):
         commands, report, error = self.run_lane(implementation="typescript")

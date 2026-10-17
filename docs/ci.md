@@ -77,7 +77,7 @@ named section or step may pass it. Checked against the lane code on the current
 | Lane | Installs the K2 `Enhanced Widescreen Support Mods` section? | Flag |
 | --- | --- | --- |
 | `rust` + `cli` | Yes. `ports.py` runs `install --phase all`; the converter leaves widescreen components selected (`IsSelected = true`, `WidescreenOnly = true`) | Not allowed |
-| `rust` + `gui` | No, but only because `gui_rust.py` refuses any input with widescreen-only components, so the K2 lane cannot complete | Not wired |
+| `rust` + `gui` | No. `ports.py` passes `--exclude-widescreen` to `gui_rust.py`, which deselects every widescreen-only component in a private copy of the converted TOML and reports it as not covered | Not wired |
 | `typescript` + `cli`/`gui` | Not selected for install (`select_base_components`), but `validate --all` selects every mod, and both lanes require a reviewed manifest and an installer that is unavailable | Not wired |
 | `manual` | Unknown: depends on the human-reviewed `ci/<game>-manual-plan.json`, which does not exist | Not wired |
 
@@ -105,11 +105,11 @@ see [ports.md](ports.md#reviewed-policy-skips) for the converter evidence.
 The K2 flag names the one step, never the `Enhanced Widescreen Support Mods`
 section: the section also holds `K2 Remastered Cutscenes` (1066) and the other
 widescreen steps, which must still be restored and installed. Passing the section
-form for this post is not done in any lane. The `rust` + `gui` K2 lane gets the
-flag too, but it cannot complete either way: `ports.py` stops it with
-`gui_cannot_deselect_policy_skipped_components` (and `gui_rust.py` refuses
-widescreen-only components). Every other Nexus and GameFront link still fails
-restore.
+form for this post is not done in any lane. The `rust` + `gui` lane gets the
+flag too and installs a defined subset: the skipped component is deselected in a
+private copy of the converted TOML (see [GUI subset](ports.md#gui-mode)), listed in
+the lane report as `skipped_by_reviewed_policy` and never counted as covered. Every
+other Nexus and GameFront link still fails restore.
 
 The `typescript` lanes get neither the flags nor `--restore-report`: they require
 a reviewed manifest that does not exist and cannot complete an install, and
@@ -130,11 +130,17 @@ a reviewed manifest that does not exist and cannot complete an install, and
   `ports.py` stops a Rust lane before install when a converted component has no
   `Instructions` (`guide_steps_without_instructions`); 69 K1 components were in
   that state when last measured.
-- **GUI lanes** do not cover the separate widescreen phase. `gui_rust.py` refuses
-  an input that contains widescreen-only components, and `gui_typescript.py`
+- **GUI lanes** do not cover the separate widescreen phase. The Rust GUI lane runs
+  one base phase over a defined subset: every converted component except the
+  reviewed-policy skips and the widescreen-only components, which are
+  listed in the report (`gui_not_covered`, `excluded_widescreen`,
+  `widescreen_phase: not_covered_by_gui_lane`), never claimed as installed. A
+  standalone `gui_rust.py` still refuses an input that selects widescreen-only
+  components unless `--exclude-widescreen` is passed, and `gui_typescript.py`
   refuses a selection that contains widescreen mods. `gui_rust.py` also cannot
-  authorize a draft review (`draft_review_receipts_require_human_source_review_driver_cannot_authorize`);
-  draft instructions need a human review with notes. Archive file names containing
+  authorize a draft review (`draft_review_receipts_require_human_source_review_driver_cannot_authorize`)
+  for any component it would install; draft instructions need a human review with
+  notes. A deselected draft component is not installed, so it does not stop the driver. Archive file names containing
   `[ ] * ? { }` were reported to abort `--auto-generate-local`; that rule lives in
   ModSync.rs and was not re-checked here.
 

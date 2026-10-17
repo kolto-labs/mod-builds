@@ -161,16 +161,14 @@ table, read by `ports.py` for the **Rust** lanes only (no restore report needed)
   (lane-skip records carry `"source": "lane_skips"` and `urls: []`), and passed to
   `validate` and `install` as `--deselect <component Guid>`.
 - **Not applied elsewhere.** TypeScript lanes do not read the table (they have no
-  deselect mechanism). The Rust `gui` lane stops with
-  `gui_cannot_deselect_policy_skipped_components` for both games, as it already does
-  for the K2 cutscene skip.
+  deselect mechanism). The Rust `gui` lane applies it as a GUI subset (see
+  [GUI mode](#gui-mode)).
 
 `--restore-report` is refused for `--implementation typescript`
 (`policy_skips_supported_for_rust_only`): those lanes have no deselect mechanism
 and `validate --all` would select the step, so `ci.yml` does not pass the flags to
-them. The Rust `gui` lane also stops (`gui_cannot_deselect_policy_skipped_components`)
-when a component would need deselecting, because `gui_rust.py` takes no selection
-argument; K1 `gui` already stops on its widescreen-only components.
+them. The Rust `gui` lane forwards the same GUIDs to `gui_rust.py --deselect`
+(see [GUI mode](#gui-mode)).
 
 ## GUI mode
 
@@ -178,7 +176,31 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
 
 - `gui_rust.py` drives the Rust desktop app in Xvfb with OCR and clicks. Success
   needs visible completion plus a native completion receipt that matches the game
-  tree.
+  tree. It installs a defined subset (`coverage: subset`):
+  - `--deselect GUID` (repeatable; `ports.py` passes each reviewed-policy skip) and
+    `--exclude-widescreen` (always passed by `ports.py`). The supplied TOML is never
+    edited: IsSelected is written for every component into a private copy
+    (`input.toml` beside the evidence) and the app is launched on the copy. ModSync.rs
+    loads it through `Guide::load_for_install`, which keeps authored `IsSelected`
+    whenever at least one component is selected, so no Rust change is needed.
+    The driver refuses a plan with nothing selected, because the app would then
+    select everything.
+  - The driver skips the `Select all` click when a base component is policy-skipped
+    (`Select all` sets every base component selected again), and checks that the
+    app's `Base build: N of M mods selected` line shows the expected count.
+  - Components that remain selected must not depend on a deselected one
+    (`selected_component_depends_on_deselected_component`).
+  - Widescreen-only components are excluded, never installed: the report lists them as
+    `excluded_widescreen` and `widescreen_phase: not_covered_by_gui_lane`
+    (`none_in_input` if the input has none). Without `--exclude-widescreen`, a selected
+    widescreen component is refused as before.
+  - Draft review is checked on the components that remain selected, and the driver
+    never authorizes one.
+  - Expected receipt = all components minus `skipped_by_reviewed_policy` minus
+    `excluded_widescreen`. `ports.py` requires `completed_components` and
+    `expected_components` to equal that count, and the report's skipped and excluded
+    lists to equal its own, and records `gui_not_covered` and `gui_covered_components`.
+    The skipped and excluded components are never reported as covered.
 - `gui_typescript.py` drives the built web UI in headless Chromium via Playwright.
   Success needs visible completion, no failed or skipped mods, and physical
   checkpoint receipts. Manifest choices are not forwarded to this driver.

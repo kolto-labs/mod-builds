@@ -79,13 +79,14 @@ the restore step in every install and manual lane.
 - 69 K1 components had no `Instructions` when last measured, and `ports.py` stops
   the Rust lane on that (`guide_steps_without_instructions`).
 - Generated draft instructions need a human review with notes. `gui_rust.py`
-  cannot authorize one and stops.
+  cannot authorize one and stops (a deselected draft component is not installed and
+  does not stop it).
 - Archive file names containing `[ ] * ? { }` were reported to abort
   `--auto-generate-local`. That behavior is in ModSync.rs; it was not re-checked
   for this update.
-- Widescreen sections are not covered by either GUI driver: `gui_rust.py` refuses
-  an input with widescreen-only components and `gui_typescript.py` refuses a
-  selection with widescreen mods.
+- Widescreen sections are not covered by either GUI driver: `gui_rust.py` excludes
+  widescreen-only components (listed as not covered) and `gui_typescript.py` refuses
+  a selection with widescreen mods.
 
 ## Next steps
 

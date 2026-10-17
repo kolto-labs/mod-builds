@@ -312,6 +312,24 @@ def coverage(guide, converted, report=None, implementation="rust", skipped=()):
     return len(components)
 
 
+def gui_widescreen_scope(converted, policy_guids):
+    """Widescreen-only components the Rust GUI lane does not install, and whether any exist.
+
+    The GUI driver has a single install phase. Widescreen-only components that
+    are not already reviewed-policy skips are excluded and reported as not
+    covered; this mirrors gui_rust.plan_selection, which re-derives it.
+    """
+    document = tomllib.loads(converted.read_text(encoding="utf-8"))
+    components = document.get("thisMod", document.get("Components", []))
+    widescreen = [component for component in components
+                  if isinstance(component, dict) and component.get("WidescreenOnly") is True]
+    excluded = [{"component_guid": str(component.get("Guid", "")).lower(),
+                 "heading": component.get("Heading", component.get("Name"))}
+                for component in widescreen
+                if str(component.get("Guid", "")).lower() not in policy_guids]
+    return excluded, bool(widescreen)
+
+
 def select_base_components(converted):
     """Write IsSelected=true for every base-phase, platform-neutral component.
 
@@ -509,8 +527,16 @@ def execute(args, report):
     for record in report.get(SKIPPED_REPORT_KEY, []):
         if record["component_guid"] is not None:
             deselect += ["--deselect", record["component_guid"]]
-    if deselect and args.mode == "gui":
-        raise Blocked("gui_cannot_deselect_policy_skipped_components")
+    policy_guids = {record["component_guid"] for record in report.get(SKIPPED_REPORT_KEY, [])
+                    if record["component_guid"] is not None}
+    gui_rust = args.implementation == "rust" and args.mode == "gui"
+    excluded, has_widescreen = ([], False)
+    if gui_rust:
+        excluded, has_widescreen = gui_widescreen_scope(converted, policy_guids)
+        report["gui_not_covered"] = {
+            "widescreen_phase": "not_covered_by_gui_lane" if has_widescreen else "none_in_input",
+            "excluded_widescreen": excluded}
+        deselect += [flag for item in excluded for flag in ("--deselect", item["component_guid"])]
     if args.implementation == "typescript":
         report["stage"] = "review"
         choices = review_manifest(args.review_manifest, guide, converted)
@@ -600,11 +626,13 @@ def execute(args, report):
              "--binary", command[0], "--input", str(converted),
              "--game-dir", str(game), "--archives", str(archives),
              "--work-dir", str(private / "gui-work"),
-             "--report", str(driver_report), "--timeout", "7000"],
+             "--report", str(driver_report), "--timeout", "7000", "--exclude-widescreen"]
+            + [flag for guid_ in sorted(policy_guids) for flag in ("--deselect", guid_)],
             source, private, "gui", report, env)
         if not driver_report.is_file() or driver_report.is_symlink():
             raise Blocked("gui_completion_report_missing")
         result = json.loads(driver_report.read_text(encoding="utf-8"))
+        expected_completed = (report["component_count"] - len(policy_guids) - len(excluded))
         if (not isinstance(result, dict)
                 or result.get("schema_version") != 1
                 or result.get("implementation") != "rust"
@@ -615,7 +643,13 @@ def execute(args, report):
                 or result.get("input_sha256") != report["converted_sha256"]
                 or result.get("binary_sha256") != digest(Path(command[0]))
                 or result.get("component_count") != report["component_count"]
-                or result.get("completed_components") != report["component_count"]
+                or result.get("completed_components") != expected_completed
+                or result.get("expected_components") != expected_completed
+                or result.get("skipped_by_reviewed_policy") != sorted(policy_guids)
+                or result.get("excluded_widescreen") != sorted(
+                    item["component_guid"] for item in excluded)
+                or result.get("widescreen_phase") != report["gui_not_covered"]["widescreen_phase"]
+                or result.get("coverage") != ("subset" if policy_guids or excluded else "full")
                 or not isinstance(result.get("verified_game_files"), int)
                 or result["verified_game_files"] <= 0
                 or not isinstance(result.get("receipt_sha256"), str)
@@ -625,6 +659,7 @@ def execute(args, report):
                 or digest(converted) != report["converted_sha256"]):
             raise Blocked("reviewed_inputs_changed")
         report["gui"] = result
+        report["gui_covered_components"] = expected_completed
         report["proof"] = "native_gui_and_verified_completion_receipt"
         report["status"] = "installed"
         report["reason"] = result["reason"]

@@ -5,6 +5,13 @@ Requires Python 3.11+, xvfb-run, xauth, tesseract, pyautogui, pytesseract and
 Pillow. Evidence is private under --work-dir; --report contains no OCR or mod
 names. The supplied game/workspace are real writable install targets. Failures
 leave application recovery state intact; this driver never retries an install.
+
+Subset installs: --deselect GUID (repeatable, reviewed policy skips) and
+--exclude-widescreen install a defined subset of the converted TOML. The
+driver never edits the supplied file: it writes IsSelected into a private copy
+(the GUI honors authored IsSelected when any component is selected, via
+Guide::load_for_install) and skips "Select all" when that would re-select a
+deselected base component. Deselected components are reported, never covered.
 """
 
 import argparse
@@ -41,6 +48,108 @@ def save(path, value):
     temporary.replace(path)
 
 
+def table_key(document):
+    return "thisMod" if "thisMod" in document else "Components"
+
+
+def review_required(value):
+    if isinstance(value, dict):
+        if "DraftReview" in value:
+            review = value["DraftReview"]
+            if not isinstance(review, dict) or review.get("RequiresReview") is not False:
+                return True
+        return any(review_required(child) for child in value.values())
+    return isinstance(value, list) and any(review_required(child) for child in value)
+
+
+def plan_selection(components, deselect=(), exclude_widescreen=False):
+    """Decide exactly which components the GUI will install, or refuse.
+
+    Base components not deselected are selected (what "Select all" would do).
+    Reviewed-policy GUIDs are always deselected. Widescreen-only components are
+    never installed: they are deselected with exclude_widescreen, otherwise any
+    that the input selects makes the plan refuse. Draft review is checked on
+    the components that remain selected only; the driver never authorizes it.
+    """
+    identities = [str(component.get("Guid", "")).lower() for component in components]
+    requested = [str(value).lower() for value in deselect]
+    if len(set(requested)) != len(requested):
+        raise Blocked("deselect_guid_duplicate")
+    if not set(requested) <= set(identities):
+        raise Blocked("deselect_guid_not_in_input")
+    policy = set(requested)
+    widescreen = {identity for identity, component in zip(identities, components)
+                  if component.get("WidescreenOnly") is True}
+    not_installed = widescreen - policy
+    selection = []
+    for identity, component in zip(identities, components):
+        if identity in policy:
+            selection.append(False)
+        elif identity in widescreen:
+            selection.append(component.get("IsSelected") is True and not exclude_widescreen)
+        else:
+            selection.append(True)
+    if review_required([component for component, keep in zip(components, selection) if keep]):
+        raise Blocked("draft_review_receipts_require_human_source_review_driver_cannot_authorize")
+    if any(keep and identity in widescreen for identity, keep in zip(identities, selection)):
+        raise Blocked("full_input_contains_separate_widescreen_phase_driver_supports_single_phase_only")
+    deselected = {identity for identity, keep in zip(identities, selection) if not keep}
+    for component, keep in zip(components, selection):
+        if keep and deselected & {str(each).lower() for each in component.get("Dependencies", [])}:
+            raise Blocked("selected_component_depends_on_deselected_component")
+    if not any(selection):
+        raise Blocked("no_component_left_selected")
+    base = [identity not in widescreen for identity in identities]
+    return {
+        "selection": selection,
+        "expected_components": [identity for identity, keep in zip(identities, selection) if keep],
+        "skipped_by_reviewed_policy": sorted(policy),
+        "excluded_widescreen": sorted(not_installed),
+        "widescreen_phase": "not_covered_by_gui_lane" if widescreen else "none_in_input",
+        "base_total": sum(base),
+        "base_selected": sum(keep and is_base for keep, is_base in zip(selection, base)),
+        "subset": bool(policy or not_installed),
+        "click_select_all": not any(identity in policy for identity, is_base
+                                    in zip(identities, base) if is_base),
+    }
+
+
+def rewrite_selection(text, selection):
+    """Return text with IsSelected written per top-level component, changing nothing else."""
+    document = tomllib.loads(text)
+    key = table_key(document)
+    header = "[[" + key + "]]"
+    index = -1
+    inside = False
+    lines = []
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if stripped.startswith("["):
+            inside = stripped == header
+            lines.append(line)
+            if inside:
+                index += 1
+                if index >= len(selection):
+                    raise Blocked("selection_rewrite_incomplete")
+                lines.append("IsSelected = " + ("true" if selection[index] else "false") + "\n")
+            continue
+        if inside and re.fullmatch(r"IsSelected\s*=\s*(true|false)", stripped):
+            continue
+        lines.append(line)
+    rewritten = "".join(lines)
+    updated = tomllib.loads(rewritten)
+    if index + 1 != len(selection) or len(updated[key]) != len(selection):
+        raise Blocked("selection_rewrite_incomplete")
+    if [component.get("IsSelected") for component in updated[key]] != selection:
+        raise Blocked("selection_rewrite_mismatch")
+    for part in (document, updated):
+        for component in part[key]:
+            component.pop("IsSelected", None)
+    if updated != document:
+        raise Blocked("selection_rewrite_changed_other_fields")
+    return rewritten
+
+
 def stop(process):
     if process is None:
         return
@@ -67,6 +176,8 @@ def drive(args, private, result):
     import pytesseract
     from PIL import ImageGrab
 
+    plan = json.loads((private / "selection-plan.json").read_text(encoding="utf-8"))
+    driven_input = private / "input.toml"
     deadline = time.monotonic() + args.timeout
     process = None
     events = []
@@ -156,7 +267,7 @@ def drive(args, private, result):
         time.sleep(0.7)
 
     command = [str(args.binary), "gui", "--allow-multiple-instances",
-               "--input", str(args.input), "--game-dir", str(args.game_dir),
+               "--input", str(driven_input), "--game-dir", str(args.game_dir),
                "--source-dir", str(args.archives),
                "--settings-dir", str(private / "settings")]
     save(private / "command.json", command)
@@ -176,7 +287,13 @@ def drive(args, private, result):
             click("Keep telemetry off", optional=True)
             click("Summary / selection")
             click("Pause sharing to edit", optional=True)
-            click("Select all")
+            if plan["click_select_all"]:
+                click("Select all")
+            if plan["subset"]:
+                result["stage"] = "selection_summary"
+                label = "Base build: %d of %d mods selected" % (plan["base_selected"], plan["base_total"])
+                if locate(label, optional=True) is None:
+                    raise Blocked("selection_summary_does_not_match_expected_subset")
             click("Validation / install")
             click("Run validation")
             result["stage"] = "validation"
@@ -188,7 +305,7 @@ def drive(args, private, result):
             result["stage"] = "installation"
             locate("Installation complete")
             result["ui_completed"] = True
-            verify_receipt(args, result, check_time)
+            verify_receipt(args, result, check_time, plan["expected_components"])
     finally:
         if process is not None and process.poll() is None:
             process.terminate()
@@ -199,7 +316,7 @@ def drive(args, private, result):
                 process.wait()
 
 
-def verify_receipt(args, result, check_time):
+def verify_receipt(args, result, check_time, expected_ids):
     result["stage"] = "receipt"
     key = hashlib.sha256(os.fsencode(str(args.game_dir))).hexdigest()[:16]
     state = args.game_dir.parent / (".modsync-" + key)
@@ -209,11 +326,9 @@ def verify_receipt(args, result, check_time):
     receipt = json.loads(path.read_text(encoding="utf-8"))
     if receipt.get("game") != str(args.game_dir) or receipt.get("mods") != str(args.archives):
         raise Blocked("completion_roots_mismatch")
-    expected = tomllib.loads(args.input.read_text(encoding="utf-8"))
-    expected = expected.get("thisMod", expected.get("Components", []))
     actual = receipt.get("components", [])
-    expected_ids = [component["Guid"] for component in expected]
-    actual_ids = [component["Guid"] for component in actual]
+    actual_ids = [str(component["Guid"]).lower() for component in actual]
+    expected_ids = [str(identity).lower() for identity in expected_ids]
     if len(actual_ids) != len(expected_ids) or set(actual_ids) != set(expected_ids):
         raise Blocked("completion_does_not_cover_full_input")
     files = receipt.get("files")
@@ -250,25 +365,15 @@ def execute(args, result):
         raise Blocked("executable_required")
     if args.input.suffix.lower() != ".toml":
         raise Blocked("converted_full_toml_required")
-    document = tomllib.loads(args.input.read_text(encoding="utf-8"))
-    components = document.get("thisMod", document.get("Components", []))
+    input_text = args.input.read_text(encoding="utf-8")
+    document = tomllib.loads(input_text)
+    components = document.get(table_key(document), [])
     if not isinstance(components, list) or not components:
         raise Blocked("converted_components_missing")
     identities = [component.get("Guid") for component in components]
     if any(not identity for identity in identities) or len(set(identities)) != len(identities):
         raise Blocked("component_identities_missing_or_duplicate")
-    def review_required(value):
-        if isinstance(value, dict):
-            if "DraftReview" in value:
-                review = value["DraftReview"]
-                if not isinstance(review, dict) or review.get("RequiresReview") is not False:
-                    return True
-            return any(review_required(child) for child in value.values())
-        return isinstance(value, list) and any(review_required(child) for child in value)
-    if review_required(components):
-        raise Blocked("draft_review_receipts_require_human_source_review_driver_cannot_authorize")
-    if any(component.get("WidescreenOnly") for component in components):
-        raise Blocked("full_input_contains_separate_widescreen_phase_driver_supports_single_phase_only")
+    plan = plan_selection(components, args.deselect, args.exclude_widescreen)
     if not args.game_dir.is_dir() or not args.archives.is_dir():
         raise Blocked("real_game_and_archive_directories_required")
     args.work_dir = args.work_dir.resolve()
@@ -291,6 +396,15 @@ def execute(args, result):
     result["input_sha256"] = digest(args.input)
     result["binary_sha256"] = digest(args.binary)
     result["component_count"] = len(components)
+    result["coverage"] = "subset" if plan["subset"] else "full"
+    result["expected_components"] = len(plan["expected_components"])
+    for name in ("skipped_by_reviewed_policy", "excluded_widescreen", "widescreen_phase"):
+        result[name] = plan[name]
+    (private / "input.toml").write_text(
+        rewrite_selection(input_text, plan["selection"]) if plan["subset"] else input_text,
+        encoding="utf-8")
+    result["driven_input_sha256"] = digest(private / "input.toml")
+    save(private / "selection-plan.json", plan)
     command = ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1600x1200x24 -nolisten tcp",
                sys.executable, str(Path(__file__).resolve()),
                *sys.argv[1:], "--private-worker", str(private)]
@@ -309,6 +423,8 @@ def execute(args, result):
         result.update(json.loads(worker.read_text(encoding="utf-8")))
         if code or result.get("status") != "installed":
             raise Blocked(result.get("reason", "isolated_worker_failed"))
+        if result.get("completed_components") != len(plan["expected_components"]):
+            raise Blocked("completion_does_not_cover_expected_subset")
         if digest(args.input) != result["input_sha256"]:
             raise Blocked("input_changed_during_install")
     finally:
@@ -319,6 +435,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("binary", "input", "game-dir", "archives", "work-dir", "report"):
         parser.add_argument("--" + name, type=Path, required=True)
+    parser.add_argument("--deselect", action="append", default=[], metavar="GUID",
+                        help="reviewed policy skip: written IsSelected=false into a private copy and "
+                             "reported as skipped_by_reviewed_policy, never as covered (repeatable)")
+    parser.add_argument("--exclude-widescreen", action="store_true",
+                        help="deselect widescreen-only components in the private copy and report them "
+                             "as not covered; without it a selected widescreen component is refused")
     parser.add_argument("--timeout", type=float, required=True, help="Total GUI time budget in seconds")
     parser.add_argument("--private-worker", type=Path, help=argparse.SUPPRESS)
     args = parser.parse_args()
@@ -328,7 +450,8 @@ def main():
               "source_contract": ["src/ui/validation_page.rs", "src/ui.rs",
                                   "src/ui/installing_page.rs", "src/recovery.rs",
                                   "src/checkpoint/finalize.rs"],
-              "limitations": ["Separate widescreen phases require another GUI route",
+              "limitations": ["Widescreen-only components are never installed: refused when selected, "
+                              "otherwise reported in excluded_widescreen as not covered",
                               "Draft review cannot be authorized by this driver",
                               "Full guide coverage must be established by the caller",
                               "A failed install requires application recovery before retry"]}
