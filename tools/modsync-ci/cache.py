@@ -2,9 +2,11 @@
 """Archive cache shared by installer adapters; Python 3.10+, standard library only."""
 
 import argparse
+import copy
 from email.message import EmailMessage
 from email.policy import default as email_policy
 import hashlib
+import importlib.util
 from http.client import HTTPException
 from http.cookiejar import CookieJar
 import html
@@ -30,6 +32,20 @@ ARCHIVE = re.compile(r"\.(zip|7z|rar)$", re.I)
 LINK = re.compile(r'\[[^\]]*\]\(\s*(<[^>]+>|[^\s)]+)(?:\s+[^)]*)?\)|<((?:https?)://[^>]+)>|^\s*\[[^\]]+\]:\s*(\S+)', re.M)
 HTTP = build_opener(HTTPCookieProcessor(CookieJar()))
 DISK_RESERVE_BYTES = 3 * 1024 ** 3
+MIN_TOOL_ARCHIVE_BYTES = 64
+LOOSE = "file"
+LOOSE_SUFFIX = re.compile(r"\.[A-Za-z0-9]{1,8}$")
+HTML_REJECTED = "not a supported archive (HTML and unknown payloads rejected)"
+TOOL_PROVIDERS = ("mega", "google-drive")
+PINS_PATH = Path(__file__).with_name("seed_pins.json")
+PIN_PROVIDERS = ("nexus", "gamefront")
+PIN_PROVENANCE = "operator-local-download"
+PIN_EXTENSIONS = ("zip", "7z", "rar", LOOSE)
+SHA256 = re.compile(r"[a-f0-9]{64}")
+UNCACHED = "uncached-by-policy"
+UNCACHED_SKIPPED = "uncached-skipped"
+MAX_LINK_BYTES = 20 * 1024 ** 3
+NEXUS_REASON = "nexus requires NEXUS_API_KEY (no headless adapter; CAPTCHA is never bypassed); blocked-pending-user-action"
 
 
 def clean_url(url):
@@ -66,6 +82,8 @@ def provider(url):
         return "google-drive", False
     if host == "gamefront.com" or host.endswith(".gamefront.com"):
         return "gamefront", False
+    if host == "dropbox.com" or host.endswith(".dropbox.com"):
+        return "dropbox", False
     return "http", bool(ARCHIVE.search(parsed.path))
 
 
@@ -84,7 +102,18 @@ def archive_link(url):
         return parsed.path.startswith("/file/d/")
     if kind == "gamefront":
         return bool(re.match(r"^/games/[^/]+/file/[^/]+", parsed.path))
+    if kind == "dropbox":
+        return bool(re.match(r"^/(?:s/[^/]+|scl/fi/[^/]+)/[^/]+", parsed.path))
+    if kind == "http":
+        return key_for(url) in load_direct_links()
     return False
+
+
+def dropbox_direct(url):
+    parsed = urlsplit(url)
+    query = [(name, value) for name, value in parse_qsl(parsed.query, keep_blank_values=True)
+             if name.lower() not in ("dl", "raw")]
+    return urlunsplit(("https", parsed.netloc, parsed.path, urlencode(query + [("dl", "1")]), ""))
 
 
 def endpoint_id(url):
@@ -104,16 +133,23 @@ def version_id(url):
     return match[1] if match else None
 
 
+def guide_source(guide):
+    source = Path(guide).read_text(encoding="utf-8")
+    source = re.sub(r"```.*?```|~~~.*?~~~", "", source, flags=re.S)
+    return re.sub(r"`[^`\n]*`", "", source)
+
+
+def link_urls(source):
+    for match in LINK.finditer(source):
+        url = html.unescape(next(value for value in match.groups() if value)).strip("<>")
+        if url.startswith(("https://", "http://")):
+            yield url
+
+
 def discover(guides):
     found = {}
     for guide in guides:
-        source = Path(guide).read_text(encoding="utf-8")
-        source = re.sub(r"```.*?```|~~~.*?~~~", "", source, flags=re.S)
-        source = re.sub(r"`[^`\n]*`", "", source)
-        for match in LINK.finditer(source):
-            url = html.unescape(next(value for value in match.groups() if value)).strip("<>")
-            if not url.startswith(("https://", "http://")):
-                continue
+        for url in link_urls(guide_source(guide)):
             checked_url(url)
             if not archive_link(url):
                 continue
@@ -125,6 +161,61 @@ def discover(guides):
             if str(guide) not in found[identity]["guides"]:
                 found[identity]["guides"].append(str(guide))
     return list(found.values())
+
+
+def referencing_steps(item):
+    steps = []
+    for guide in item["guides"]:
+        section = heading = None
+        blocks = [(None, None, [])]
+        for line in guide_source(guide).splitlines(keepends=True):
+            if line.startswith("# "):
+                section = heading = None
+            elif line.startswith("## "):
+                section, heading = line[3:].strip(), None
+            elif line.startswith("### "):
+                heading = line[4:].strip()
+            else:
+                blocks[-1][2].append(line)
+                continue
+            blocks.append((section, heading, []))
+        for section, heading, lines in blocks:
+            if item["url"] in set(link_urls("".join(lines))):
+                step = {"guide": str(guide), "section": section, "heading": heading}
+                if step not in steps:
+                    steps.append(step)
+    return steps
+
+
+STEP_SCOPE = "::"
+
+
+def parse_allowance(value):
+    text = str(value)
+    if STEP_SCOPE not in text:
+        section = text.strip()
+        if not section:
+            raise ValueError("--allow-uncached-by-policy needs a non-empty section name")
+        return section, None
+    section, _, heading = text.partition(STEP_SCOPE)
+    section, heading = section.strip(), heading.strip()
+    if not section or not heading or STEP_SCOPE in heading:
+        raise ValueError("--allow-uncached-by-policy step form must be '<## section>::<### heading>': " + text)
+    return section, heading
+
+
+def skippable_steps(item, allowances):
+    sections, steps_allowed = set(), set()
+    for value in allowances:
+        section, heading = parse_allowance(value)
+        if heading is None:
+            sections.add(section)
+        else:
+            steps_allowed.add((section, heading))
+    steps = referencing_steps(item)
+    outside = [step for step in steps if step["heading"] is None or not (
+        step["section"] in sections or (step["section"], step["heading"]) in steps_allowed)]
+    return steps, outside
 
 
 def atomic_json(path, value):
@@ -150,26 +241,69 @@ def digest(path):
     return result.hexdigest()
 
 
-def validate(path, timeout):
+def validate(path, timeout, loose=False):
     with path.open("rb") as stream:
         magic = stream.read(512)
+    if loose:
+        if path.stat().st_size < MIN_TOOL_ARCHIVE_BYTES:
+            raise ValueError("loose file below minimum size (likely an error page)")
+        if magic.lstrip(b"\xef\xbb\xbf \t\r\n\x0b\x0c").startswith(b"<"):
+            raise ValueError(HTML_REJECTED)
+        return LOOSE
     if magic.startswith((b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08")):
-        subprocess.run([sys.executable, "-c",
-                        "import sys,zipfile; archive=zipfile.ZipFile(sys.argv[1]); "
-                        "sys.exit(1 if archive.testzip() else 0)", str(path.resolve())],
-                       stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                       stderr=subprocess.DEVNULL, timeout=timeout, check=True)
+        try:
+            subprocess.run([sys.executable, "-c",
+                            "import sys,zipfile; archive=zipfile.ZipFile(sys.argv[1]); "
+                            "sys.exit(1 if archive.testzip() else 0)", str(path.resolve())],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=subprocess.DEVNULL, timeout=timeout, check=True)
+        except subprocess.CalledProcessError:
+            if not integrity_tools(path, "zip"):
+                raise
+            run_integrity_tools(path, "zip", timeout)
         return "zip"
     kind = "7z" if magic.startswith(b"7z\xbc\xaf\x27\x1c") else "rar" if magic.startswith(b"Rar!\x1a\x07") else None
     if not kind:
-        raise ValueError("not a supported archive (HTML and unknown payloads rejected)")
-    executable = shutil.which("7zz") or shutil.which("7z")
-    if not executable:
+        raise ValueError(HTML_REJECTED)
+    return run_integrity_tools(path, kind, timeout)
+
+
+def integrity_tools(path, kind):
+    target = str(path.resolve())
+    tools, seen = [], set()
+    unrar = shutil.which("unrar") if kind == "rar" else None
+    if unrar:
+        tools.append(("unrar", [unrar, "t", "-idq", "-y", "-p-", target]))
+    for name in ("7zz", "7z"):
+        executable = shutil.which(name)
+        if executable and os.path.realpath(executable) not in seen:
+            seen.add(os.path.realpath(executable))
+            tools.append((name, [executable, "t", "-bd", "-y", "-p", target]))
+    bsdtar = shutil.which("bsdtar")
+    if bsdtar:
+        tools.append(("bsdtar", [bsdtar, "-xOf", target]))
+    return tools
+
+
+def run_integrity_tools(path, kind, timeout):
+    tools = integrity_tools(path, kind)
+    if not tools:
         raise ValueError("7z or 7zz required for RAR/7z integrity")
-    subprocess.run([executable, "t", "-bd", "-y", "-p", str(path.resolve())],
-                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                   stderr=subprocess.DEVNULL, timeout=timeout, check=True)
-    return kind
+    failed = []
+    for name, command in tools:
+        try:
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=timeout)
+        except OSError:
+            continue
+        if result.returncode == 0:
+            return kind
+        if result.returncode > 0 and kind != "rar":
+            raise subprocess.CalledProcessError(result.returncode, [name])
+        failed.append(name)
+    if not failed:
+        raise ValueError("7z or 7zz required for RAR/7z integrity")
+    raise ValueError("archive integrity check failed in every available tool (" + ", ".join(failed) + ")")
 
 
 class Links(HTMLParser):
@@ -180,6 +314,347 @@ class Links(HTMLParser):
     def handle_starttag(self, tag, attrs):
         if tag == "a":
             self.urls.extend(value for name, value in attrs if name == "href" and value)
+
+
+class DownloadRows(HTMLParser):
+    """Collects (file name, download href) rows from a DeadlyStream file-selection page."""
+
+    def __init__(self):
+        super().__init__()
+        self.rows = []
+        self.row = None
+        self.title_tag = None
+        self.title_depth = 0
+
+    def finish_row(self):
+        if self.row is not None and self.row["href"]:
+            self.rows.append({"name": " ".join("".join(self.row["name"]).split()) or None,
+                              "href": self.row["href"]})
+        self.row = None
+
+    def handle_starttag(self, tag, attrs):
+        values = dict(attrs)
+        classes = (values.get("class") or "").split()
+        if tag == "li" and "ipsDataItem" in classes:
+            self.finish_row()
+            self.row = {"name": [], "href": None}
+            self.title_tag = None
+        elif self.row is not None:
+            if self.title_tag is None and "ipsDataItem_title" in classes:
+                self.title_tag, self.title_depth = tag, 1
+            elif self.title_tag == tag:
+                self.title_depth += 1
+            if tag == "a" and values.get("href") and not self.row["href"]:
+                query = parse_qs(urlsplit(html.unescape(values["href"])).query)
+                if query.get("do") == ["download"] and "r" in query:
+                    self.row["href"] = values["href"]
+
+    def handle_endtag(self, tag):
+        if self.title_tag == tag:
+            self.title_depth -= 1
+            if self.title_depth == 0:
+                self.title_tag = None
+
+    def handle_data(self, data):
+        if self.row is not None and self.title_tag is not None:
+            self.row["name"].append(data)
+
+    def close(self):
+        super().close()
+        self.finish_row()
+
+
+SELECTIONS_PATH = Path(__file__).with_name("archive_selections.json")
+FILE_ID = re.compile(r"/files/file/([0-9]+)(?:[-/]|$)")
+
+
+def selection_key(key):
+    key = str(key).strip()
+    if key.isdigit():
+        return key
+    match = FILE_ID.search(urlsplit(key).path) if key.startswith(("https://", "http://")) else None
+    if not match:
+        raise ValueError("archive selection key must be a DeadlyStream file id or file page URL")
+    return match[1]
+
+
+TOOL_FILE_ID = {"google-drive": re.compile(r"^/file/d/([A-Za-z0-9_-]+)"),
+                "mega": re.compile(r"^/file/([A-Za-z0-9_-]+)")}
+TOOL_KEY = re.compile(r"^(google-drive|mega):([A-Za-z0-9_-]+)$")
+
+
+def tool_key(url):
+    kind, _ = provider(url)
+    pattern = TOOL_FILE_ID.get(kind)
+    match = pattern.match(urlsplit(url).path) if pattern else None
+    return kind + ":" + match[1] if match else None
+
+
+def tool_selection_key(key):
+    key = str(key).strip()
+    if TOOL_KEY.match(key):
+        return key
+    normalized = tool_key(key) if key.startswith(("https://", "http://")) else None
+    if not normalized:
+        raise ValueError("tool selection key must be google-drive:<file id>, mega:<file id> or a file URL")
+    return normalized
+
+
+ROW_ID = re.compile(r"^[0-9]{1,12}$")
+
+
+def review_selectors(key, value):
+    if isinstance(value, str):
+        listed = [value]
+    elif isinstance(value, dict):
+        if "file" in value and "files" in value:
+            raise ValueError("selection for " + str(key) + " must use either file or files, not both")
+        if "files" in value:
+            listed = value["files"]
+            if not isinstance(listed, list) or not listed:
+                raise ValueError("selection for " + str(key) + ": files must be a non-empty list")
+        else:
+            listed = [{"file": value.get("file"), **({"r": value["r"]} if "r" in value else {})}]
+    else:
+        raise ValueError("selection for " + str(key) + " must be a file name or an object")
+    selectors, seen = [], set()
+    for item in listed:
+        if isinstance(item, str):
+            item = {"file": item}
+        if not isinstance(item, dict) or set(item) - {"file", "r"}:
+            raise ValueError("selection for " + str(key) + ": each file must be a name or {file, r}")
+        row = item.get("r")
+        if row is not None:
+            row = str(row) if isinstance(row, int) and not isinstance(row, bool) else row
+            if not isinstance(row, str) or not ROW_ID.match(row):
+                raise ValueError("selection for " + str(key) + ": r must be a numeric row id")
+        name = item.get("file")
+        if isinstance(name, str) and name.casefold() in seen:
+            raise ValueError("selection for " + str(key) + " names the same file twice")
+        seen.add(name.casefold() if isinstance(name, str) else name)
+        selectors.append({"file": name, "r": row})
+    return selectors
+
+
+def review_entry(key, value, tool=False):
+    selectors = review_selectors(key, value)
+    loose = value.get("loose", False) if isinstance(value, dict) else False
+    if not isinstance(loose, bool):
+        raise ValueError("selection for " + str(key) + ": loose must be true or false")
+    if (loose or tool) and (len(selectors) != 1 or selectors[0]["r"] is not None):
+        raise ValueError("loose selection for " + str(key) + " must name exactly one file without a row id")
+    for selector in selectors:
+        name = selector["file"]
+        if loose:
+            if not isinstance(name, str) or safe_archive_name(name, LOOSE) != name:
+                raise ValueError("loose selection for " + str(key) + " must name a plain non-archive file "
+                                 "whose name is already filesystem-safe")
+        elif tool:
+            raise ValueError("tool selection for " + str(key) + " must set loose to true")
+        elif not isinstance(name, str) or not ARCHIVE.search(name):
+            raise ValueError("archive selection for " + str(key) + " must name an archive file")
+    return {"file": selectors[0]["file"], "loose": loose, "files": selectors}
+
+
+def load_reviewed(path=None):
+    path = Path(path or SELECTIONS_PATH)
+    reviewed = {"selections": {}, "tools": {}}
+    if not path.exists():
+        return reviewed
+    document = json.loads(path.read_text(encoding="utf-8"))
+    for key, value in (document.get("selections") or {}).items():
+        reviewed["selections"][selection_key(key)] = review_entry(key, value)
+    for key, value in (document.get("tool_selections") or {}).items():
+        reviewed["tools"][tool_selection_key(key)] = review_entry(key, value, tool=True)
+    return reviewed
+
+
+NEXUS_KEY = re.compile(r"^nexus:(?:([A-Za-z0-9_-]+)/)?([0-9]+)$")
+NEXUS_MOD = re.compile(r"^/([^/]+)/mods/([0-9]+)(?:/|$)")
+
+
+def uncached_key(key):
+    text = str(key).strip()
+    if text.startswith("nexus:"):
+        match = NEXUS_KEY.match(text)
+        if not match:
+            raise ValueError("uncached nexus key must look like nexus:<mod id> or nexus:<game>/<mod id>")
+        return "nexus:" + (match[1].lower() + "/" if match[1] else "") + match[2]
+    return selection_key(text)
+
+
+def load_uncached(path=None):
+    path = Path(path or SELECTIONS_PATH)
+    if not path.exists():
+        return {}
+    document = json.loads(path.read_text(encoding="utf-8"))
+    declared = document.get("uncached", {})
+    if not isinstance(declared, dict):
+        raise ValueError("uncached must be an object keyed by DeadlyStream file id or nexus:<mod id>")
+    uncached = {}
+    for key, value in declared.items():
+        reason = value.get("reason") if isinstance(value, dict) else None
+        if not isinstance(reason, str) or not reason.strip():
+            raise ValueError("uncached entry for " + str(key) + " must carry a non-empty reason")
+        uncached[uncached_key(key)] = reason.strip()
+    return uncached
+
+
+def direct_link_key(key):
+    key = str(key).strip()
+    try:
+        checked_url(key)
+    except ValueError:
+        raise ValueError("direct link key must be an http(s) guide link URL") from None
+    return key_for(key)
+
+
+def review_direct_link(key, value):
+    if not isinstance(value, dict) or set(value) != {"url", "file", "sha256", "size", "reason"}:
+        raise ValueError("direct link for " + str(key) + " must be exactly {url, file, sha256, size, reason}")
+    url, name = value["url"], value["file"]
+    if not isinstance(url, str):
+        raise ValueError("direct link for " + str(key) + ": url must be a string")
+    parsed = urlsplit(checked_url(url))
+    if (parsed.scheme != "https" or parsed.query or parsed.fragment or not ARCHIVE.search(parsed.path)
+            or (parsed.hostname or "").lower() != (urlsplit(str(key).strip()).hostname or "").lower()):
+        raise ValueError("direct link for " + str(key) + " must be an https archive URL on the guide link's host")
+    if not isinstance(name, str) or not ARCHIVE.search(name) or safe_archive_name(
+            name, name.rsplit(".", 1)[-1].lower()) != name:
+        raise ValueError("direct link for " + str(key) + " must name a filesystem-safe archive file")
+    if not isinstance(value["sha256"], str) or not SHA256.fullmatch(value["sha256"]):
+        raise ValueError("direct link for " + str(key) + " needs a lowercase SHA-256")
+    if not isinstance(value["size"], int) or isinstance(value["size"], bool) or value["size"] <= 0:
+        raise ValueError("direct link for " + str(key) + " needs a positive size")
+    if not isinstance(value["reason"], str) or not value["reason"].strip():
+        raise ValueError("direct link for " + str(key) + " must carry a non-empty reason")
+    return {"url": url, "file": name, "sha256": value["sha256"], "size": value["size"],
+            "reason": value["reason"].strip()}
+
+
+def load_direct_links(path=None):
+    path = Path(path or SELECTIONS_PATH)
+    if not path.exists():
+        return {}
+    declared = json.loads(path.read_text(encoding="utf-8")).get("direct_links", {})
+    if not isinstance(declared, dict):
+        raise ValueError("direct_links must be an object keyed by guide link URL")
+    return {direct_link_key(key): review_direct_link(key, value) for key, value in declared.items()}
+
+
+def reviewed_direct(item, path=None):
+    if item["provider"] != "http":
+        return None
+    return load_direct_links(path).get(item["id"])
+
+
+def uncached_reason(item, path=None):
+    if item["provider"] == "deadlystream":
+        match = FILE_ID.search(urlsplit(item["url"]).path)
+        return load_uncached(path).get(match[1]) if match else None
+    if item["provider"] == "nexus":
+        match = NEXUS_MOD.match(urlsplit(item["url"]).path)
+        if not match:
+            return None
+        declared = load_uncached(path)
+        return declared.get("nexus:" + match[1].lower() + "/" + match[2]) or declared.get("nexus:" + match[2])
+    return None
+
+
+def uncached_entry(item, reason):
+    return {"id": item["id"], "url": clean_url(item["url"]), "provider": item["provider"],
+            "status": UNCACHED, "reason": "intentionally not cached by policy: " + reason}
+
+
+def selection_value(entry):
+    only = entry["files"][0]
+    return only["file"] if len(entry["files"]) == 1 and only["r"] is None else entry["files"]
+
+
+def load_selections(path=None):
+    return {key: selection_value(entry) for key, entry in load_reviewed(path)["selections"].items()}
+
+
+def reviewed_selectors(item, path=None):
+    if item["provider"] != "deadlystream":
+        return None
+    match = FILE_ID.search(urlsplit(item["url"]).path)
+    entry = load_reviewed(path)["selections"].get(match[1]) if match else None
+    return entry["files"] if entry else None
+
+
+def multi_selectors(item, path=None):
+    selectors = reviewed_selectors(item, path)
+    return selectors if selectors and (len(selectors) > 1 or selectors[0]["r"]) else None
+
+
+def reviewed_loose(item, path=None):
+    if item["provider"] == "deadlystream":
+        match = FILE_ID.search(urlsplit(item["url"]).path)
+        key, table = (match[1] if match else None), "selections"
+    elif item["provider"] in TOOL_PROVIDERS:
+        key, table = tool_key(item["url"]), "tools"
+    else:
+        return None
+    entry = load_reviewed(path)[table].get(key) if key else None
+    return entry["file"] if entry and entry["loose"] else None
+
+
+def entry_loose(item, entry, path=None):
+    return entry.get("extension") == LOOSE and reviewed_loose(item, path) is not None
+
+
+def describe_rows(rows):
+    shown = ["%s (r=%s)" % (json.dumps(row["name"]) if row["name"] else "unnamed", row["r"]) for row in rows[:12]]
+    return "; ".join(shown) + ("; ..." if len(rows) > 12 else "")
+
+
+def choose_downloads(rows, file_id, selections):
+    reviewed = selections.get(file_id)
+    if reviewed:
+        selectors = [{"file": reviewed, "r": None}] if isinstance(reviewed, str) else reviewed
+        chosen = []
+        for selector in selectors:
+            matches = [row for row in rows if row["name"] == selector["file"]
+                       and (selector["r"] is None or row["r"] == selector["r"])]
+            if len(matches) != 1:
+                raise ValueError("reviewed archive selection for file %s matches %d of the listed files; "
+                                 "re-review archive_selections.json; candidates: %s"
+                                 % (file_id, len(matches), describe_rows(rows)))
+            chosen.append(matches[0])
+        return chosen
+    if len(rows) == 1:
+        return rows
+    archives = [row for row in rows if row["name"] and ARCHIVE.search(row["name"])]
+    if len(archives) == 1 and all(row["name"] for row in rows):
+        return archives
+    raise ValueError("landing page lists multiple files and no reviewed selection exists for file %s; "
+                     "add an exact file name to archive_selections.json; candidates: %s"
+                     % (file_id, describe_rows(rows)))
+
+
+def deadlystream_endpoint(source, base, candidates, file_id, selections):
+    def query_of(url):
+        return parse_qs(urlsplit(url).query)
+
+    selection = {url for url in candidates if query_of(url).get("do") == ["download"] and "r" in query_of(url)}
+    if selection:
+        named = DownloadRows()
+        named.feed(source)
+        named.close()
+        by_url = {}
+        for row in named.rows:
+            url = urljoin(base, html.unescape(row["href"]))
+            if url in selection:
+                by_url[url] = {"name": row["name"], "url": url}
+        rows = [{**by_url.get(url, {"name": None, "url": url}), "r": query_of(url)["r"][0]}
+                for url in sorted(selection, key=lambda url: (len(query_of(url)["r"][0]), query_of(url)["r"][0]))]
+        return choose_downloads(rows, file_id, selections)
+    downloads = {url for url in candidates if query_of(url).get("do") == ["download"]}
+    pool = downloads or candidates
+    if len(pool) != 1:
+        raise ValueError("landing page has no unique archive endpoint; attachment selection/provider adapter required")
+    return [{"name": None, "url": next(iter(pool)), "r": None}]
 
 
 def request(url, args, headers=None):
@@ -202,7 +677,7 @@ def request(url, args, headers=None):
         time.sleep(min(2 ** attempt, 8))
 
 
-def page_endpoint(response, item):
+def page_rows(response, item, selections=None):
     origin = urlsplit(item["url"])
     if item["provider"] == "deadlystream":
         canonical = urlsplit(checked_url(response.geturl()))
@@ -220,7 +695,7 @@ def page_endpoint(response, item):
     if len(body) > 2 * 1024 * 1024:
         raise ValueError("landing page too large")
     source = body.decode("utf-8", errors="replace")
-    if re.search(r"cf-turnstile|g-recaptcha|h-captcha|/cdn-cgi/challenge-platform|<title>\s*Just a moment", source, re.I):
+    if re.search(r"cf-turnstile|g-recaptcha(?!-response)|h-captcha|/cdn-cgi/challenge-platform|<title>\s*Just a moment", source, re.I):
         raise ValueError("provider challenge/CAPTCHA; blocked-pending-user-action")
     parser = Links()
     parser.feed(source)
@@ -236,23 +711,107 @@ def page_endpoint(response, item):
                 (not parsed.path.endswith("/attachment.php") and parsed.path.rstrip("/") != origin.path.rstrip("/"))):
             continue
         candidates.add(checked_url(url))
-    attachments = {url for url in candidates if "r" in parse_qs(urlsplit(url).query) or
-                   urlsplit(url).path.endswith("/attachment.php")}
-    candidates = attachments or candidates
+    if item["provider"] == "deadlystream":
+        selections = load_selections() if selections is None else selections
+        file_id = FILE_ID.match(origin.path)[1]
+        return deadlystream_endpoint(source, response.geturl(), candidates, file_id, selections)
     if len(candidates) != 1:
         raise ValueError("landing page has no unique archive endpoint; attachment selection/provider adapter required")
-    return candidates.pop()
+    return [{"name": None, "url": candidates.pop(), "r": None}]
+
+
+def page_endpoint(response, item, selections=None):
+    rows = page_rows(response, item, selections)
+    if len(rows) != 1:
+        raise ValueError("reviewed selection lists several files; fetch them with page_rows")
+    return rows[0]["url"]
+
+
+def tool_base(provider_name):
+    if provider_name == "mega":
+        for name, prefix in (("megatools", ["dl"]), ("megadl", [])):
+            executable = shutil.which(name)
+            if executable:
+                return [executable, *prefix, "--path"]
+        raise ValueError("mega download requires megatools (megatools or megadl) on PATH; not installed")
+    if provider_name == "google-drive":
+        executable = shutil.which("gdown")
+        if executable:
+            return [executable, "--quiet", "-O"]
+        if importlib.util.find_spec("gdown"):
+            return [sys.executable, "-m", "gdown", "--quiet", "-O"]
+        raise ValueError("google-drive download requires gdown (pip install gdown); not installed")
+    raise ValueError(provider_name + " has no tool adapter")
+
+
+def tool_command(provider_name, directory, url):
+    target = str(directory) + (os.sep if provider_name == "google-drive" else "")
+    return [*tool_base(provider_name), target, url]
 
 
 def resolve(item, args):
-    if item["provider"] in ("mega", "nexus", "google-drive", "gamefront"):
-        raise ValueError(item["provider"] + " requires an authenticated/provider adapter")
+    if item["provider"] == "nexus":
+        raise ValueError(NEXUS_REASON)
+    if item["provider"] == "gamefront":
+        raise ValueError("gamefront requires an authenticated/provider adapter")
+    if item["provider"] == "dropbox":
+        return dropbox_direct(item["url"])
+    if item["provider"] in TOOL_PROVIDERS:
+        tool_base(item["provider"])
+        return item["url"]
+    reviewed = reviewed_direct(item)
+    if reviewed:
+        return reviewed["url"]
     if item["direct"]:
         return item["url"]
     with request(item["url"], args) as response:
         if "html" not in response.headers.get("Content-Type", "").lower():
             raise ValueError("landing URL has no explicit archive endpoint")
-        return page_endpoint(response, item)
+        rows = page_rows(response, item)
+        return rows if len(rows) > 1 or (rows[0]["name"] and multi_selectors(item)) else rows[0]["url"]
+
+
+def fetch_with_tool(item, root, args):
+    objects = root / "objects"
+    objects.mkdir(parents=True, exist_ok=True)
+    workdir = Path(tempfile.mkdtemp(dir=objects, prefix=".tool-"))
+    try:
+        command = tool_command(item["provider"], workdir, item["url"])
+        try:
+            result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                    stderr=subprocess.DEVNULL, timeout=args.download_timeout)
+        except subprocess.TimeoutExpired:
+            raise ValueError("total download timeout") from None
+        except OSError:
+            raise ValueError(item["provider"] + " download tool could not be executed") from None
+        if result.returncode != 0:
+            raise ValueError(item["provider"] + " download tool failed (exit " + str(result.returncode) + ")")
+        files = [candidate for candidate in workdir.rglob("*") if candidate.is_file() or candidate.is_symlink()]
+        if len(files) != 1 or files[0].is_symlink():
+            raise ValueError(item["provider"] + " download did not yield exactly one regular file")
+        path = files[0]
+        size = path.stat().st_size
+        if size < MIN_TOOL_ARCHIVE_BYTES:
+            raise ValueError("downloaded file below minimum archive size (likely an error page)")
+        if size > args.max_bytes:
+            raise ValueError("archive exceeds size limit")
+        reviewed = reviewed_loose(item)
+        kind = validate(path, args.integrity_timeout, loose=bool(reviewed))
+        if reviewed:
+            if safe_archive_name(path.name, LOOSE) != reviewed:
+                raise ValueError("downloaded file name does not match the reviewed loose selection")
+            name = reviewed
+        else:
+            name = safe_archive_name(path.name, kind) or archive_name(item, kind, item["url"])
+        sha = digest(path)
+        os.replace(path, objects / sha)
+        return {"sha256": sha, "size": size, "extension": kind, "archive_name": name,
+                "endpoint_id": item["id"], "endpoint": clean_url(item["url"]),
+                "etag": None, "last_modified": None, "version_id": None,
+                "checked_at": time.time(), "status": "verified", "metadata_unknown": True,
+                "evidence": "download-without-upstream-metadata"}
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
 
 
 def object_path(root, entry):
@@ -262,7 +821,16 @@ def object_path(root, entry):
     return root / "objects" / sha
 
 
-def local_valid(root, entry):
+def entry_objects(entry):
+    if not isinstance(entry, dict):
+        return []
+    if "objects" in entry:
+        objects = entry["objects"]
+        return objects if isinstance(objects, list) and objects and all(isinstance(each, dict) for each in objects) else []
+    return [entry] if entry.get("sha256") else []
+
+
+def object_valid(root, entry):
     try:
         path = object_path(root, entry)
         return path.is_file() and path.stat().st_size == entry["size"] and digest(path) == entry["sha256"]
@@ -270,16 +838,107 @@ def local_valid(root, entry):
         return False
 
 
+def local_valid(root, entry):
+    objects = entry_objects(entry)
+    return bool(objects) and all(object_valid(root, each) for each in objects)
+
+
+def pin_entry(identity, value):
+    if not isinstance(value, dict) or value.get("provider") not in PIN_PROVIDERS:
+        return None
+    if value.get("provenance") != PIN_PROVENANCE or not isinstance(value.get("url"), str):
+        return None
+    if key_for(value["url"]) != identity:
+        return None
+    objects = value.get("objects")
+    if not isinstance(objects, list) or not objects:
+        return None
+    for each in objects:
+        if (not isinstance(each, dict) or not isinstance(each.get("sha256"), str)
+                or not SHA256.fullmatch(each["sha256"]) or not isinstance(each.get("size"), int)
+                or isinstance(each["size"], bool) or each["size"] < 0
+                or each.get("extension") not in PIN_EXTENSIONS
+                or not isinstance(each.get("archive_name"), str) or not each["archive_name"]):
+            return None
+    return {"url": value["url"], "provider": value["provider"], "provenance": value["provenance"],
+            "objects": [{key: each[key] for key in ("archive_name", "sha256", "size", "extension")}
+                        for each in objects]}
+
+
+def load_pins(path=None):
+    path = Path(path or PINS_PATH)
+    if not path.exists():
+        return {}
+    document = json.loads(path.read_text(encoding="utf-8"))
+    if (not isinstance(document, dict) or document.get("schema") != 1
+            or not isinstance(document.get("entries"), dict)):
+        raise ValueError("unsupported seed pins schema")
+    pins = {}
+    for identity, value in document["entries"].items():
+        pin = pin_entry(identity, value)
+        if pin:
+            pins[identity] = pin
+    return pins
+
+
+def is_pinned(item, entry, pins=None):
+    if not isinstance(entry, dict) or entry.get("status") != "pinned" or entry.get("evidence") != "operator-seed":
+        return False
+    if item.get("provider") not in PIN_PROVIDERS:
+        return False
+    try:
+        pin = (load_pins() if pins is None else pins).get(item["id"])
+    except (ValueError, OSError):
+        return False
+    if not pin or pin["provider"] != item["provider"]:
+        return False
+    objects = entry_objects(entry)
+    if not objects:
+        return False
+    if {each.get("sha256") for each in objects} != {each["sha256"] for each in pin["objects"]}:
+        return False
+    return objects_match_selection(item, entry)
+
+
+def bundle(objects):
+    fresh = all(each.get("status") == "fresh" for each in objects)
+    return {"objects": objects, "size": sum(each["size"] for each in objects),
+            "checked_at": min(each["checked_at"] for each in objects),
+            "status": "fresh" if fresh else "verified",
+            "evidence": "download-200" if fresh else "download-without-upstream-metadata",
+            "metadata_unknown": any(each.get("metadata_unknown", True) for each in objects)}
+
+
+def objects_match_selection(item, entry, path=None):
+    selectors = multi_selectors(item, path)
+    if not selectors:
+        return True
+    objects = entry_objects(entry)
+    if len(objects) != len(selectors):
+        return False
+    for selector in selectors:
+        matches = [each for each in objects if each.get("listed_name") == selector["file"]
+                   and (selector["r"] is None or each.get("row") == selector["r"])]
+        if len(matches) != 1:
+            return False
+    return True
+
+
 def safe_archive_name(value, extension):
     if not isinstance(value, str):
         return None
+    loose = extension == LOOSE
     name = unicodedata.normalize("NFC", value).replace("\\", "/").rsplit("/", 1)[-1]
     name = "".join(character if character.isalnum() or character in " ._-()[]+" else "_"
                    for character in name).strip(" .")
-    if not name or len(name.encode("utf-8")) > 240 or not ARCHIVE.search(name):
+    if not name or len(name.encode("utf-8")) > 240:
+        return None
+    if loose and (ARCHIVE.search(name) or not LOOSE_SUFFIX.search(name)):
+        return None
+    if not loose and not ARCHIVE.search(name):
         return None
     stem, suffix = name.rsplit(".", 1)
-    if not stem.strip(" ._") or suffix.lower() != extension:
+    if not stem.strip(" ._") or (not loose and suffix.lower() != extension):
         return None
     if stem.split(".", 1)[0].upper() in {"CON", "PRN", "AUX", "NUL", *(
             prefix + str(number) for prefix in ("COM", "LPT") for number in range(1, 10))}:
@@ -287,16 +946,26 @@ def safe_archive_name(value, extension):
     return name
 
 
-def archive_name(item, extension, url, disposition=None):
+def disposition_name(disposition, extension):
     if disposition:
         try:
             message = EmailMessage(policy=email_policy)
             message["Content-Disposition"] = disposition
-            name = safe_archive_name(message.get_filename(), extension)
-            if name:
-                return name
+            return safe_archive_name(message.get_filename(), extension)
         except (ValueError, TypeError, IndexError):
             pass
+    return None
+
+
+def archive_name(item, extension, url, disposition=None, reviewed=None):
+    if reviewed:
+        offered = disposition_name(disposition, LOOSE)
+        if offered and offered != reviewed:
+            raise ValueError("downloaded file name does not match the reviewed loose selection")
+        return reviewed
+    name = disposition_name(disposition, extension)
+    if name:
+        return name
     name = safe_archive_name(unquote(urlsplit(url).path.rsplit("/", 1)[-1]), extension)
     if name:
         return name
@@ -307,7 +976,47 @@ def archive_name(item, extension, url, disposition=None):
 
 
 def refresh_one(item, old, root, args, endpoint=None, depth=0):
+    policy = uncached_reason(item)
+    if policy:
+        raise ValueError("intentionally not cached by policy: " + policy)
+    result = fetch_item(item, old, root, args, endpoint, depth)
+    if not objects_match_selection(item, result):
+        raise ValueError("fetched files do not match the reviewed multi-file selection; "
+                         "re-review archive_selections.json")
+    return result
+
+
+def fetch_many(item, old, root, args, rows, depth):
+    previous = {each.get("endpoint_id"): each for each in entry_objects(old)}
+    budget = args.max_bytes
+    objects = []
+    for row in rows:
+        limited = copy.copy(args)
+        limited.max_bytes = budget
+        fetched = fetch_item(item, previous.get(endpoint_id(row["url"]), {}), root, limited, row["url"], depth)
+        budget -= fetched["size"]
+        objects.append({**fetched, "listed_name": row["name"], "row": row["r"]})
+    return bundle(objects)
+
+
+CONTENT_RANGE = re.compile(r"^bytes 0-([0-9]+)/([0-9]+)$")
+
+
+def announced_size(headers):
+    length = headers.get("Content-Length")
+    if length is not None:
+        return int(length)
+    match = CONTENT_RANGE.match((headers.get("Content-Range") or "").strip())
+    return int(match[2]) if match and int(match[1]) + 1 == int(match[2]) else None
+
+
+def fetch_item(item, old, root, args, endpoint=None, depth=0):
+    old = {} if "objects" in old else old
     endpoint = endpoint or resolve(item, args)
+    if isinstance(endpoint, list):
+        return fetch_many(item, old, root, args, endpoint, depth + 1)
+    if item["provider"] in TOOL_PROVIDERS:
+        return fetch_with_tool(item, root, args)
     endpoint_key = endpoint_id(endpoint)
     valid = local_valid(root, old)
     headers = {"Referer": item["url"]} if item["provider"] == "deadlystream" else {}
@@ -321,9 +1030,11 @@ def refresh_one(item, old, root, args, endpoint=None, depth=0):
         if response.code == 304:
             if not any(name in headers for name in ("If-None-Match", "If-Modified-Since")) or not valid:
                 raise ValueError("unexpected 304 without a verified cached object")
-            validate(object_path(root, old), args.integrity_timeout)
+            loose = entry_loose(item, old)
+            validate(object_path(root, old), args.integrity_timeout, loose=loose)
             name = archive_name(item, old["extension"], response.geturl(),
-                                response.headers.get("Content-Disposition"))
+                                response.headers.get("Content-Disposition"),
+                                reviewed_loose(item) if loose else None)
             return {**old, "archive_name": old.get("archive_name", name),
                     "checked_at": now, "status": "fresh", "evidence": "conditional-304"}
         if response.code != 200:
@@ -331,11 +1042,18 @@ def refresh_one(item, old, root, args, endpoint=None, depth=0):
         if "html" in response.headers.get("Content-Type", "").lower():
             if item["provider"] != "deadlystream" or depth >= 2:
                 raise ValueError("archive endpoint returned HTML; provider adapter required")
-            attachment = page_endpoint(response, item)
+            rows = page_rows(response, item)
+            if len(rows) > 1 or multi_selectors(item):
+                response.close()
+                return fetch_many(item, old, root, args, rows, depth + 1)
+            attachment = rows[0]["url"]
             if endpoint_id(attachment) == endpoint_key:
                 raise ValueError("download endpoint did not resolve to an attachment; provider adapter required")
             response.close()
-            return refresh_one(item, old, root, args, attachment, depth + 1)
+            return fetch_item(item, old, root, args, attachment, depth + 1)
+        expected = announced_size(response.headers)
+        if expected is not None and expected > args.max_bytes:
+            raise ValueError("archive exceeds size limit")
         descriptor, temporary = tempfile.mkstemp(dir=root / "objects", prefix=".download-")
         path = Path(temporary)
         try:
@@ -354,11 +1072,19 @@ def refresh_one(item, old, root, args, endpoint=None, depth=0):
                     stream.write(chunk)
                 stream.flush()
                 os.fsync(stream.fileno())
-            expected = response.headers.get("Content-Length")
-            if expected is not None and size != int(expected):
+            if expected is not None and size != expected:
                 raise ValueError("truncated archive")
-            kind = validate(path, args.integrity_timeout)
+            reviewed = reviewed_loose(item)
+            kind = validate(path, args.integrity_timeout, loose=bool(reviewed))
+            name = archive_name(item, kind, response.geturl(),
+                                response.headers.get("Content-Disposition"), reviewed)
             sha = digest(path)
+            pinned_direct = reviewed_direct(item)
+            if pinned_direct:
+                if sha != pinned_direct["sha256"] or size != pinned_direct["size"]:
+                    raise ValueError("downloaded file does not match the reviewed direct link; "
+                                     "re-review archive_selections.json")
+                name = pinned_direct["file"]
             if not (valid and old.get("sha256") == sha):
                 os.replace(path, root / "objects" / sha)
             etag = response.headers.get("ETag")
@@ -366,8 +1092,7 @@ def refresh_one(item, old, root, args, endpoint=None, depth=0):
             version = version_id(response.geturl())
             known = bool(etag or modified)
             return {"sha256": sha, "size": size, "extension": kind,
-                    "archive_name": archive_name(item, kind, response.geturl(),
-                                                 response.headers.get("Content-Disposition")),
+                    "archive_name": name,
                     "endpoint_id": endpoint_key, "endpoint": clean_url(response.geturl()),
                     "etag": etag, "last_modified": modified, "version_id": version,
                     "checked_at": time.time(), "status": "fresh" if known else "verified",
@@ -393,46 +1118,16 @@ def existing_archive_path(archive_root, filename):
     return path
 
 
-def import_existing(item, resource_entries, archive_root, root, args):
-    matches = [(key, value) for key, value in resource_entries.items()
-               if isinstance(value, dict)
-               and isinstance(value.get("HandlerMetadata"), dict)
-               and value["HandlerMetadata"].get("PrimaryUrl") == item["url"]]
-    if len(matches) != 1:
-        return {"id": item["id"], "status": "ambiguous-provider-url" if matches else "unmatched"}
-    _, resource_entry = matches[0]
-    files = resource_entry.get("Files")
-    if not isinstance(files, dict) or len(files) != 1:
-        return {"id": item["id"], "status": "ambiguous-variant"}
-    filename = next(iter(files))
-    try:
-        source = existing_archive_path(archive_root, filename)
-        extension = source.suffix.lower().lstrip(".")
-        if safe_archive_name(filename, extension) != filename:
-            raise ValueError("unsafe archive name")
-    except (OSError, ValueError) as error:
-        return {"id": item["id"], "status": "unresolved", "reason": safe_reason(error)}
-    entry = {"id": item["id"], "archive_name": filename, "status": "planned"}
-    manifest_path = root / "manifest.json"
-    manifest = args.import_manifest
-    old = manifest.get(item["id"])
-    if item["id"] in manifest and not args.apply:
-        entry["status"] = "existing-association"
-        return entry
-    if not args.apply:
-        return entry
-    try:
-        expected_size = source.stat().st_size
-        if expected_size < 0 or expected_size > args.max_bytes:
-            raise ValueError("archive exceeds size limit")
-    except OSError as error:
-        return {"id": item["id"], "status": "unresolved", "reason": safe_reason(error)}
+def import_object(item, filename, source, loose, root, args, old_object, known, expected_sha256=None):
+    expected_size = source.stat().st_size
+    if expected_size < 0 or expected_size > args.max_bytes:
+        raise ValueError("archive exceeds size limit")
     objects = root / "objects"
     if objects.is_symlink() or (objects.exists() and not objects.is_dir()):
-        return {"id": item["id"], "status": "unresolved", "reason": "unsafe cache object path"}
+        raise ValueError("unsafe cache object path")
     objects.mkdir(parents=True, exist_ok=True)
     if expected_size + DISK_RESERVE_BYTES > shutil.disk_usage(objects).free:
-        return {"id": item["id"], "status": "unresolved", "reason": "insufficient disk space"}
+        raise ValueError("insufficient disk space")
     descriptor, temporary = tempfile.mkstemp(dir=objects, prefix=".import-")
     staged = Path(temporary)
     digest_state = hashlib.sha256()
@@ -465,24 +1160,21 @@ def import_existing(item, resource_entries, archive_root, root, args):
                 os.close(source_fd)
         if size != expected_size:
             raise ValueError("archive changed during import")
-        kind = validate(staged, args.integrity_timeout)
         sha = digest_state.hexdigest()
+        if expected_sha256 is not None and sha != expected_sha256:
+            return "pin-mismatch", None, sha, size
+        kind = validate(staged, args.integrity_timeout, loose=loose)
         object_file = objects / sha
-        if item["id"] in manifest:
-            if not isinstance(old, dict) or old.get("sha256") != sha or old.get("size") != size:
-                entry.update(status="manifest-conflict", sha256=sha, size=size)
-                return entry
-            if object_file.is_symlink():
-                entry.update(status="manifest-conflict", sha256=sha, size=size)
-                return entry
+        if known:
+            if (not isinstance(old_object, dict) or old_object.get("sha256") != sha or old_object.get("size") != size
+                    or object_file.is_symlink()):
+                return "manifest-conflict", None, sha, size
             if object_file.exists():
-                if not local_valid(root, old):
-                    entry.update(status="manifest-conflict", sha256=sha, size=size)
-                    return entry
+                if not object_valid(root, old_object):
+                    return "manifest-conflict", None, sha, size
             else:
                 os.link(staged, object_file)
-            entry.update(status="already-present", sha256=sha, size=size)
-            return entry
+            return "already-present", None, sha, size
         try:
             os.link(staged, object_file)
         except FileExistsError:
@@ -490,26 +1182,224 @@ def import_existing(item, resource_entries, archive_root, root, args):
                 raise ValueError("cache object conflict")
             if digest(object_file) != sha:
                 raise ValueError("cache object conflict")
-            validate(object_file, args.integrity_timeout)
-        imported = {"sha256": sha, "size": size, "extension": kind,
-                    "archive_name": filename, "status": "stale-unknown",
-                    "metadata_unknown": True, "evidence": "local-import",
-                    "imported_at": time.time()}
-        manifest[item["id"]] = imported
-        try:
-            args.import_manifest_document["entries"] = manifest
-            atomic_json(manifest_path, args.import_manifest_document)
-        except OSError:
-            manifest.pop(item["id"], None)
-            raise
-        entry.update({"status": imported["status"], "sha256": sha, "size": size})
-    except (OSError, ValueError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
-        entry.update(status="unresolved", reason=safe_reason(error))
+            validate(object_file, args.integrity_timeout, loose=loose)
+        pinned = expected_sha256 is not None
+        return "imported", {"sha256": sha, "size": size, "extension": kind,
+                            "archive_name": filename, "status": "pinned" if pinned else "stale-unknown",
+                            "metadata_unknown": True,
+                            "evidence": "operator-seed" if pinned else "local-import",
+                            "imported_at": time.time()}, sha, size
     finally:
         if descriptor >= 0:
             os.close(descriptor)
         staged.unlink(missing_ok=True)
+
+
+def expected_for(expected_sha256, filename):
+    if isinstance(expected_sha256, dict):
+        return expected_sha256.get(filename)
+    return expected_sha256
+
+
+def import_existing(item, resource_entries, archive_root, root, args, expected_sha256=None):
+    policy = uncached_reason(item)
+    if policy:
+        return uncached_entry(item, policy)
+    matches = [(key, value) for key, value in resource_entries.items()
+               if isinstance(value, dict)
+               and isinstance(value.get("HandlerMetadata"), dict)
+               and value["HandlerMetadata"].get("PrimaryUrl") == item["url"]]
+    if len(matches) != 1:
+        return {"id": item["id"], "status": "ambiguous-provider-url" if matches else "unmatched"}
+    _, resource_entry = matches[0]
+    files = resource_entry.get("Files")
+    selectors = multi_selectors(item)
+    if not isinstance(files, dict):
+        return {"id": item["id"], "status": "ambiguous-variant"}
+    if selectors:
+        filenames = [selector["file"] for selector in selectors]
+        if any(selector["r"] for selector in selectors) or sorted(files) != sorted(filenames):
+            return {"id": item["id"], "status": "ambiguous-variant",
+                    "reason": "local files cannot prove the reviewed multi-file selection"}
+    elif len(files) == 1:
+        filenames = list(files)
+    else:
+        return {"id": item["id"], "status": "ambiguous-variant"}
+    planned = []
+    try:
+        for filename in filenames:
+            source = existing_archive_path(archive_root, filename)
+            loose = reviewed_loose(item) == filename
+            extension = LOOSE if loose else source.suffix.lower().lstrip(".")
+            if safe_archive_name(filename, extension) != filename:
+                raise ValueError("unsafe archive name")
+            planned.append((filename, source, loose))
+    except (OSError, ValueError) as error:
+        return {"id": item["id"], "status": "unresolved", "reason": safe_reason(error)}
+    entry = {"id": item["id"], "status": "planned"}
+    entry.update({"archive_names": filenames} if selectors else {"archive_name": filenames[0]})
+    pinned = expected_sha256 is not None
+    if pinned:
+        try:
+            for filename, source, loose in planned:
+                expected = expected_for(expected_sha256, filename)
+                if expected is None or digest(source) != expected:
+                    entry["status"] = "pin-mismatch"
+                    return entry
+        except OSError as error:
+            return {"id": item["id"], "status": "unresolved", "reason": safe_reason(error)}
+    manifest_path = root / "manifest.json"
+    manifest = args.import_manifest
+    known = item["id"] in manifest
+    old = manifest.get(item["id"])
+    if known and not args.apply:
+        entry["status"] = "existing-association"
+        return entry
+    if not args.apply:
+        return entry
+    try:
+        outcomes = []
+        for filename, source, loose in planned:
+            candidates = entry_objects(old) if known else []
+            if selectors:
+                old_object = next((each for each in candidates if each.get("listed_name") == filename), None)
+            else:
+                old_object = candidates[0] if len(candidates) == 1 else None
+            outcomes.append(import_object(item, filename, source, loose, root, args, old_object, known,
+                                          expected_for(expected_sha256, filename) if pinned else None)
+                            + (filename,))
+        mismatches = [outcome for outcome in outcomes if outcome[0] == "pin-mismatch"]
+        conflicts = [outcome for outcome in outcomes if outcome[0] == "manifest-conflict"]
+        if mismatches:
+            entry.update(status="pin-mismatch", sha256=mismatches[0][2], size=mismatches[0][3])
+        elif conflicts:
+            entry.update(status="manifest-conflict", sha256=conflicts[0][2], size=conflicts[0][3])
+        elif known:
+            entry.update(status="already-present", sha256=outcomes[0][2], size=outcomes[0][3])
+        else:
+            imported = [{**outcome[1], "listed_name": outcome[4], "row": None} if selectors else outcome[1]
+                        for outcome in outcomes]
+            document = imported[0] if not selectors else {
+                "objects": imported, "size": sum(each["size"] for each in imported),
+                "status": "pinned" if pinned else "stale-unknown", "metadata_unknown": True,
+                "evidence": "operator-seed" if pinned else "local-import",
+                "imported_at": time.time()}
+            manifest[item["id"]] = document
+            try:
+                args.import_manifest_document["entries"] = manifest
+                atomic_json(manifest_path, args.import_manifest_document)
+            except OSError:
+                manifest.pop(item["id"], None)
+                raise
+            entry.update(status=document["status"], sha256=outcomes[0][2], size=sum(each[3] for each in outcomes))
+        if selectors:
+            entry.pop("sha256", None)
+            entry["objects"] = [{"archive_name": outcome[4], "sha256": outcome[2], "size": outcome[3]}
+                                for outcome in outcomes]
+    except (OSError, ValueError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
+        entry.update(status="unresolved", reason=safe_reason(error))
     return entry
+
+
+def restore_filename(item, old):
+    reviewed = reviewed_loose(item) if old.get("extension") == LOOSE else None
+    if "archive_name" in old:
+        filename = safe_archive_name(old["archive_name"], old["extension"])
+        if filename is None:
+            raise ValueError("invalid manifest archive name")
+    else:
+        filename = archive_name(item, old["extension"], old.get("endpoint") or item["url"],
+                                reviewed=reviewed)
+    return filename, reviewed
+
+
+def mod_keys(item):
+    return {(step["guide"], step["section"], step["heading"])
+            for step in referencing_steps(item) if step["heading"] is not None}
+
+
+def link_basename_names(url):
+    basename = unquote(urlsplit(url).path.rsplit("/", 1)[-1])
+    return {name.casefold() for name in (safe_archive_name(basename, kind) for kind in ("zip", "7z", "rar"))
+            if name}
+
+
+def sibling_name_losers(items, manifest_entries, pins):
+    members = {}
+    for position, item in enumerate(items):
+        if uncached_reason(item):
+            continue
+        old = manifest_entries.get(item["id"])
+        natural = link_basename_names(item["url"])
+        pinned = is_pinned(item, old, pins)
+        names = set()
+        for each in entry_objects(old):
+            try:
+                filename, reviewed = restore_filename(item, each)
+            except (KeyError, TypeError, ValueError):
+                continue
+            if not reviewed:
+                names.add(filename.casefold())
+        for key in mod_keys(item):
+            for name in names:
+                members.setdefault((key, name), {})[item["id"]] = (not pinned, name not in natural, position)
+    losers = {}
+    for (_, name), ranks in members.items():
+        if len(ranks) > 1:
+            winner = min(ranks, key=ranks.get)
+            for item_id in ranks:
+                if item_id != winner:
+                    losers.setdefault(item_id, set()).add(name)
+    return losers
+
+
+def disambiguated_name(filename, item):
+    stem, suffix = filename.rsplit(".", 1)
+    name = safe_archive_name(stem + "-" + item["id"][:8] + "." + suffix, suffix.lower())
+    if name is None:
+        raise ValueError("archive filename collision")
+    return name
+
+
+def restore_object(item, old, root, args, restored_names, taken, created, renamed=None):
+    source = object_path(root, old)
+    if old.get("extension") not in ("zip", "7z", "rar", LOOSE):
+        raise ValueError("invalid manifest archive extension")
+    reviewed = reviewed_loose(item) if old["extension"] == LOOSE else None
+    if old["extension"] == LOOSE and not reviewed:
+        raise ValueError("loose file is not a reviewed selection")
+    validate(source, args.integrity_timeout, loose=bool(reviewed))
+    args.destination.mkdir(parents=True, exist_ok=True)
+    filename, reviewed = restore_filename(item, old)
+    if reviewed and filename != reviewed:
+        raise ValueError("loose file name does not match the reviewed selection")
+    if not reviewed and filename.casefold() in (renamed or ()):
+        filename = disambiguated_name(filename, item)
+    name_key = filename.casefold()
+    if name_key in taken or (name_key in restored_names and restored_names[name_key] != item["id"]):
+        raise ValueError("archive filename collision")
+    taken.add(name_key)
+    restored_names[name_key] = item["id"]
+    matches = [path for path in args.destination.iterdir()
+               if unicodedata.normalize("NFC", path.name).casefold() == name_key]
+    if matches:
+        if (len(matches) != 1 or matches[0].name != filename or matches[0].is_symlink()
+                or not matches[0].is_file() or digest(matches[0]) != old["sha256"]):
+            raise ValueError("archive filename collision")
+    descriptor, temporary = tempfile.mkstemp(dir=args.destination, prefix=".restore-")
+    try:
+        with os.fdopen(descriptor, "wb") as output, source.open("rb") as incoming:
+            shutil.copyfileobj(incoming, output)
+            output.flush()
+            os.fsync(output.fileno())
+        if digest(Path(temporary)) != old["sha256"]:
+            raise ValueError("restore SHA256 mismatch")
+        if not matches:
+            os.link(temporary, args.destination / filename)
+            created.append(args.destination / filename)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
+    return filename
 
 
 def rclone(args, direction, root):
@@ -532,12 +1422,17 @@ def main(argv=None):
     parser.add_argument("--destination", type=Path, help="archive directory for either installer")
     parser.add_argument("--resource-index", type=Path, help="resource index for import-existing")
     parser.add_argument("--archive-dir", type=Path, help="existing archive directory for import-existing")
+    parser.add_argument("--expected-sha256", action="append", default=[], metavar="FILENAME=SHA256",
+                        help="import-existing: pin this archive file to an exact SHA256 (repeatable)")
     parser.add_argument("--max-items", type=int, default=20,
                         help="maximum exact-URL matched candidates to inspect (1..500)")
     parser.add_argument("--offset", type=int, default=0,
                         help="start at this exact-URL matched candidate index")
     parser.add_argument("--apply", action="store_true", help="copy and record import-existing matches")
     parser.add_argument("--report", type=Path, help="also write sanitized JSON report")
+    parser.add_argument("--archive-map", type=Path,
+                        help="restore only: write {guide link URL: restored filename(s)} for the installer's "
+                             "--archive-map; restored links only")
     parser.add_argument("--remote", help="optional rclone remote:path; trusted operator input only")
     parser.add_argument("--force", action="store_true", help="refresh even inside freshness interval")
     parser.add_argument("--max-age-days", type=float, default=14)
@@ -546,8 +1441,22 @@ def main(argv=None):
     parser.add_argument("--integrity-timeout", type=float, default=300)
     parser.add_argument("--backend-timeout", type=float, default=1800)
     parser.add_argument("--retries", type=int, default=2)
-    parser.add_argument("--max-bytes", type=int, default=20 * 1024 ** 3)
+    parser.add_argument("--max-bytes", type=int, default=MAX_LINK_BYTES)
+    parser.add_argument("--allow-uncached-by-policy", action="append", default=[], metavar="SECTION[::STEP]",
+                        help="restore only: accept an uncached-by-policy link when every guide step that "
+                             "references it is covered by this value (repeatable): a '##' section name "
+                             "covers all of its '###' steps, '<## section>::<### heading>' covers only "
+                             "that one step; the lane must not install what is named")
     args = parser.parse_args(argv)
+    if args.allow_uncached_by_policy and args.command != "restore":
+        parser.error("--allow-uncached-by-policy is only valid with restore")
+    for allowance in args.allow_uncached_by_policy:
+        try:
+            parse_allowance(allowance)
+        except ValueError as error:
+            parser.error(str(error))
+    if args.archive_map and args.command != "restore":
+        parser.error("--archive-map is only valid with restore")
     if not 0 <= args.retries <= 5 or not 0 < args.max_age_days <= 14:
         parser.error("retries must be 0..5; max-age-days must be >0 and <=14")
     if any(value <= 0 for value in (args.timeout, args.download_timeout, args.integrity_timeout,
@@ -566,6 +1475,12 @@ def main(argv=None):
             parser.error("import-existing does not support --remote")
     elif args.apply:
         parser.error("--apply is only valid with import-existing")
+    expected_hashes = {}
+    for pair in args.expected_sha256:
+        name, _, sha = pair.rpartition("=")
+        if args.command != "import-existing" or not name or not SHA256.fullmatch(sha):
+            parser.error("--expected-sha256 must be FILENAME=SHA256 and is only valid with import-existing")
+        expected_hashes[name] = sha
     guides = args.guide or ["content/k1/full.md", "content/k2/full.md"]
     items = discover(guides)
     if not items:
@@ -596,14 +1511,15 @@ def main(argv=None):
         args.import_manifest_document = manifest
         start = min(args.offset, len(matched_items))
         selected = matched_items[start:start + args.max_items]
-        report["entries"] = [import_existing(item, resource_entries, archive_root, root, args)
+        report["entries"] = [import_existing(item, resource_entries, archive_root, root, args,
+                                                    expected_hashes or None)
                               for item in selected]
         report["candidate_count"] = len(matched_items)
         report["next_offset"] = start + len(selected)
         report["unmatched_urls"] = len(items) - len(matched_items)
         report["truncated"] = report["next_offset"] < len(matched_items)
         report["ok"] = all(entry["status"] in (
-            "planned", "existing-association", "already-present", "stale-unknown")
+            "planned", "existing-association", "already-present", "stale-unknown", "pinned", UNCACHED)
                            for entry in report["entries"])
     else:
         root = args.cache_dir.resolve()
@@ -614,75 +1530,104 @@ def main(argv=None):
         if manifest.get("schema") != 1 or not isinstance(manifest.get("entries"), dict):
             raise ValueError("unsupported manifest schema")
         restored_names = {}
+        repaired = False
+        try:
+            pins = load_pins()
+        except (ValueError, OSError):
+            pins = {}
+        losers = sibling_name_losers(items, manifest["entries"], pins) if args.command == "restore" else {}
         for item in items:
             old = manifest["entries"].get(item["id"], {})
             entry = {"id": item["id"], "url": clean_url(item["url"]), "provider": item["provider"]}
+            policy = uncached_reason(item)
+            if policy:
+                entry = uncached_entry(item, policy)
+                if args.command == "restore" and args.allow_uncached_by_policy:
+                    steps, outside = skippable_steps(item, args.allow_uncached_by_policy)
+                    if steps and not outside:
+                        entry.update(status=UNCACHED_SKIPPED, skipped_steps=steps)
+                        report.setdefault("skipped_steps", []).extend(
+                            {**step, "url": entry["url"], "reason": entry["reason"]} for step in steps)
+                    else:
+                        entry["reason"] += "; referenced outside the allowed sections or steps: " + json.dumps(
+                            outside or "no guide step", sort_keys=True)
+                report["entries"].append(entry)
+                if args.command == "refresh" and manifest["entries"].pop(item["id"], None) is not None:
+                    atomic_json(manifest_path, manifest)
+                continue
             try:
                 valid = local_valid(root, old)
                 age = time.time() - old.get("checked_at", 0)
                 upstream_checked = old.get("status") == "fresh" or (
                     old.get("status") == "verified" and
                     old.get("evidence") == "download-without-upstream-metadata")
-                fresh = valid and upstream_checked and 0 <= age < args.max_age_days * 86400
+                pinned = valid and is_pinned(item, old, pins)
+                fresh = pinned or (valid and upstream_checked and 0 <= age < args.max_age_days * 86400
+                                   and objects_match_selection(item, old))
                 if args.command == "refresh":
-                    cached = old if fresh and not args.force else refresh_one(item, old, root, args)
+                    cached = old if pinned or (fresh and not args.force) else refresh_one(item, old, root, args)
                     manifest["entries"][item["id"]] = cached
                     entry.update(cached)
                     atomic_json(manifest_path, manifest)
                 else:
                     if not fresh:
-                        raise ValueError("cache missing, corrupt, stale or upstream verification failed; run refresh")
-                    source = object_path(root, old)
-                    validate(source, args.integrity_timeout)
-                    args.destination.mkdir(parents=True, exist_ok=True)
-                    if old.get("extension") not in ("zip", "7z", "rar"):
-                        raise ValueError("invalid manifest archive extension")
-                    if "archive_name" in old:
-                        filename = safe_archive_name(old["archive_name"], old["extension"])
-                        if filename is None:
-                            raise ValueError("invalid manifest archive name")
-                    else:
-                        filename = archive_name(item, old["extension"], old.get("endpoint") or item["url"])
-                    name_key = filename.casefold()
-                    if name_key in restored_names and restored_names[name_key] != item["id"]:
-                        raise ValueError("archive filename collision")
-                    restored_names[name_key] = item["id"]
-                    matches = [path for path in args.destination.iterdir()
-                               if unicodedata.normalize("NFC", path.name).casefold() == name_key]
-                    if matches:
-                        if (len(matches) != 1 or matches[0].name != filename or matches[0].is_symlink()
-                                or not matches[0].is_file() or digest(matches[0]) != old["sha256"]):
-                            raise ValueError("archive filename collision")
-                    descriptor, temporary = tempfile.mkstemp(dir=args.destination, prefix=".restore-")
+                        if not entry_objects(old):
+                            raise ValueError("cache missing; archive refresh job must populate it")
+                        old = refresh_one(item, old, root, args)
+                        manifest["entries"][item["id"]] = old
+                        atomic_json(manifest_path, manifest)
+                        repaired = True
+                        if old.get("status") not in ("fresh", "verified") or not local_valid(root, old):
+                            raise ValueError("archive refresh did not produce a verified object")
+                    taken, created, restored = set(), [], []
                     try:
-                        with os.fdopen(descriptor, "wb") as output, source.open("rb") as incoming:
-                            shutil.copyfileobj(incoming, output)
-                            output.flush()
-                            os.fsync(output.fileno())
-                        if digest(Path(temporary)) != old["sha256"]:
-                            raise ValueError("restore SHA256 mismatch")
-                        if not matches:
-                            os.link(temporary, args.destination / filename)
-                    finally:
-                        Path(temporary).unlink(missing_ok=True)
-                    entry.update(status="restored", sha256=old["sha256"], file=filename,
-                                 metadata_unknown=old.get("metadata_unknown", not bool(
-                                     old.get("etag") or old.get("last_modified"))))
+                        for each in entry_objects(old):
+                            restored.append({"file": restore_object(item, each, root, args, restored_names,
+                                                                    taken, created, losers.get(item["id"])),
+                                             "sha256": each["sha256"]})
+                    except Exception:
+                        for path in created:
+                            path.unlink(missing_ok=True)
+                        raise
+                    entry.update(status="restored", metadata_unknown=old.get("metadata_unknown", not bool(
+                        old.get("etag") or old.get("last_modified"))))
+                    if pinned:
+                        entry.update(pinned=True, metadata_unknown=True)
+                    if "objects" in old:
+                        entry["files"] = restored
+                    else:
+                        entry.update(sha256=restored[0]["sha256"], file=restored[0]["file"])
             except (ValueError, OSError, HTTPException, subprocess.SubprocessError, zipfile.BadZipFile) as error:
                 entry.update(status="unresolved", reason=safe_reason(error))
-                if args.command == "refresh" and old:
+                if args.command == "refresh" and old and not is_pinned(item, old, pins):
                     manifest["entries"][item["id"]] = {**old, "status": "stale-unknown"}
                     atomic_json(manifest_path, manifest)
             report["entries"].append(entry)
         if args.command == "refresh":
             rclone(args, "push", root)
+        elif repaired:
+            rclone(args, "push", root)
     if args.command != "import-existing":
-        report["ok"] = all(entry.get("status") in ("fresh", "verified", "restored")
+        accepted = ("fresh", "verified", "restored", "pinned") + (
+            (UNCACHED,) if args.command == "refresh" else (UNCACHED_SKIPPED,) if args.command == "restore" else ())
+        report["ok"] = all(entry.get("status") in accepted
                            for entry in report["entries"]) if args.command != "discover" else True
     if args.report:
         atomic_json(args.report, report)
+    if args.archive_map:
+        atomic_json(args.archive_map, archive_map(report))
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["ok"] else 1
+
+
+def archive_map(report):
+    mapping = {}
+    for entry in report["entries"]:
+        if entry.get("status") != "restored":
+            continue
+        names = [each["file"] for each in entry["files"]] if "files" in entry else [entry["file"]]
+        mapping[entry["url"]] = names[0] if len(names) == 1 else names
+    return mapping
 
 
 def safe_reason(error):

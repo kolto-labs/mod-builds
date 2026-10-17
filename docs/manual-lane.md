@@ -13,13 +13,16 @@ the port lanes are compared against.
 
 For each game:
 
-1. Looks for `ci/<game>-manual-plan.json`. Without it the job logs a notice, skips
-   every remaining step and passes, so a green run without a plan means nothing.
+1. Requires `ci/<game>-manual-plan.json`. If it is absent the job fails with an
+   error and stops; it never passes without a human-reviewed plan.
 2. Installs Wine, Xvfb and archive tools.
 3. Restores `game-<game>-v1` and runs `game_cache.py unpack`, which verifies every
    file. See [steam.md](steam.md).
-4. Restores archives with `cache.py restore`. This is best effort; a missing
-   archive fails the step that needs it. See [cache.md](cache.md).
+4. Restores archives with `cache.py restore` using the read-only cache credentials.
+   Restore is fail-closed: if any archive of the guide is not in the cache (or fails
+   verification), the step exits non-zero and the lane stops before any install
+   step. This job never acquires new links; only the `mods` job fills the cache.
+   See [cache.md](cache.md).
 5. Runs `xvfb-run -a python tools/modsync-ci/manual.py --plan <plan> --guide
    content/<game>/full.md --game-dir ... --archives ... --work-dir ... --report ...`.
 
@@ -43,6 +46,36 @@ approves operations itself. The full contract is in the docstring of
 
 Use the mod's own original patcher. Do not substitute ModSync's `vendor/bin`
 patchers, OdyPatcher or another HoloPatcher build.
+
+## Drafting a plan
+
+`tools/modsync-ci/draft_plan.py` gives the reviewer a starting point. It reads
+`content/<game>/full.md` and writes two files under `ci/drafts/`:
+
+- `<game>-manual-plan.draft.json`: one step per `###` heading in `## Mod List`, in
+  guide order, plus an entry for every supplemental heading. Every `operations`
+  list and every supplemental `review` is empty, and `archive_sha256` is `{}`.
+- `<game>-manual-plan.review.json`: every step with status `needs-human-review` and
+  the evidence found in the guide: heading and line, the links on the `**Name:**`
+  line (with an archive name only when the URL path itself ends in `.zip`, `.7z` or
+  `.rar`), the verbatim `**Installation Method:**` text and the lines of each
+  `:::` block.
+
+```
+python3 tools/modsync-ci/draft_plan.py [--game k1|k2|all] [--force]
+```
+
+A draft is not a plan. The tool never invents an operation, `argv`, patcher, hash
+or success marker, and it refuses to write `ci/<game>-manual-plan.json` or anything
+else in `ci/` outside `ci/drafts/`. `manual.py` rejects a draft three ways: the
+top-level `draft` key is an unknown field, empty `operations` are an error, and
+empty supplemental reviews are an error. Output is deterministic; an existing draft
+that differs is not overwritten without `--force`.
+
+A human authors the real plan from the guide and the original patchers, reviews
+every step and supplemental section, drops the `draft` key and commits the result as
+`ci/<game>-manual-plan.json`. Do not commit generated or inferred operations as
+reviewed.
 
 ## Execution rules
 

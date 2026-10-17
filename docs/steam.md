@@ -15,10 +15,16 @@ Steam account. Fork and Dependabot pull requests get no secrets and skip it.
 
 1. Look up the Actions cache key `game-<game>-v1`. An older cache entry for the
    same game is accepted as a fallback. A hit ends the job; Steam is not contacted.
-2. On a miss, run SteamCMD once, forcing the Windows build. With `STEAM_CONFIG_VDF`
-   set, it signs in with that saved login and the username only. Without it, it
-   signs in with `STEAM_USERNAME` and `STEAM_PASSWORD`, and Steam sends an
-   approval request to the Steam mobile app. There is no retry.
+2. On a miss, run SteamCMD, forcing the Windows build, and stop at the first
+   attempt that leaves `chitin.key` in the install directory:
+   1. With `STEAM_CONFIG_VDF` set, sign in with that saved login and the username
+      only.
+   2. Otherwise, or if that did not produce the game, sign in with
+      `STEAM_USERNAME` and `STEAM_PASSWORD`. Steam sends an approval request to
+      the Steam mobile app; if it is not approved in time, that attempt fails (K2
+      approvals have timed out this way).
+   3. If that also failed, try each code in `STEAM_GUARD_CODES` in turn (see
+      [Backup-code fallback](#backup-code-fallback)).
 3. `tools/modsync-ci/game_cache.py pack` drops every `*.bik` movie, checks for
    `chitin.key`, `dialog.tlk`, and the game executable, records a SHA-256
    inventory, and encrypts the tree with `CACHE_ENCRYPTION_KEY`.
@@ -33,9 +39,13 @@ every file matches the inventory. The result has no movies; it is a baseline for
 mod installs, not a playable copy.
 
 GitHub evicts cache entries that go unread for seven days or when the repository
-exceeds its cache quota. Eviction is not an error: the next run downloads the game
-again, which needs a Steam sign-in: an approval in the mobile app, unless
-`STEAM_CONFIG_VDF` is set.
+exceeds its cache quota. The workflow runs on a schedule (`23 4 * * 1,4`, Monday
+and Thursday 04:23 UTC); each scheduled run looks up both game caches in `game`
+and restores them in the `install` and `manual` jobs, so entries are read
+at least twice a week. That keeps them from the seven-day idle eviction; it does
+not protect against quota eviction. Eviction is not an error: the next run
+downloads the game again, which needs a Steam sign-in: an approval in the mobile
+app, unless `STEAM_CONFIG_VDF` is set or an unused backup code is available.
 
 ## Secrets
 
@@ -44,8 +54,9 @@ Names only; set them as repository Actions secrets and never print or commit the
 | Name | Used for |
 | --- | --- |
 | `STEAM_USERNAME` | Steam account that owns both games |
-| `STEAM_PASSWORD` | Password for that account; not used when `STEAM_CONFIG_VDF` is set |
+| `STEAM_PASSWORD` | Password for that account; used when `STEAM_CONFIG_VDF` is unset or its login fails, and with each backup code |
 | `STEAM_CONFIG_VDF` | Optional. Base64 of an authenticated SteamCMD `config.vdf` |
+| `STEAM_GUARD_CODES` | Optional. Whitespace-separated Steam Guard backup codes; each works once |
 | `CACHE_ENCRYPTION_KEY` | Encrypts and decrypts the game cache |
 
 ## STEAM_CONFIG_VDF: sign in once, locally
@@ -87,7 +98,7 @@ the full guide covers its Aspyr-specific steps.
 
 ## Backup-code fallback
 
-If the saved config (`STEAM_CONFIG_VDF`) and the password sign-in both fail, the `game` job tries each code in the optional `STEAM_GUARD_CODES` secret as `+login <user> <password> <code>`. It stops as soon as `chitin.key` appears. Each code can only be used once.
+If the saved config (`STEAM_CONFIG_VDF`) and the password sign-in both fail, the `game` job tries each code in the optional `STEAM_GUARD_CODES` secret as `+login <user> <password> <code>`. It stops as soon as `chitin.key` appears. Each code can only be used once, so a code is spent whether or not the rest of the run succeeds.
 
 Get the codes from Steam → Account details → Manage Steam Guard → Get backup codes. Set the secret from your own terminal so the value never shows up in a log:
 

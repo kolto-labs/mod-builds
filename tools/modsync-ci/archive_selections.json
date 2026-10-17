@@ -1,0 +1,242 @@
+{
+  "uncached": {
+    "nexus:1214": {
+      "reason": "Windows registry helper (Quicker TSLPatching) from the optional install-assistant section; the guide documents it does not work on Mac or Linux and nothing in the build consumes its output"
+    },
+    "nexus:1306": {
+      "reason": "Tier 4 optional Remastered Cutscenes (loose .bik movies); mutually exclusive with the installed Cutscenes Rescaled post (DeadlyStream 2380) and video is never cached"
+    },
+    "2503": {
+      "reason": "Bink video, about 25.7 GB for the reviewed main and _mods files; video is never cached and the CI game baseline carries no movies"
+    }
+  },
+  "selections": {
+    "367": {
+      "file": "Sapiens Nihilus TPC.7z",
+      "reason": "guide: download the .tpc version"
+    },
+    "441": {
+      "file": "4k atton [tpc version].7z",
+      "reason": "guide: download the .tpc version"
+    },
+    "578": {
+      "file": "tslrcm2022.exe",
+      "loose": true,
+      "reason": "reviewed loose file: the guide installs this post as an Executable and the page serves a single pre-built installer, not an archive"
+    },
+    "723": {
+      "file": "HQSkyboxesII_K1.7z",
+      "reason": "guide names this file"
+    },
+    "842": {
+      "file": "aleema_ketos_robe_description_correction.zip",
+      "r": "19298",
+      "reason": "guide: download the larger of the two files; both rows share one name, so the row id picks the 3.47 kB one over the 2.99 kB one"
+    },
+    "931": {
+      "file": "TSL HD Cockpit Skyboxes - Medium Resolution TPC.zip",
+      "reason": "guide recommends Medium and says to use the .tpc files"
+    },
+    "938": {
+      "file": "High Quality Cockpit Skyboxes M.zip",
+      "reason": "guide recommends the Medium option"
+    },
+    "980": {
+      "file": "Malak.rar",
+      "reason": "guide: do not download the loose .tga; install steps reference the eye-colour folders this archive contains"
+    },
+    "982": {
+      "file": "hd_twilek_female.rar",
+      "reason": "guide names this file and says to ignore the other versions"
+    },
+    "1068": {
+      "file": "K1 Galaxy Map Fix Pack.zip",
+      "reason": "main download; guide calls the HR Menu Patch an optional extra"
+    },
+    "1123": {
+      "file": "Canderous OrdoHD (new clothes).rar",
+      "reason": "guide: download only the new-clothes version"
+    },
+    "1125": {
+      "file": "hd_kt_400_military_droid_carrier_and_lethisk_class_armed_freighter.rar",
+      "reason": "guide names this file"
+    },
+    "1133": {
+      "file": "Carth Onasi (new clothes).rar",
+      "reason": "guide: download the new-clothes file unless head/face changes are wanted"
+    },
+    "1138": {
+      "files": [
+        "[TSL]_Main_Menu_Widescreen_Fix_v1.2.7z",
+        "Updated_TSLRCM_Logo_v1.8.6.7z"
+      ],
+      "reason": "guide: apply the main fix; the build uses TSLRCM, so the separate Updated_TSLRCM_Logo download is needed as well"
+    },
+    "1199": {
+      "file": "[K1]_Diversified_Jedi_Captives_on_the_SF_v1.2.4.7z",
+      "reason": "guide recommends the base install option"
+    },
+    "1201": {
+      "file": "[TSL]_Fixed_Hologram_Models_and_Admiralty_Redux_for_TSLRCM_v1.61.7z",
+      "reason": "guide: download just the main file, not the patches"
+    },
+    "1213": {
+      "file": "hd_npc_portraits-v2.0.7z",
+      "reason": "guide: download the V2 option"
+    },
+    "1217": {
+      "file": "KOTOR2-Citadel-Station-Backdrop_v2.0.0_4k.zip",
+      "reason": "guide names no file for this mod; CI default = first-listed 4k variant (the 2k file is the smaller alternative)"
+    },
+    "1258": {
+      "file": "K1_Community_Patch_v1.10.0.zip",
+      "reason": "guide names no file; CI default = main patch archive, not the hotfix or translation add-ons"
+    },
+    "1793": {
+      "file": "HQSkyboxesII_TSL.7z",
+      "reason": "guide leaves choice to user (TSL.7z or TSL_1k.7z, 'whether you use the 1k version is your choice'); CI default = base (non-1k) main file, never the compatches"
+    },
+    "1860": {
+      "file": "Droid special weapons fix for TSL v2.0.7z",
+      "reason": "guide: use the V2 version"
+    },
+    "1909": {
+      "file": "Random HD UI Elements.zip",
+      "reason": "guide: download just the main download, not the optional request"
+    },
+    "1925": {
+      "file": "PLC_CompPnl.rar",
+      "reason": "guide leaves choice to user ('which version to use is up to you'); CI default = first-listed original download, not the Vurt Visual Resurgence variant"
+    },
+    "1929": {
+      "file": "Stylized_Portraits_KOTOR_Light.7z",
+      "reason": "guide strongly recommends the Lite version"
+    },
+    "2031": {
+      "file": "ZaalbarHD.rar",
+      "reason": "guide recommends against the alternate large-texture version"
+    },
+    "2063": {
+      "file": "HD Computer Panel, Damaged Version For Malachor.7z",
+      "reason": "guide: download only the Damaged version, it contains both"
+    },
+    "2277": {
+      "file": "Kiosk HD 15.03.2024.rar",
+      "reason": "guide: download the dated 15.03.2024 version"
+    },
+    "2299": {
+      "file": "Visas Less Clipping.7z",
+      "reason": "guide leaves choice to user ('either option is fine'); CI default = first-listed and smallest (non-Hipoly) file"
+    },
+    "2355": {
+      "file": "TSL Transparent Cockpit Windows v1_1_2 - Reskin Friendly.7z",
+      "reason": "guide recommends the reskin-friendly version"
+    },
+    "2380": {
+      "file": "k1rs_30fps_1920x1080.7z",
+      "reason": "guide leaves choice to user (resolution matching the monitor) but strongly recommends 30fps over 60fps; CI default = 1920x1080 30fps"
+    },
+    "2382": {
+      "file": "Ithorian HD.rar",
+      "reason": "guide leaves choice to user (base install vs Vurt retexture); CI default = base install"
+    },
+    "2430": {
+      "file": "Stun baton HD.rar",
+      "reason": "guide: download only the base file, not the alternate-icon file"
+    },
+    "2503": {
+      "files": [
+        "k2rs_30fps_1920x1080.7z",
+        "k2rs_30fps_mods_1920x1080.7z"
+      ],
+      "reason": "guide: with TSLRCM download both the main file for the monitor resolution and the same-resolution _mods file; CI default = 1920x1080 30fps"
+    },
+    "2514": {
+      "file": "HD Realistic Sand People.rar",
+      "reason": "guide: download the .tga version, not the .tpc"
+    },
+    "2516": {
+      "file": "NPC clothing M.rar",
+      "reason": "guide: ignore the txi.rar file"
+    },
+    "2622": {
+      "file": "load_1920x1080.7z",
+      "reason": "guide names no file for this mod; CI default = 1920x1080 resolution pack"
+    },
+    "2635": {
+      "file": "CK-Red floating lightsabers.zip",
+      "reason": "guide names no file for this mod; CI default = base file, which matches the guide description (red, immune to fear/paralysis/stun) without the extra Force Jump variant"
+    },
+    "2659": {
+      "file": "Upscale+ Character Fixes - KotOR V0.52 (2x tpc).7z",
+      "reason": "guide strongly recommends the 2x .tpc version"
+    },
+    "2660": {
+      "file": "Upscale+ Character Fixes - TSL V0.52 (2x tpc).7z",
+      "reason": "guide strongly recommends the 2x .tpc version"
+    },
+    "2699": {
+      "file": "forcecage_updated_1.1.0.zip",
+      "reason": "guide: download just this file"
+    },
+    "2734": {
+      "file": "3C-FD Tool v4.1.2.exe",
+      "loose": true,
+      "reason": "reviewed loose file: the guide says this page serves a single pre-extracted executable, not an archive"
+    },
+    "2739": {
+      "file": "Manaan taxi (English).zip",
+      "reason": "guide: other languages only if a non-English version is wanted"
+    },
+    "2752": {
+      "files": [
+        "relightingtsl_101PERt_2.1.zip",
+        "relightingtsl_102PERfklnt_1.0.zip",
+        "relightingtsl_003EBOg_1.2.zip",
+        "relightingtsl_298TELk_1.0.zip"
+      ],
+      "reason": "guide: download and apply all files; the TSLRCM-only file is included because the build uses TSLRCM"
+    },
+    "2787": {
+      "file": "N_DarthMalak01.tga",
+      "loose": true,
+      "reason": "reviewed loose file: the guide says this page serves a single loose .tga, not an archive"
+    },
+    "2812": {
+      "file": "CK-Classic Class Attack Bonus.zip",
+      "reason": "guide strongly recommends the standard option"
+    }
+  },
+  "tool_selections": {
+    "google-drive:1NuewBFq390wkZuBkbJzN-mN4sIRlvXGd": {
+      "file": "tar02_duelorg021.dlg",
+      "loose": true,
+      "reason": "reviewed loose file: Google Drive file serves a single loose .dlg (about 65 KB), not an archive"
+    }
+  },
+  "direct_links": {
+    "https://ntcore.com/?page_id=371": {
+      "url": "https://ntcore.com/files/4gb_patch.zip",
+      "file": "4gb_patch.zip",
+      "sha256": "1e13c263dc55e85cf62e3e30c6b2ce936d4c7e16e3bba3e311a5a8bed4be16ca",
+      "size": 21464,
+      "reason": "the guide link redirects to the vendor page https://ntcore.com/4gb-patch/, which links one static zip (Last-Modified 2020-10-17); the zip is pinned by SHA-256 and matches the operator copy"
+    }
+  },
+  "lane_skips": {
+    "k1": [
+      {
+        "section": "Mod List",
+        "heading": "4GB Patcher",
+        "reason": "the pinned 4gb_patch.zip ships only the vendor's Windows patcher .exe, so the Rust converter rejects it ('No supported game files or patcher data found in mapped archive') and no instructions can be generated; the guide says to apply it only after all widescreen content and never on the Steam executable unless the widescreen .exe was applied, so the lane skips it explicitly instead of installing it out of guide order"
+      }
+    ],
+    "k2": [
+      {
+        "section": "Mod List",
+        "heading": "4GB Patcher",
+        "reason": "the pinned 4gb_patch.zip ships only the vendor's Windows patcher .exe, so the Rust converter rejects it ('No supported game files or patcher data found in mapped archive') and no instructions can be generated; the guide says to skip it on the Aspyr patch or after 3C-FD, which already applies the same patch, so the lane skips it explicitly instead of installing it out of guide order"
+      }
+    ]
+  }
+}

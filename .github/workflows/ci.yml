@@ -13,6 +13,15 @@ on:
   schedule:
     - cron: '23 4 * * 1,4'
   workflow_dispatch:
+    inputs:
+      seed_archives:
+        description: Seed the archive cache from the staging remote (dev only; skips every other job)
+        type: boolean
+        default: false
+      seed_dry_run:
+        description: Seed only - verify every staged file against its pin but write nothing to the cache
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -25,7 +34,7 @@ jobs:
   # Fork and dependabot pull requests get no secrets, so they skip every job (install jobs need game).
   game:
     name: game (${{ matrix.game }})
-    if: github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')
+    if: ${{ !inputs.seed_archives && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     strategy:
@@ -96,7 +105,7 @@ jobs:
           key: game-${{ matrix.game }}-v1
 
   mods:
-    if: github.event_name != 'pull_request'
+    if: ${{ !inputs.seed_archives && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) }}
     continue-on-error: true  # a stale archive cache must never block the install lanes
     concurrency:
       group: mod-cache-writer
@@ -109,7 +118,8 @@ jobs:
           persist-credentials: false
       - name: Install archive tools
         run: |
-          sudo apt-get install -y -qq p7zip-full >/dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq 7zip 7zip-rar megatools libarchive-tools >/dev/null && { sudo apt-get install -y -qq unrar >/dev/null 2>&1 || echo "unrar unavailable; falling back to 7z/bsdtar"; }
+          python -m pip install --quiet gdown
           python3 tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone"
       - name: Download new or changed mod archives into the cache
         env:
@@ -121,7 +131,116 @@ jobs:
           RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_SECRET_ACCESS_KEY }}
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
-        run: python tools/modsync-ci/refresh_archives.py --max-items 20
+        run: python tools/modsync-ci/refresh_archives.py --max-items 500
+
+  # Manual only: copies hand-downloaded archives from the private STAGING rclone remote into the
+  # R2 cache, one file at a time, after verifying each against its reviewed pin (seed_pins.json).
+  # A dispatch with seed_archives skips every other job; the shared concurrency group serializes
+  # this with the scheduled refresh so the two never write the manifest at once.
+  seed:
+    name: seed archive cache
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.seed_archives }}
+    environment: mod-cache-seed
+    concurrency:
+      group: mod-cache-writer
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 350
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h "$RUNNER_TEMP" | tail -n 1
+      - name: Install archive tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq 7zip 7zip-rar megatools libarchive-tools >/dev/null && { sudo apt-get install -y -qq unrar >/dev/null 2>&1 || echo "unrar unavailable; falling back to 7z/bsdtar"; }
+          python -m pip install --quiet gdown
+          python3 tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone"
+      - name: Seed archives from staging (verified against the pins)
+        env:
+          SEED_STAGING_RCLONE_CONF_B64: ${{ secrets.SEED_STAGING_RCLONE_CONF_B64 }}
+          SEED_DRY_RUN: ${{ inputs.seed_dry_run }}
+          RCLONE_CONFIG_MODCACHE_TYPE: s3
+          RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
+          RCLONE_CONFIG_MODCACHE_REGION: auto
+          RCLONE_CONFIG_MODCACHE_NO_CHECK_BUCKET: 'true'
+          RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
+          MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
+        run: |
+          set -euo pipefail
+          options=()
+          if [[ "$SEED_DRY_RUN" == "true" ]]; then options+=(--dry-run); fi
+          python tools/modsync-ci/seed_archives.py "${options[@]}"
+      - name: Verify every pin restores with the read-only credentials
+        if: ${{ !inputs.seed_dry_run }}
+        env:
+          RCLONE_CONFIG_MODCACHE_TYPE: s3
+          RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
+          RCLONE_CONFIG_MODCACHE_REGION: auto
+          RCLONE_CONFIG_MODCACHE_NO_CHECK_BUCKET: 'true'
+          RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_READ_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_READ_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
+          MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
+        run: python tools/modsync-ci/seed_archives.py --verify
+
+  p2p-loopback:
+    if: ${{ !inputs.seed_archives && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Resolve ModSync source repository
+        id: source
+        env:
+          RUST_REPOSITORY: ${{ vars.MODSYNC_RS_REPOSITORY }}
+          SOURCE_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$RUST_REPOSITORY" ]]; then
+            echo "::error::The repository variable for the rust ModSync source is empty."
+            exit 1
+          fi
+          if [[ -z "$SOURCE_TOKEN" ]]; then
+            echo "::error::MODSYNC_SOURCE_TOKEN is empty."
+            exit 1
+          fi
+          echo "repository=$RUST_REPOSITORY" >> "$GITHUB_OUTPUT"
+
+      - name: Check out ModSync (rust)
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.source.outputs.repository }}
+          token: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+          path: .modsync-source
+          persist-credentials: false
+
+      - name: Let cargo fetch private git dependencies
+        env:
+          SOURCE_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$SOURCE_TOKEN"
+          git config --global url."https://x-access-token:${SOURCE_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
+      - name: Install build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq pkg-config libssl-dev >/dev/null
+
+      - name: Build modsync
+        working-directory: .modsync-source
+        run: cargo build --locked --bin modsync
+
+      - name: Transfer a random archive between two peers on loopback
+        run: python3 tools/modsync-ci/p2p_loopback.py --binary .modsync-source/target/debug/modsync
 
   install:
     name: install (${{ matrix.game }}, ${{ matrix.implementation }}, ${{ matrix.mode }})
@@ -142,6 +261,15 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+
+      - name: Require the reviewed TypeScript manifest
+        if: matrix.implementation == 'typescript'
+        run: |
+          review="ci/${GAME}-typescript-review.json"
+          if [[ ! -f "$review" ]]; then
+            echo "::error::$review is missing. The TypeScript install lanes require a human-reviewed manifest and never pass without one."
+            exit 1
+          fi
 
       - name: Resolve ModSync source repository
         id: source
@@ -170,6 +298,16 @@ jobs:
           token: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
           path: .modsync-source
           persist-credentials: false
+
+      - name: Let cargo fetch private git dependencies
+        if: matrix.implementation == 'rust'
+        env:
+          SOURCE_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+        run: |
+          set -euo pipefail
+          echo "::add-mask::$SOURCE_TOKEN"
+          git config --global url."https://x-access-token:${SOURCE_TOKEN}@github.com/".insteadOf "https://github.com/"
+          echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
 
       - name: Install tools and free disk space
         run: |
@@ -210,6 +348,10 @@ jobs:
         run: |
           python tools/modsync-ci/game_cache.py unpack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
+      - name: Install archive tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq 7zip 7zip-rar megatools libarchive-tools >/dev/null && { sudo apt-get install -y -qq unrar >/dev/null 2>&1 || echo "unrar unavailable; falling back to 7z/bsdtar"; }
+          python -m pip install --quiet gdown
       - name: Restore required mod archives
         env:
           RCLONE_CONFIG_MODCACHE_TYPE: s3
@@ -221,20 +363,71 @@ jobs:
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
+          set +e
+          # Reviewed policy skips (docs/ci.md). Rust lanes only: ports.py deselects
+          # the skipped component; the TypeScript lanes have no deselect mechanism.
+          policy=()
+          if [[ '${{ matrix.implementation }}' == rust ]]; then
+            policy+=(--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching")
+            if [[ "$GAME" == k1 ]]; then
+              policy+=(--allow-uncached-by-policy "Optional Widescreen & Extended Widescreen Support Mods::Remastered Cutscenes")
+            elif [[ "$GAME" == k2 ]]; then
+              policy+=(--allow-uncached-by-policy "Enhanced Widescreen Support Mods::K2 Cutscenes Rescaled")
+            fi
+          fi
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
             --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
+            --archive-map "$RUNNER_TEMP/archive-map.json" --report "$RUNNER_TEMP/restore-report.json" \
+            "${policy[@]}" \
             --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
+          remote_status=$?
+          if [[ "$remote_status" -ne 0 ]]; then
+            echo "::warning::R2 restore or repair persistence failed; retrying from the local verified cache."
+            python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
+              --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
+              --archive-map "$RUNNER_TEMP/archive-map.json" --report "$RUNNER_TEMP/restore-report.json" \
+              "${policy[@]}"
+            local_status=$?
+            if [[ "$local_status" -ne 0 ]]; then exit "$local_status"; fi
+          fi
 
       - name: Install the full guide
         env:
           REVIEW: ci/${{ matrix.game }}-${{ matrix.implementation }}-review.json
         run: |
           review=(); if [[ -f "$REVIEW" ]]; then review=(--review-manifest "$REVIEW"); fi
+          if [[ '${{ matrix.implementation }}' == rust ]]; then review+=(--restore-report "$RUNNER_TEMP/restore-report.json"); fi
           python tools/modsync-ci/ports.py \
             --implementation '${{ matrix.implementation }}' --mode '${{ matrix.mode }}' \
             --source .modsync-source --guide "content/$GAME/full.md" \
             --game-dir "$RUNNER_TEMP/game" --archives "$RUNNER_TEMP/archives" \
+            --archive-map "$RUNNER_TEMP/archive-map.json" \
             --work-dir "$RUNNER_TEMP/work" --report "$RUNNER_TEMP/report.json" "${review[@]}"
+
+      - name: Seal lane diagnostics
+        if: always()
+        env:
+          DIAGNOSTICS_ENCRYPTION_KEY: ${{ secrets.DIAGNOSTICS_ENCRYPTION_KEY }}
+        run: |
+          if [[ -z "$DIAGNOSTICS_ENCRYPTION_KEY" ]]; then
+            echo "::warning::DIAGNOSTICS_ENCRYPTION_KEY is not set; the lane report and convert log are not uploaded."
+            exit 0
+          fi
+          mkdir -p "$RUNNER_TEMP/diagnostics-plain" "$RUNNER_TEMP/diagnostics"
+          if [[ -f "$RUNNER_TEMP/report.json" ]]; then cp -- "$RUNNER_TEMP/report.json" "$RUNNER_TEMP/diagnostics-plain/"; fi
+          for log in "$RUNNER_TEMP"/work/ports-*/convert.log; do
+            if [[ -f "$log" ]]; then cp -- "$log" "$RUNNER_TEMP/diagnostics-plain/"; fi
+          done
+          CACHE_ENCRYPTION_KEY="$DIAGNOSTICS_ENCRYPTION_KEY" python tools/modsync-ci/seal.py seal \
+            --source "$RUNNER_TEMP/diagnostics-plain" --destination "$RUNNER_TEMP/diagnostics/lane-diagnostics.seal"
+      - name: Upload sealed lane diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ports-diagnostics-${{ matrix.game }}-${{ matrix.implementation }}-${{ matrix.mode }}
+          path: ${{ runner.temp }}/diagnostics/lane-diagnostics.seal
+          retention-days: 7
+          if-no-files-found: ignore
 
   manual:
     name: manual (${{ matrix.game }})
@@ -257,14 +450,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - name: Check for a reviewed manual plan
-        id: plan
-        env:
-          HAS_PLAN: ${{ hashFiles(format('ci/{0}-manual-plan.json', matrix.game)) != '' }}
+      - name: Require the reviewed manual plan
         run: |
-          echo "present=$HAS_PLAN" >> "$GITHUB_OUTPUT"
-          if [[ "$HAS_PLAN" != true ]]; then
-            echo "::error::Missing $PLAN (human-reviewed manual install plan)."
+          if [[ ! -f "$PLAN" ]]; then
+            echo "::error::$PLAN is missing. The manual reference lane requires a human-reviewed plan and never passes without one."
             exit 1
           fi
       - name: Install Wine and tools, free disk space
@@ -287,6 +476,10 @@ jobs:
         run: |
           python tools/modsync-ci/game_cache.py unpack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
+      - name: Install archive tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq 7zip 7zip-rar megatools libarchive-tools >/dev/null && { sudo apt-get install -y -qq unrar >/dev/null 2>&1 || echo "unrar unavailable; falling back to 7z/bsdtar"; }
+          python -m pip install --quiet gdown
       - name: Restore required mod archives
         env:
           RCLONE_CONFIG_MODCACHE_TYPE: s3
@@ -298,9 +491,18 @@ jobs:
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
+          set +e
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
             --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
             --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
+          remote_status=$?
+          if [[ "$remote_status" -ne 0 ]]; then
+            echo "::warning::R2 restore or repair persistence failed; retrying from the local verified cache."
+            python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
+              --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives"
+            local_status=$?
+            if [[ "$local_status" -ne 0 ]]; then exit "$local_status"; fi
+          fi
       - name: Install the full guide manually with the original patchers
         run: |
           xvfb-run -a python tools/modsync-ci/manual.py --plan "$PLAN" \

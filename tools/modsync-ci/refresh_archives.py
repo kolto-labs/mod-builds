@@ -51,12 +51,14 @@ ADAPTER_REASONS = {
     "download endpoint did not resolve to an attachment; provider adapter required",
     *(name + " requires an authenticated/provider adapter" for name in ("nexus", "mega", "google-drive", "gamefront")),
 }
+SELECTION_PREFIXES = ("reviewed archive selection for file", "landing page lists multiple files and no reviewed selection",
+                      "fetched files do not match the reviewed multi-file selection")
 NETWORK_REASONS = {"network request failed", "total download timeout", "TimeoutError", "URLError", "HTTPException"}
 INTEGRITY_REASONS = {
     "not a supported archive (HTML and unknown payloads rejected)", "truncated archive", "invalid manifest SHA256",
     "restore SHA256 mismatch", "cache object conflict", "expected complete HTTP 200 archive",
 }
-PROVIDERS = {"deadlystream", "nexus", "mega", "google-drive", "gamefront", "http"}
+PROVIDERS = {"deadlystream", "nexus", "mega", "google-drive", "gamefront", "dropbox", "http"}
 
 
 class Stop(BaseException):
@@ -111,34 +113,41 @@ def upload_object(path, remote_path):
         raise ValueError("object source changed during upload")
 
 
-def is_due(entry, now):
+def is_due(entry, now, item=None, pins=None):
+    if item is not None and (cache.uncached_reason(item) or cache.is_pinned(item, entry, pins)):
+        return False
     upstream_checked = entry.get("status") == "fresh" or (
         entry.get("status") == "verified" and entry.get("evidence") == "download-without-upstream-metadata")
-    return not (upstream_checked and 0 <= now - entry.get("checked_at", 0) < FRESH_SECONDS)
+    current = item is None or cache.objects_match_selection(item, entry)
+    return not (upstream_checked and current and 0 <= now - entry.get("checked_at", 0) < FRESH_SECONDS)
 
 
 def refresh_item(item, root, remote, force):
     """Restore, refresh, persist and evict one item; returns cache.py's sanitized report."""
     manifest_path = root / "manifest.json"
+    policy = cache.uncached_reason(item)
+    if policy:
+        yield {"entries": [cache.uncached_entry(item, policy)], "ok": True}
+        return
     manifest = json.loads(manifest_path.read_text())
     manifest.setdefault("refresh_attempts", {})[item["id"]] = time.time()
     cache.atomic_json(manifest_path, manifest)
     old = manifest["entries"].get(item["id"], {})
     yield "restore"
-    if old.get("sha256"):
-        path, size = cache.object_path(root, old), old.get("size")
+    for stored in cache.entry_objects(old):
+        path, size = cache.object_path(root, stored), stored.get("size")
         if not isinstance(size, int) or size < 0 or size + RESERVE >= shutil.disk_usage(root).free:
             raise ValueError("insufficient disk to restore selected object")
         temporary = root / "objects" / ".download-restore"
         try:
             if fetch(f"{remote}/objects/{path.name}", temporary):
-                if not matches(temporary, old["sha256"], size):
+                if not matches(temporary, stored["sha256"], size):
                     raise ValueError("restored object failed size/SHA256 verification")
-                cache.validate(temporary, 300)
+                cache.validate(temporary, 300, loose=cache.entry_loose(item, stored))
                 os.replace(temporary, path)
         finally:
             temporary.unlink(missing_ok=True)
-    available = shutil.disk_usage(root).free - RESERVE
+    available = min(shutil.disk_usage(root).free - RESERVE, cache.MAX_LINK_BYTES)
     if available <= 0:
         raise ValueError("insufficient download disk")
     yield "refresh"
@@ -154,10 +163,11 @@ def refresh_item(item, root, remote, force):
     yield "persist-object"
     uploaded = set()
     for entry in json.loads(manifest_path.read_text())["entries"].values():
-        if entry.get("sha256") not in uploaded and cache.local_valid(root, entry):
-            path = cache.object_path(root, entry)
-            upload_object(path, f"{remote}/objects/{path.name}")
-            uploaded.add(entry["sha256"])
+        for stored in cache.entry_objects(entry):
+            if stored.get("sha256") not in uploaded and cache.local_valid(root, stored):
+                path = cache.object_path(root, stored)
+                upload_object(path, f"{remote}/objects/{path.name}")
+                uploaded.add(stored["sha256"])
     yield "persist-manifest"
     rclone("copyto", manifest_path, f"{remote}/manifest.json", "--retries", "1")
     yield "evict"
@@ -193,6 +203,8 @@ def classify(reason):
         return "adapter-required", None
     if reason == "provider challenge/CAPTCHA; blocked-pending-user-action":
         return "captcha-user-action", None
+    if reason.startswith("nexus requires NEXUS_API_KEY"):
+        return "credentials-required", None
     match = re.fullmatch(r"HTTP ([45][0-9]{2})", reason)
     if match:
         return "http-status", int(match[1])
@@ -200,19 +212,24 @@ def classify(reason):
         return "network", None
     if reason in INTEGRITY_REASONS:
         return "integrity", None
+    if reason.startswith(SELECTION_PREFIXES):
+        return "selection-review", None
     return "other", None
 
 
 def totals(entries, manifest, started, stop, ok, persisted, max_items):
     counts = Counter(entry.get("status") for entry in entries)
     checked = [entry for entry in manifest.get("entries", {}).values() if entry.get("checked_at", 0) >= started]
-    verified = [entry for entry in checked
-                if entry.get("evidence") in ("download-200", "download-without-upstream-metadata")]
+    verified = [stored for entry in checked for stored in cache.entry_objects(entry)
+                if stored.get("evidence") in ("download-200", "download-without-upstream-metadata")]
     unresolved = Counter()
+    other_reasons = Counter()
     for entry in entries:
         if entry.get("status") == "unresolved":
             provider = entry.get("provider") if entry.get("provider") in PROVIDERS else "unknown"
             unresolved[(provider, *classify(entry.get("reason")))] += 1
+            if classify(entry.get("reason"))[0] in ("other", "selection-review"):
+                other_reasons[provider + ": " + str(entry.get("reason"))[:160]] += 1
     stages = {}
     for entry in entries:
         if entry.get("stage"):
@@ -228,10 +245,12 @@ def totals(entries, manifest, started, stop, ok, persisted, max_items):
                 stage["source_frames"].append(entry["source_frames"])
     return {
         "max_items": max_items, "state": stop, "reported_entries": len(entries),
-        "fresh": counts["fresh"], "verified": counts["verified"], "stale_unknown": counts["stale-unknown"],
+        "fresh": counts["fresh"], "verified": counts["verified"], "pinned": counts["pinned"],
+        "stale_unknown": counts["stale-unknown"], "uncached_by_policy": counts[cache.UNCACHED],
         "unresolved": counts["unresolved"], "manifest_checked": len(checked),
         "verified_downloads": len(verified), "verified_bytes": sum(entry.get("size", 0) for entry in verified),
         "refresh_complete": int(ok and persisted and stop == "finished"), "persistence_succeeded": int(persisted),
+        "other_reasons": dict(other_reasons.most_common(20)),
         "unresolved_classes": [
             {"provider": provider, "reason_class": reason_class, "count": count,
              **({"http_status": status} if status is not None else {})}
@@ -254,14 +273,14 @@ def publish(summary):
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--max-items", type=int, required=True, help="due links to attempt (1-20)")
+    parser.add_argument("--max-items", type=int, required=True, help="due links to attempt (1-500)")
     parser.add_argument("--candidate-id", help="retry exactly this discovered item (64 lowercase hex), forced")
     parser.add_argument("--guide", action="append", help="repeatable full.md path (default both games)")
     parser.add_argument("--work-dir", type=Path, help="parent for the private scratch dir (default $RUNNER_TEMP or /tmp)")
     parser.add_argument("--time-limit", type=int, default=2100, help="seconds before stopping with partial progress")
     args = parser.parse_args(argv)
-    if not 1 <= args.max_items <= 20:
-        parser.error("--max-items must be 1..20")
+    if not 1 <= args.max_items <= 500:
+        parser.error("--max-items must be 1..500")
     if args.candidate_id and not re.fullmatch(r"[0-9a-f]{64}", args.candidate_id):
         parser.error("--candidate-id must be exactly 64 lowercase hexadecimal characters")
 
@@ -281,6 +300,13 @@ def main(argv=None):
         items = [item for item in items if item["id"] == args.candidate_id]
         if len(items) != 1:
             parser.error("--candidate-id does not match exactly one discovered item")
+    try:
+        policy = {item["id"]: cache.uncached_reason(item) for item in items}
+    except (ValueError, OSError) as error:
+        print(f"::error::Archive selections are invalid ({type(error).__name__}).", file=sys.stderr)
+        return 2
+    policy_entries = [cache.uncached_entry(item, policy[item["id"]]) for item in items if policy[item["id"]]]
+    items = [item for item in items if not policy[item["id"]]]
 
     os.umask(0o077)
     parent = args.work_dir or Path(os.environ.get("RUNNER_TEMP") or tempfile.gettempdir())
@@ -301,6 +327,9 @@ def main(argv=None):
             if (manifest.get("schema") != 1 or not isinstance(manifest.get("entries"), dict)
                     or not isinstance(manifest.setdefault("refresh_attempts", {}), dict)):
                 raise ValueError
+            for entry in policy_entries:
+                manifest["entries"].pop(entry["id"], None)
+                manifest["refresh_attempts"].pop(entry["id"], None)
             cache.atomic_json(manifest_path, manifest)
         except (subprocess.SubprocessError, ValueError, OSError) as error:
             print(f"::error::Archive cache backend unreachable or manifest corrupt ({type(error).__name__}).",
@@ -309,15 +338,19 @@ def main(argv=None):
 
         if not args.candidate_id:
             attempts, entries_by_id = manifest["refresh_attempts"], manifest["entries"]
+            try:
+                pins = cache.load_pins()
+            except (ValueError, OSError):
+                pins = {}
 
             def priority(item):
                 attempted = attempts.get(item["id"], entries_by_id.get(item["id"], {}).get("checked_at", 0))
                 return bool(attempted), attempted, item["id"]
 
-            items = sorted((item for item in items if is_due(entries_by_id.get(item["id"], {}), started)),
+            items = sorted((item for item in items if is_due(entries_by_id.get(item["id"], {}), started, item, pins)),
                            key=priority)[:args.max_items]
 
-        entries, ok, stop = [], True, "finished"
+        entries, ok, stop = list(policy_entries), True, "finished"
         signal.signal(signal.SIGALRM, interrupt)
         signal.signal(signal.SIGTERM, interrupt)
         signal.alarm(args.time_limit)
@@ -328,7 +361,8 @@ def main(argv=None):
                     break
                 item_entries, item_ok = run_item(item, root, remote, bool(args.candidate_id))
                 entries += item_entries
-                ok = ok and item_ok and all(entry.get("status") in ("fresh", "verified") for entry in item_entries)
+                ok = ok and item_ok and all(entry.get("status") in ("fresh", "verified", "pinned", cache.UNCACHED)
+                                            for entry in item_entries)
         except Stop as reason:
             stop, ok = f"{reason}; partial progress", False
         finally:
