@@ -36,12 +36,23 @@ movies, seals it and saves it. If there is no complete game at the end, the job
 fails. Runs k1, then k2, on one Steam account. The Monday/Thursday schedule keeps
 both game caches in use; see [steam.md](steam.md).
 
-**`mods`** — Restores the latest mod-archive Actions cache (`mod-archives-<run_id>`,
-falling back to the newest `mod-archives-*`), runs `cache.py refresh` over both
-guides, and saves the result under `mod-archives-<run_id>` with `if: always()`, so a
-cancelled or timed-out run keeps its partial progress. `refresh` revalidates every
-archive and fetches only new or changed ones (see below), then keeps at most 3 GiB
-of objects (`--cache-limit-bytes`; pinned first, then smallest; `.bik` never).
+**`mods`** — Restores the newest `mod-archives-*` Actions cache, runs `cache.py
+refresh` over both guides, and saves the result under `mod-archives-<hash>` with
+`if: always()`, so a cancelled or timed-out run keeps its partial progress. `<hash>` is
+the first 16 hex digits of the SHA-256 of `manifest.json` with the per-run timestamps
+(`checked_at`, `imported_at`) removed and keys sorted, so unchanged content keeps the
+same key. Entries are immutable: a lookup (`lookup-only`) skips the save when that key
+exists, and if two runs race for it the save action logs "Failed to save: Unable to
+reserve cache ... another job may be creating this cache" at info level. That line, or a
+skipped save, is not an error. The job exposes the key as the output
+`archive_cache_key` (empty when there was no manifest). After the save, a
+`continue-on-error` prune step runs `gh cache list --key mod-archives-` and
+`gh cache delete`s every key except the current one, once it has confirmed that the
+current key is listed, so only one mod entry stays. It never touches `game-*` or
+`steam-sealed-*`. The job sets `permissions: actions: write` (with `contents: read`)
+for that step; the top level stays `contents: read`. `refresh` revalidates every
+archive and fetches only new or changed ones (see below), then keeps at most 2.5 GiB
+of objects (`--cache-limit-bytes 2684354560`; pinned first, then smallest; `.bik` never).
 Archives that do not fit stay in the manifest and are fetched by the lanes. Before
 that, an optional step runs `refresh_archives.py --max-items 500`, which keeps the
 R2 bucket current when its write secrets exist and otherwise skips itself. The job
@@ -54,9 +65,11 @@ both refresh steps), so a failure never blocks an install. See [cache.md](cache.
 **`install`** — Starts with the lane checks below, then checks out the ModSync
 source for the implementation (the repository named by `MODSYNC_RS_REPOSITORY` or
 `MODSYNC_TS_REPOSITORY`, read with `MODSYNC_SOURCE_TOKEN`; empty values fail the
-job). It restores the game cache (a miss fails the job) and unpacks it, restores
-the `mod-archives-<run_id>` Actions cache that `mods` saved in the same run (a miss
-is not an error), restores the archives for `content/<game>/full.md` from the chain
+job). It restores the game cache (a miss fails the job with "game cache evicted —
+re-run the game job") and unpacks it, restores
+the Actions cache that `mods` saved in the same run (key from
+`needs.mods.outputs.archive_cache_key`, falling back to the `mod-archives-` prefix when
+`mods` failed or was skipped; a miss is not an error), restores the archives for `content/<game>/full.md` from the chain
 below, and runs `ports.py` to install the full guide. `gui` lanes run under Xvfb.
 See [ports.md](ports.md).
 
@@ -258,12 +271,33 @@ is skipped and the Actions cache, P2P and the websites still supply every archiv
 The repository's Actions cache is limited to 10 GB and GitHub evicts the least
 recently used entries first (and any entry not used for 7 days). The mod archives
 are tens of GB, so the cache holds only a subset: `--cache-limit-bytes` in `ci.yml`
-(3 GiB) keeps pinned objects first, then the smallest, and never `.bik`; `mods` also
+(2.5 GiB) keeps pinned objects first, then the smallest, and never `.bik`; `mods` also
 skips a link whose objects do not fit. The lanes fetch the rest themselves, from the
-bucket, P2P or the website. Each run saves a new `mod-archives-<run_id>` entry, so
-older ones are evicted before the game caches (`game-<game>-v1`), which every run
-reads. If the game caches are ever evicted, the next `game` job refills them from
-Steam. Change the limit in `ci.yml` if the game caches grow.
+bucket, P2P or the website.
+
+The mod entry is keyed by content (`mod-archives-<hash>`), and `mods` deletes the older
+`mod-archives-*` entries after saving, so exactly one mod entry stays. Keying by run id
+used to add a ~3 GB entry per run; the total passed 10 GB and eviction removed the k1 game
+cache (`steam-sealed-v3-excludingmovies-k1-Linux-…`) between `game` and the install
+lanes, which failed on `fail-on-cache-miss`.
+
+Budget (decimal GB, as GitHub counts):
+
+| Entry | Size |
+| --- | --- |
+| Game k1 | ~3.0 |
+| Game k2 | ~3.2 |
+| Mod archives at 2.5 GiB (`2684354560`) | ~2.7 |
+| Total | ~8.9 of 10 |
+
+`--cache-limit-bytes` is the knob. At 3 GiB (`3221225472`) the total is ~9.5 GB, which
+fits but leaves little room; 2.5 GiB leaves margin. If the games grow, lower it, to
+2 GiB (`2147483648`) for example. Between the save and the prune the old and new mod
+entries coexist (~5.4 to 5.9 GB), so the total briefly reaches ~11.6 to 12 GB. GitHub
+applies the 10 GB cap asynchronously, and the prune runs right after the save to keep that
+window short; it is the one place an eviction can still happen. If a game cache is evicted anyway, the lane
+fails with "game cache evicted — re-run the game job": re-run the `game` job, which
+refills it from Steam, then the failed lane.
 
 ## Running it by hand
 

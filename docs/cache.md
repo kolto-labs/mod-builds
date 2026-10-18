@@ -9,14 +9,19 @@ only when no source yields a required archive (see
 | Store | Holds | Lives in | Written by |
 | --- | --- | --- | --- |
 | Game cache | One encrypted, movie-free copy of K1 or K2 | Actions cache, key `game-<game>-v1` | `game` job |
-| Archive cache | Mod downloads named by the guides, at most 3 GiB per run | Actions cache, key `mod-archives-<run id>`, restored by the `mod-archives-` prefix | `mods` job |
+| Archive cache | Mod downloads named by the guides, at most 2.5 GiB, one entry kept | Actions cache, key `mod-archives-<hash>` (hash of `manifest.json` without timestamps), restored by the `mod-archives-` prefix | `mods` job |
 | R2 bucket (optional) | Archives and `manifest.json` | S3-compatible bucket (Cloudflare R2 in CI), prefix `modsync-archives` | `mods` job, only when the bucket secrets exist |
 
 The game cache is described in [steam.md](steam.md). The archives add up to tens
 of GB, far over what the Actions cache can hold, so `cache.py refresh` keeps only
-what fits `--cache-limit-bytes 3221225472` (3 GiB): pinned objects first, then the
+what fits `--cache-limit-bytes 2684354560` (2.5 GiB): pinned objects first, then the
 smallest. A link whose objects do not fit is reported `over-cache-limit` and its archive
 is fetched by the lane that needs it. The optional bucket can hold the full set.
+
+The repository's Actions cache is capped at 10 GB with LRU eviction, shared with the game
+caches (K1 ~3.0 GB, K2 ~3.2 GB). 3.0 + 3.2 + 2.7 (2.5 GiB) is ~8.9 GB. `--cache-limit-bytes`
+is the knob: 3 GiB gives ~9.5 GB, which is tight; lower it (2 GiB, `2147483648`) if the
+games grow. See [ci.md](ci.md#actions-cache-size-and-eviction).
 
 ## Source order per archive
 
@@ -95,10 +100,20 @@ secrets. It is `continue-on-error`, so a failure never blocks an install. In ord
 2. Optional bucket refresh (`continue-on-error`; needs the write pair and
    `MOD_CACHE_BUCKET`): `refresh_archives.py --max-items 500`, described below.
 3. Archive cache refresh (`continue-on-error`): `cache.py refresh --cache-dir
-   <dir> --cache-limit-bytes 3221225472`, with `--remote` when the bucket is
+   <dir> --cache-limit-bytes 2684354560`, with `--remote` when the bucket is
    configured. It follows the [source order](#source-order-per-archive),
    revalidates every archive and prunes to the limit (pinned first, then smallest).
-4. Save the Actions cache under `mod-archives-<run id>` (`if: always()`).
+4. Compute the key `mod-archives-<hash>`: the first 16 hex digits of the SHA-256 of
+   `manifest.json` with `checked_at` and `imported_at` removed (sorted keys), so unchanged
+   content gives the same key. The job exposes it as the output `archive_cache_key`.
+5. Save the Actions cache under that key (`if: always()`). A `lookup-only` restore skips
+   the save when the key already exists, as entries are immutable; a racing duplicate logs
+   "Failed to save: Unable to reserve cache ... another job may be creating this cache" at
+   info level. A skipped or "already exists" save is not an error.
+6. Prune (`continue-on-error`): once the current key is confirmed present, `gh cache list
+   --key mod-archives-` and `gh cache delete` every other key, so one mod entry remains.
+   `game-*` and `steam-sealed-*` are never touched. This needs `permissions: actions: write`
+   on the `mods` job only.
 
 `install` and `manual` only restore the Actions cache; they never save it.
 
@@ -141,8 +156,9 @@ python tools/modsync-ci/cache.py restore --guide content/<game>/full.md \
 `--archive-map <path>` (restore only) also writes `{guide link URL: restored filename
 or [filenames]}` for restored links, for `modsync convert --archive-map`.
 
-Install and manual jobs restore the Actions cache first (`mod-archives-` prefix),
-then run `cache.py restore` against it, with `--remote` only when the read pair and
+Install and manual jobs restore the Actions cache first (key
+`needs.mods.outputs.archive_cache_key`, else the `mod-archives-` prefix when `mods`
+failed or was skipped), then run `cache.py restore` against it, with `--remote` only when the read pair and
 `MOD_CACHE_BUCKET` exist. They never save the cache. For every link in the guide,
 restore takes the first source that yields a verified archive (see
 [Source order](#source-order-per-archive)), then:

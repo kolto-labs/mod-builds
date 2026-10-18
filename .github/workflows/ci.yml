@@ -118,6 +118,14 @@ jobs:
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 120
+    # A job-level block replaces the top-level one, so contents: read is repeated. actions: write
+    # is only for the prune step (gh cache delete) and is granted to this job alone.
+    permissions:
+      contents: read
+      actions: write
+    outputs:
+      # Content-addressed key of the archive cache this run saved or found; empty when none.
+      archive_cache_key: ${{ steps.archive_key.outputs.key }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -128,7 +136,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/mod-cache
-          key: mod-archives-${{ github.run_id }}
+          key: mod-archives-
           restore-keys: mod-archives-
       - name: Install archive tools
         run: |
@@ -170,15 +178,75 @@ jobs:
           fi
           status=0
           python tools/modsync-ci/cache.py refresh --cache-dir "$RUNNER_TEMP/mod-cache" \
-            --cache-limit-bytes 3221225472 "${remote[@]}" > "$RUNNER_TEMP/refresh-report.json" || status=$?
+            --cache-limit-bytes 2684354560 "${remote[@]}" > "$RUNNER_TEMP/refresh-report.json" || status=$?
           python -c 'import collections,json,sys; print(dict(collections.Counter(e.get("status") for e in json.load(open(sys.argv[1]))["entries"])))' "$RUNNER_TEMP/refresh-report.json" || true
           exit "$status"
-      - name: Save mod archive cache
+      # The key is a hash of manifest.json without its per-run timestamps (checked_at, imported_at), so
+      # unchanged content gives an unchanged key and no new entry. Empty when there is no manifest.
+      - name: Compute the archive cache key
+        id: archive_key
         if: always()
+        run: |
+          manifest="$RUNNER_TEMP/mod-cache/manifest.json"
+          if [[ ! -f "$manifest" ]]; then
+            echo "No manifest.json in the mod cache; nothing to save."
+            exit 0
+          fi
+          digest=$(python3 - "$manifest" <<'PY'
+          import hashlib, json, sys
+          volatile = {"checked_at", "imported_at"}
+          def strip(value):
+              if isinstance(value, dict):
+                  return {key: strip(item) for key, item in value.items() if key not in volatile}
+              if isinstance(value, list):
+                  return [strip(item) for item in value]
+              return value
+          with open(sys.argv[1], encoding="utf-8") as stream:
+              document = strip(json.load(stream))
+          canonical = json.dumps(document, sort_keys=True, separators=(",", ":"))
+          print(hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16])
+          PY
+          )
+          echo "key=mod-archives-$digest" >> "$GITHUB_OUTPUT"
+      - name: Look up the archive cache entry
+        id: archive_exists
+        if: always() && steps.archive_key.outputs.key != ''
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/mod-cache
+          key: ${{ steps.archive_key.outputs.key }}
+          lookup-only: true
+      # Entries are immutable. An existing key is skipped here; if two runs race for it, the save
+      # action logs "Failed to save: Unable to reserve cache ... another job may be creating this
+      # cache" at info level, which is not an error.
+      - name: Save mod archive cache
+        id: archive_save
+        if: always() && steps.archive_key.outputs.key != '' && steps.archive_exists.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/mod-cache
-          key: mod-archives-${{ github.run_id }}
+          key: ${{ steps.archive_key.outputs.key }}
+      # Keeps one mod-archives-* entry so the repository stays under the 10 GB Actions cache cap.
+      # Only runs once the current key is confirmed present, and only touches mod-archives-* keys,
+      # never game-* or steam-sealed-*.
+      - name: Prune stale mod archive caches
+        if: always() && steps.archive_key.outputs.key != '' && (steps.archive_save.outcome == 'success' || steps.archive_exists.outputs.cache-hit == 'true')
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          CURRENT_KEY: ${{ steps.archive_key.outputs.key }}
+        run: |
+          mapfile -t keys < <(gh cache list --key mod-archives- --limit 100 --json key --jq '.[].key' | sort -u)
+          if ! printf '%s\n' "${keys[@]}" | grep -Fxq -- "$CURRENT_KEY"; then
+            echo "::warning::$CURRENT_KEY is not in the cache list; leaving every mod archive cache in place."
+            exit 0
+          fi
+          for key in "${keys[@]}"; do
+            [[ "$key" == mod-archives-* && "$key" != "$CURRENT_KEY" ]] || continue
+            echo "Deleting stale cache $key"
+            gh cache delete "$key"
+          done
 
   # Manual only: copies hand-downloaded archives from the private STAGING rclone remote into the
   # R2 cache, one file at a time, after verifying each against its reviewed pin (seed_pins.json).
@@ -384,12 +452,16 @@ jobs:
         run: python -m pip install --quiet PyAutoGUI==0.9.54 pytesseract==0.3.13 Pillow==11.3.0
 
       - name: Restore game cache
+        id: game_cache
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: game-${{ matrix.game }}-v1
           restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
           fail-on-cache-miss: true
+      - name: Explain a game cache miss
+        if: failure() && steps.game_cache.outcome == 'failure'
+        run: echo "::error::game cache evicted — re-run the game job (then this lane); see docs/ci.md, Actions cache size and eviction"
       - name: Unpack game
         env:
           CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
@@ -404,7 +476,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/mod-cache
-          key: mod-archives-${{ github.run_id }}
+          key: ${{ needs.mods.outputs.archive_cache_key || 'mod-archives-' }}
           restore-keys: mod-archives-
       - name: Restore required mod archives
         env:
@@ -510,12 +582,16 @@ jobs:
           sudo apt-get install -y -qq --no-install-recommends wine wine64 wine32:i386 xvfb xauth p7zip-full >/dev/null
           python3 tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone"
       - name: Restore game cache
+        id: game_cache
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: game-${{ matrix.game }}-v1
           restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
           fail-on-cache-miss: true
+      - name: Explain a game cache miss
+        if: failure() && steps.game_cache.outcome == 'failure'
+        run: echo "::error::game cache evicted — re-run the game job (then this lane); see docs/ci.md, Actions cache size and eviction"
       - name: Unpack game
         env:
           CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
@@ -530,7 +606,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/mod-cache
-          key: mod-archives-${{ github.run_id }}
+          key: ${{ needs.mods.outputs.archive_cache_key || 'mod-archives-' }}
           restore-keys: mod-archives-
       - name: Restore required mod archives
         env:
