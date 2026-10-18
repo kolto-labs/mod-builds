@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-from urllib.parse import urldefrag, urlsplit, urlunsplit
+from urllib.parse import unquote, urldefrag, urlsplit, urlunsplit
 import uuid
 
 
@@ -448,6 +448,253 @@ def bind_archives(command, source, guide, converted, archives, archive_map, priv
     return bound if count else converted
 
 
+ALIAS_MOD_DIRECTORY = re.compile(r"<<modDirectory>>[\\/]+", re.IGNORECASE)
+ALIAS_UNSAFE_NAME = re.compile(r"[/\\\x00-\x1f\x7f]")
+ALIAS_STEM_STRIP = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]+')
+ALIAS_STEM_LIMIT = 100
+ALIAS_COLLISION_LIMIT = 50
+ALIAS_FAILED_KEY = "archive_alias_failed"
+
+
+def glob_regex(segment):
+    """One path segment as the validator matches it: only `*` and `?` are wildcards, case-insensitive.
+
+    ModSync.ts resolveWildcards runs picomatch with nobrace/nobracket/noextglob, so
+    `{zip,rar,7z}` and `[x]` are literal characters, not alternatives.
+    """
+    parts = []
+    for char in segment:
+        if char == "*":
+            if not parts or parts[-1] != "[^/]*":
+                parts.append("[^/]*")
+        else:
+            parts.append("[^/]" if char == "?" else re.escape(char))
+    return re.compile("".join(parts), re.IGNORECASE | re.DOTALL)
+
+
+def archive_pattern_matches(directory, segments, visited=None):
+    """True when some path below `directory` matches the glob `segments` (files and folders count)."""
+    if not segments:
+        return True
+    try:
+        entries = list(os.scandir(directory))
+    except OSError:
+        return False
+    head, rest = segments[0], segments[1:]
+    if head == "**":
+        if not rest:
+            return bool(entries)
+        if archive_pattern_matches(directory, rest):
+            return True
+        visited = set() if visited is None else visited
+        visited.add(os.path.realpath(directory))
+        return any(entry.is_dir() and os.path.realpath(entry.path) not in visited
+                   and archive_pattern_matches(entry.path, segments, visited)
+                   for entry in entries)
+    matcher = glob_regex(head)
+    return any(matcher.fullmatch(entry.name) and (
+        not rest or (entry.is_dir() and archive_pattern_matches(entry.path, rest))) for entry in entries)
+
+
+def link_basename(link):
+    try:
+        return unquote(urlsplit(str(link)).path.rsplit("/", 1)[-1])
+    except ValueError:
+        return ""
+
+
+def extract_patterns(component):
+    """[(raw source, path relative to the mod directory)] of the Extract sources the lane will validate.
+
+    Covers the component's own instructions and those of its options that are selected in the
+    converted TOML (`--select` turns options on only through their own GUIDs).
+    """
+    records = list(component.get("Instructions") or [])
+    for option in component.get("Options") or []:
+        if isinstance(option, dict) and option.get("IsSelected") is True:
+            records += option.get("Instructions") or []
+    found = []
+    for record in records:
+        if not isinstance(record, dict) or str(record.get("Action", "")).lower() != "extract":
+            continue
+        sources = record.get("Source")
+        for raw in [sources] if isinstance(sources, str) else sources if isinstance(sources, list) else ():
+            prefix = ALIAS_MOD_DIRECTORY.match(raw) if isinstance(raw, str) else None
+            if prefix and all(raw != seen for seen, _ in found):
+                found.append((raw, raw[prefix.end():].replace("\\", "/")))
+    return found
+
+
+def component_links(component):
+    links = component.get("ModLink")
+    return [links] if isinstance(links, str) else [
+        link for link in links if isinstance(link, str)] if isinstance(links, list) else []
+
+
+def alias_stem(name):
+    """The mod name as ModSync.ts sanitizeFileName cleans it (used for the guessed archive glob)."""
+    cleaned = " ".join(ALIAS_STEM_STRIP.sub("", str(name or "")).split()).strip(" .")
+    return cleaned[:ALIAS_STEM_LIMIT].rstrip(" .") or "mod"
+
+
+def alias_candidates(segment, matcher, stem, source_name):
+    """Names that satisfy `segment`, best first: the literal basename, else `<mod name>.<ext>`.
+
+    When the validator reads the pattern literally (a `{zip,rar,7z}` group is not expanded),
+    `<mod name>.<ext>` does not match; the pattern with every `*` removed does by construction.
+    """
+    if "*" not in segment and "?" not in segment:
+        yield segment
+        return
+    extension = os.path.splitext(source_name)[1]
+    if re.fullmatch(r"\.[A-Za-z0-9]{1,5}", extension) is None:
+        extension = ""
+    for base in (stem + extension, segment.replace("*", "").replace("?", "_")):
+        if matcher.fullmatch(base):
+            root, suffix = os.path.splitext(base)
+            yield base
+            for number in range(2, ALIAS_COLLISION_LIMIT + 1):
+                numbered = f"{root} ({number}){suffix}"
+                if not matcher.fullmatch(numbered):
+                    break
+                yield numbered
+
+
+def alias_source_name(pending, links, mapping, literal):
+    """(restored file name, None) for one unmatched pattern, or (None, reason).
+
+    `pending` is how many distinct patterns of the component are unmatched. A literal
+    basename is paired with the link whose URL ends in that name; otherwise the component
+    needs exactly one mapped file for exactly one unmatched pattern, since nothing else
+    ties several downloads to several globs.
+    """
+    mapped = {}
+    for link in links:
+        key = canonical_link(link)
+        if key in mapping:
+            mapped[link] = mapping[key]
+    names = {name for name in mapped.values() if name is not None}
+    if literal is not None:
+        paired = {name for link, name in mapped.items()
+                  if name is not None and link_basename(link).casefold() == literal.casefold()}
+        if len(paired) == 1:
+            return paired.pop(), None
+    if len(names) == 1 and pending == 1:
+        return next(iter(names)), None
+    if len(names) > 1 or (names and pending > 1):
+        return None, "ambiguous_mapped_archives"
+    if mapped:
+        return None, "multi_file_map_entry"
+    return None, "no_mapped_archive"
+
+
+def link_alias(source, alias):
+    """Hardlink `alias` to `source` (same directory), falling back to a relative symlink."""
+    try:
+        os.link(source, alias)
+        return "hardlink"
+    except FileExistsError:
+        raise
+    except OSError:
+        os.symlink(source.name, alias)
+        return "symlink"
+
+
+def alias_archives(converted, archive_map, archives, selected, report):
+    """Give restored archives names the converted TOML's Extract globs match (TypeScript lanes).
+
+    ModSync.ts guesses archive globs from mod names or URL basenames while cache.py restore
+    stores archives under unrelated names, so `validate` finds nothing. For each selected
+    component with an Extract source under `<<modDirectory>>` that matches nothing in
+    `archives`, the one restored archive its ModLinks map to (`archive_map`) gets a hardlink
+    (symlink if linking fails) in `archives` named so the glob matches. converted.toml is
+    never changed. Links that cannot be made are recorded in `alias_unresolved`; validate
+    then reports the missing download as before.
+    """
+    aliases, unresolved = [], []
+    report["archive_aliases"] = {"count": 0, "aliases": aliases}
+    report["alias_unresolved"] = unresolved
+    mapping, map_problem = {}, None
+    if archive_map is None:
+        map_problem = "no_archive_map"
+    else:
+        try:
+            mapping = mapped_archives(archive_map.resolve(strict=True))
+        except (OSError, ValueError, AttributeError):
+            map_problem = "archive_map_unreadable"
+            report[ALIAS_FAILED_KEY] = map_problem
+    needs = []
+    for component in components_of(converted):
+        try:
+            identity = guid(component.get("Guid"))
+        except (Blocked, ValueError, AttributeError):
+            continue
+        if identity not in selected:
+            continue
+        missing = [(raw, relative) for raw, relative in extract_patterns(component)
+                   if not archive_pattern_matches(
+                       archives, [part for part in relative.split("/") if part not in ("", ".")])]
+        if missing:
+            needs.append((component, identity, missing))
+    taken = {name.casefold() for name in os.listdir(archives)}
+    created = {}
+    for component, identity, missing in needs:
+        links = component_links(component)
+        name = component.get("Name", component.get("Heading", ""))
+        failures = []
+        for raw, relative in missing:
+            segments = [part for part in relative.split("/") if part not in ("", ".")]
+            if not segments or ".." in segments:
+                failures.append({"pattern": raw, "reason": "path_escapes_archives_dir"})
+                continue
+            if len(segments) > 1:
+                failures.append({"pattern": raw, "reason": "nested_pattern_not_aliased"})
+                continue
+            segment = segments[0]
+            wildcard = "*" in segment or "?" in segment
+            source_name, reason = alias_source_name(
+                len(missing), links, mapping, None if wildcard else segment)
+            if source_name is None:
+                failures.append({"pattern": raw, "reason": map_problem or reason})
+                continue
+            source = archives / source_name
+            if (ALIAS_UNSAFE_NAME.search(source_name) or source_name in (".", "..")
+                    or not 0 < len(source_name) <= 255 or source.is_symlink() or not source.is_file()):
+                failures.append({"pattern": raw, "reason": "mapped_archive_missing_or_unsafe"})
+                continue
+            matcher = glob_regex(segment)
+            placed = None
+            for candidate in alias_candidates(segment, matcher, alias_stem(name), source_name):
+                if ALIAS_UNSAFE_NAME.search(candidate) or not 0 < len(candidate) <= 255 \
+                        or candidate in (".", ".."):
+                    break
+                key = candidate.casefold()
+                if key in taken:
+                    if not wildcard and created.get(key) == source_name:
+                        placed = ""
+                        break
+                    continue
+                try:
+                    method = link_alias(source, archives / candidate)
+                except FileExistsError:
+                    taken.add(key)
+                    continue
+                except OSError:
+                    break
+                taken.add(key)
+                created[key] = source_name
+                aliases.append({"component": name, "component_guid": identity,
+                                "alias": candidate, "source": source_name, "method": method})
+                placed = candidate
+                break
+            if placed is None:
+                failures.append({"pattern": raw, "reason": "alias_not_created"})
+        if failures:
+            unresolved.append({"component": name, "component_guid": identity,
+                               "reason": failures[0]["reason"], "patterns": failures})
+    report["archive_aliases"]["count"] = len(aliases)
+
+
 def draft_pending(component):
     """True when this component or option still carries an unreviewed draft.
 
@@ -661,6 +908,13 @@ def validate_with_quarantine(command, directories, deselect, converted, game, so
 
 def print_diagnostics(report):
     """Put the skip causes and every uncovered step in the CI log so one read is enough."""
+    aliased = report.get("archive_aliases")
+    if aliased and aliased.get("count"):
+        print(f"ports: archive aliases created for {aliased['count']} Extract source(s) "
+              f"(restored archives linked under the names the converted globs match)", file=sys.stderr)
+    for item in report.get("alias_unresolved") or ():
+        print(f"::warning::ports: no archive alias for {item['component']} [{item['component_guid']}]: "
+              f"{item['reason']}; validate will report its download as missing", file=sys.stderr)
     review = report.get("draft_review")
     if review and (review.get("bound") or review.get("bind_failed")):
         print(f"ports: archive binding bound {review.get('bound', 0)} component(s)"
@@ -1231,6 +1485,7 @@ def execute(args, report):
                        for component in document.get("thisMod", document.get("Components", []))
                        if guid(component["Guid"]) not in policy_guids]
         report["installable_component_count"] = len(installable)
+        alias_archives(converted, args.archive_map, archives, set(installable), report)
         directories = [str(converted), "--kotor", str(game),
                        "--mods", str(archives), "--select", ",".join(installable)]
         run(command + ["validate"] + directories,
@@ -1374,7 +1629,8 @@ def main(argv=None):
     parser.add_argument("--review-manifest", type=Path,
                         help="separately authored hash-bound JSON review (TypeScript required)")
     parser.add_argument("--archive-map", type=Path,
-                        help="cache.py restore --archive-map JSON passed to the Rust convert (ignored by TypeScript)")
+                        help="cache.py restore --archive-map JSON passed to the Rust convert; TypeScript lanes use it "
+                             "to link restored archives under the names the converted Extract globs match")
     parser.add_argument("--restore-report", type=Path,
                         help="cache.py restore --report JSON; its reviewed skipped_steps are exempted from "
                              "coverage, recorded in the report and left out of the install (Rust --deselect, "

@@ -3,6 +3,7 @@ import contextlib
 import hashlib
 import io
 import json
+import os
 from pathlib import Path
 import tempfile
 import tomllib
@@ -2659,6 +2660,316 @@ class QuarantineMainTests(unittest.TestCase):
                 contextlib.redirect_stderr(io.StringIO()), contextlib.redirect_stdout(io.StringIO()):
             ports.main(argv + ["--max-quarantine", "3", "--max-quarantine-fraction", "0.5"])
         self.assertEqual(seen, {"max": 3, "fraction": 0.5})
+
+
+ALIAS_A = "50000000-0000-0000-0000-00000000000a"
+ALIAS_B = "50000000-0000-0000-0000-00000000000b"
+ALIAS_URL_A = "https://example.invalid/files/10-alpha/"
+ALIAS_URL_B = "https://example.invalid/files/20-beta/"
+BRACED = "<<modDirectory>>\\Generic Mod*.{zip,rar,7z}"
+
+
+def alias_component(name, identity, links, sources, selected=True, options=()):
+    lines = ["[[thisMod]]", 'Guid = "' + identity + '"', 'Name = "' + name + '"',
+             "IsSelected = " + ("true" if selected else "false"), "ModLink = " + json.dumps(links)]
+    for source in sources:
+        lines += ["[[thisMod.Instructions]]", 'Action = "Extract"', "Source = " + json.dumps([source])]
+    for source in options:
+        lines += ["[[thisMod.Options]]", 'Guid = "' + identity[:-1] + 'f"', 'Name = "Variant"',
+                  "IsSelected = true", "[[thisMod.Options.Instructions]]", 'Action = "Extract"',
+                  "Source = " + json.dumps([source])]
+    return "\n".join(lines) + "\n"
+
+
+class ArchiveAliasTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.root))
+        self.archives = self.root / "archives"
+        self.archives.mkdir()
+        self.map_path = self.root / "map.json"
+
+    def restored(self, name, data=b"payload"):
+        (self.archives / name).write_bytes(data)
+        return name
+
+    def alias(self, blocks, mapping, selected=(ALIAS_A, ALIAS_B), write_map=True):
+        converted = self.root / "converted.toml"
+        converted.write_text(document(*blocks), encoding="utf-8")
+        if write_map:
+            self.map_path.write_text(json.dumps(mapping), encoding="utf-8")
+        before = converted.read_bytes()
+        report = {}
+        ports.alias_archives(converted, self.map_path if write_map else None, self.archives,
+                             set(selected), report)
+        self.assertEqual(converted.read_bytes(), before)
+        return report
+
+    def names(self):
+        return sorted(path.name for path in self.archives.iterdir())
+
+    def test_braced_glob_gets_a_name_the_validator_matches(self):
+        self.restored("Mod files-1086-1-0-1590189064.7z")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], [BRACED])],
+            {ALIAS_URL_A: "Mod files-1086-1-0-1590189064.7z"})
+        self.assertEqual(report["alias_unresolved"], [])
+        self.assertEqual(report["archive_aliases"]["count"], 1)
+        alias = report["archive_aliases"]["aliases"][0]
+        self.assertEqual(alias["source"], "Mod files-1086-1-0-1590189064.7z")
+        self.assertEqual(alias["component"], "Generic Mod")
+        self.assertEqual(alias["component_guid"], ALIAS_A)
+        self.assertTrue(ports.glob_regex("Generic Mod*.{zip,rar,7z}").fullmatch(alias["alias"]))
+        self.assertTrue(ports.archive_pattern_matches(self.archives, ["Generic Mod*.{zip,rar,7z}"]))
+        self.assertEqual(alias["method"], "hardlink")
+        source, linked = self.archives / alias["source"], self.archives / alias["alias"]
+        self.assertTrue(os.path.samefile(source, linked))
+        self.assertFalse(linked.is_symlink())
+
+    def test_wildcard_with_a_plain_extension_uses_the_mod_name_and_restored_extension(self):
+        self.restored("opaque-77.rar")
+        report = self.alias(
+            [alias_component("Generic: Mod?", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>\\Generic Mod*.rar"])],
+            {ALIAS_URL_A: "opaque-77.rar"})
+        self.assertEqual([item["alias"] for item in report["archive_aliases"]["aliases"]], ["Generic Mod.rar"])
+        self.assertEqual(self.names(), ["Generic Mod.rar", "opaque-77.rar"])
+
+    def test_literal_basename_is_used_verbatim_and_case_insensitively_matched_files_are_left_alone(self):
+        self.restored("opaque-1.zip")
+        self.restored("OTHER.ZIP")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>/Wanted Name.zip"]),
+             alias_component("Second Mod", ALIAS_B, [ALIAS_URL_B], ["<<modDirectory>>\\other.zip"])],
+            {ALIAS_URL_A: ["opaque-1.zip"], ALIAS_URL_B: "OTHER.ZIP"})
+        self.assertEqual([item["alias"] for item in report["archive_aliases"]["aliases"]], ["Wanted Name.zip"])
+        self.assertEqual(report["alias_unresolved"], [])
+        self.assertEqual(self.names(), ["OTHER.ZIP", "Wanted Name.zip", "opaque-1.zip"])
+
+    def test_nothing_is_created_for_components_the_lane_does_not_select(self):
+        self.restored("opaque-1.zip")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>\\Wanted.zip"])],
+            {ALIAS_URL_A: "opaque-1.zip"}, selected=(ALIAS_B,))
+        self.assertEqual(report["archive_aliases"], {"count": 0, "aliases": []})
+        self.assertEqual(report["alias_unresolved"], [])
+        self.assertEqual(self.names(), ["opaque-1.zip"])
+
+    def test_selected_options_count_and_other_placeholders_are_ignored(self):
+        self.restored("opaque-1.zip")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<kotorDirectory>>\\Override\\x.zip"],
+                             options=["<<modDirectory>>\\Variant.zip"])],
+            {ALIAS_URL_A: "opaque-1.zip"})
+        self.assertEqual([item["alias"] for item in report["archive_aliases"]["aliases"]], ["Variant.zip"])
+
+    def test_several_files_conflicts_and_unmapped_links_are_recorded_not_guessed(self):
+        self.restored("one.zip")
+        self.restored("two.zip")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>\\Wanted A.zip"]),
+             alias_component("Second Mod", ALIAS_B, [ALIAS_URL_B], ["<<modDirectory>>\\Wanted B.zip"])],
+            {ALIAS_URL_A: ["one.zip", "two.zip"]})
+        self.assertEqual(report["archive_aliases"]["count"], 0)
+        self.assertEqual({item["component_guid"]: item["reason"] for item in report["alias_unresolved"]},
+                         {ALIAS_A: "multi_file_map_entry", ALIAS_B: "no_mapped_archive"})
+        self.assertEqual(self.names(), ["one.zip", "two.zip"])
+
+    def test_two_archives_for_one_pattern_or_two_patterns_for_one_archive_are_ambiguous(self):
+        self.restored("one.zip")
+        self.restored("two.zip")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A, ALIAS_URL_B], ["<<modDirectory>>\\Wanted*.zip"]),
+             alias_component("Second Mod", ALIAS_B, [ALIAS_URL_B],
+                             ["<<modDirectory>>\\First.zip", "<<modDirectory>>\\Second.zip"])],
+            {ALIAS_URL_A: "one.zip", ALIAS_URL_B: "two.zip"})
+        self.assertEqual(report["archive_aliases"]["count"], 0)
+        self.assertEqual([item["reason"] for item in report["alias_unresolved"]],
+                         ["ambiguous_mapped_archives"] * 2)
+        self.assertEqual(len(report["alias_unresolved"][1]["patterns"]), 2)
+
+    def test_a_literal_name_is_paired_with_the_link_that_ends_in_it(self):
+        self.restored("one.zip")
+        self.restored("two.zip")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A,
+                             [ALIAS_URL_A + "First%20Part.zip?x=1", ALIAS_URL_B + "Second Part.zip"],
+                             ["<<modDirectory>>\\Second Part.zip", "<<modDirectory>>\\First Part.zip"])],
+            {ALIAS_URL_A + "First%20Part.zip": "one.zip", ALIAS_URL_B + "Second Part.zip": "two.zip"})
+        pairs = {item["alias"]: item["source"] for item in report["archive_aliases"]["aliases"]}
+        self.assertEqual(pairs, {"Second Part.zip": "two.zip", "First Part.zip": "one.zip"})
+
+    def test_unsafe_symlinked_missing_and_escaping_inputs_are_refused(self):
+        outside = self.root / "outside.zip"
+        outside.write_bytes(b"x")
+        (self.archives / "link.zip").symlink_to(outside)
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>\\A.zip"]),
+             alias_component("Second Mod", ALIAS_B, [ALIAS_URL_B], ["<<modDirectory>>\\B.zip"])],
+            {ALIAS_URL_A: "link.zip", ALIAS_URL_B: "../outside.zip"})
+        self.assertEqual([item["reason"] for item in report["alias_unresolved"]],
+                         ["mapped_archive_missing_or_unsafe"] * 2)
+        self.assertEqual(self.names(), ["link.zip"])
+        self.assertEqual(sorted(path.name for path in self.root.iterdir()),
+                         ["archives", "converted.toml", "map.json", "outside.zip"])
+
+    def test_patterns_outside_the_top_level_are_not_aliased(self):
+        self.restored("one.zip")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A],
+                             ["<<modDirectory>>\\..\\escape.zip", "<<modDirectory>>\\sub\\file.zip"])],
+            {ALIAS_URL_A: "one.zip"})
+        self.assertEqual([item["reason"] for item in report["alias_unresolved"][0]["patterns"]],
+                         ["path_escapes_archives_dir", "nested_pattern_not_aliased"])
+        self.assertEqual(self.names(), ["one.zip"])
+
+    def test_nested_patterns_that_already_match_are_resolved(self):
+        (self.archives / "sub").mkdir()
+        (self.archives / "sub" / "File.ZIP").write_bytes(b"x")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>\\sub\\file.zip"])], {})
+        self.assertEqual(report["alias_unresolved"], [])
+        self.assertEqual(report["archive_aliases"]["count"], 0)
+
+    def test_colliding_wildcard_names_stay_unique_and_literal_sharing_is_reused(self):
+        self.restored("one.zip")
+        self.restored("two.zip")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>\\Generic Mod*.zip"]),
+             alias_component("Generic  Mod", ALIAS_B, [ALIAS_URL_B], ["<<modDirectory>>\\Generic Mod*.zip"])],
+            {ALIAS_URL_A: "one.zip", ALIAS_URL_B: "two.zip"})
+        aliases = report["archive_aliases"]["aliases"]
+        self.assertEqual([(item["alias"], item["source"]) for item in aliases],
+                         [("Generic Mod.zip", "one.zip"), ("Generic Mod (2).zip", "two.zip")])
+        shared = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>\\Shared.zip"]),
+             alias_component("Second Mod", ALIAS_B, [ALIAS_URL_A], ["<<modDirectory>>\\shared.zip"])],
+            {ALIAS_URL_A: "one.zip"})
+        self.assertEqual(shared["alias_unresolved"], [])
+        self.assertEqual([item["alias"] for item in shared["archive_aliases"]["aliases"]], ["Shared.zip"])
+
+    def test_a_failed_hardlink_falls_back_to_a_relative_symlink_inside_the_archive_directory(self):
+        self.restored("opaque-1.zip")
+        with mock.patch.object(ports.os, "link", side_effect=OSError(18, "cross-device")):
+            report = self.alias(
+                [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>\\Wanted.zip"])],
+                {ALIAS_URL_A: "opaque-1.zip"})
+        self.assertEqual(report["archive_aliases"]["aliases"][0]["method"], "symlink")
+        link = self.archives / "Wanted.zip"
+        self.assertTrue(link.is_symlink())
+        self.assertEqual(os.readlink(link), "opaque-1.zip")
+        self.assertEqual(link.read_bytes(), b"payload")
+
+    def test_a_missing_or_unreadable_map_records_why_nothing_was_aliased(self):
+        blocks = [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>\\Wanted.zip"])]
+        report = self.alias(blocks, {}, write_map=False)
+        self.assertEqual(report["alias_unresolved"][0]["reason"], "no_archive_map")
+        self.map_path.write_text("[1, 2", encoding="utf-8")
+        converted = self.root / "converted.toml"
+        report = {}
+        ports.alias_archives(converted, self.map_path, self.archives, {ALIAS_A}, report)
+        self.assertEqual(report["alias_unresolved"][0]["reason"], "archive_map_unreadable")
+        self.assertEqual(report["archive_alias_failed"], "archive_map_unreadable")
+
+    def test_map_links_are_matched_without_query_fragment_or_userinfo(self):
+        self.restored("opaque-1.zip")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A + "?tab=files#top"],
+                             ["<<modDirectory>>\\Wanted.zip"])],
+            {"https://user@EXAMPLE.invalid/files/10-alpha/": "opaque-1.zip"})
+        self.assertEqual(report["archive_aliases"]["count"], 1)
+
+    def test_diagnostics_warn_once_per_unresolved_component(self):
+        report = {"archive_aliases": {"count": 2, "aliases": []},
+                  "alias_unresolved": [{"component": "Generic Mod", "component_guid": ALIAS_A,
+                                        "reason": "no_mapped_archive", "patterns": []}]}
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        lines = stderr.getvalue().splitlines()
+        self.assertEqual(sum(line.startswith("::warning::ports: no archive alias for Generic Mod")
+                             for line in lines), 1)
+        self.assertIn("no_mapped_archive", stderr.getvalue())
+        self.assertIn("archive aliases created for 2", stderr.getvalue())
+
+
+class ArchiveAliasLaneTests(unittest.TestCase):
+    def lane(self, restored, mapping, mode="cli", validate_exit=None):
+        root, args = ExecuteCommandTests.prepare(self, "k2")
+        args.implementation = "typescript"
+        args.mode = mode
+        args.review_manifest = root / "review.json"
+        args.archive_map = root / "map.json"
+        args.archive_map.write_text(json.dumps(mapping), encoding="utf-8")
+        for name in restored:
+            (args.archives / name).write_bytes(b"payload")
+        args.guide.write_text(GUIDE.replace("## CRITICAL: Platform Notes\n\n### Platform Fix A\n\n", ""),
+                              encoding="utf-8")
+        text = document(
+            alias_component("Mod One", "20000000-0000-0000-0000-000000000001", [ALIAS_URL_A],
+                            ["<<modDirectory>>\\Mod One*.{zip,rar,7z}"]),
+            alias_component("Mod Two", "20000000-0000-0000-0000-000000000002", [ALIAS_URL_B],
+                            ["<<modDirectory>>\\Mod Two*.{zip,rar,7z}"]))
+        seen = {}
+
+        def fake_run(command, source, private, stage, report, env):
+            seen.setdefault("stages", []).append(stage)
+            if stage == "convert":
+                (private / "converted.toml").write_text(text, encoding="utf-8")
+            if stage == "validate":
+                seen["at_validate"] = sorted(path.name for path in args.archives.iterdir())
+                seen["validate_command"] = list(command)
+                if validate_exit:
+                    raise ports.Blocked("validate_failed")
+
+        report = {"commands": []}
+        error = None
+        with mock.patch.object(ports, "run", fake_run), \
+                mock.patch.object(ports, "review_manifest", return_value=[]):
+            try:
+                ports.execute(args, report)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        return args, report, error, seen
+
+    def test_aliases_exist_before_validate_and_the_reviewed_toml_is_untouched(self):
+        args, report, error, seen = self.lane(
+            ["a.7z", "b.rar"], {ALIAS_URL_A: "a.7z", ALIAS_URL_B: "b.rar"})
+        self.assertIsNone(error)
+        self.assertEqual(seen["at_validate"],
+                         ["Mod One.{zip,rar,7z}", "Mod Two.{zip,rar,7z}", "a.7z", "b.rar"])
+        self.assertEqual(report["archive_aliases"]["count"], 2)
+        self.assertEqual(report["alias_unresolved"], [])
+        self.assertEqual(seen["validate_command"][seen["validate_command"].index("--mods") + 1],
+                         str(args.archives.resolve()))
+        converted = next(Path(args.work_dir).glob("ports-*/converted.toml"))
+        self.assertEqual(report["converted_sha256"], hashlib.sha256(converted.read_bytes()).hexdigest())
+        self.assertEqual(report["status"], "installed")
+
+    def test_gui_lane_gets_the_aliases_too(self):
+        _, report, _, seen = self.lane(
+            ["a.7z", "b.rar"], {ALIAS_URL_A: "a.7z", ALIAS_URL_B: "b.rar"}, mode="gui")
+        self.assertEqual(report["archive_aliases"]["count"], 2)
+        self.assertEqual(len(seen["at_validate"]), 4)
+
+    def test_an_unresolved_component_is_recorded_and_validate_still_runs_and_can_fail(self):
+        _, report, error, seen = self.lane(
+            ["a.7z"], {ALIAS_URL_A: "a.7z"}, validate_exit=True)
+        self.assertEqual(error, "validate_failed")
+        self.assertIn("validate", seen["stages"])
+        self.assertEqual(report["archive_aliases"]["count"], 1)
+        self.assertEqual([(item["component"], item["reason"]) for item in report["alias_unresolved"]],
+                         [("Mod Two", "no_mapped_archive")])
+        self.assertNotEqual(report.get("status"), "installed")
+
+    def test_rust_lanes_do_not_alias(self):
+        root, args = ExecuteCommandTests.prepare(self, "k2")
+        args.implementation = "rust"
+        report = {"commands": []}
+        with mock.patch.object(ports, "run", lambda *each: None), \
+                mock.patch.object(ports, "alias_archives") as alias:
+            with self.assertRaises(ports.Blocked):
+                ports.execute(args, report)
+        alias.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -567,6 +567,52 @@ ports: convert generated instructions for 0 of 197 components; not generated: al
   - Example Mod [00000000-0000-0000-0000-000000000001] No matching archive found for 'example-mod' <https://example.invalid/files/1-example-mod/>
 ```
 
+### Archive aliases (TypeScript lanes)
+
+ModSync.ts `import-md` guesses each mod's archive glob from the guide (`ExpectedFiles`, else
+the basename of a link that ends in `.zip`/`.rar`/`.7z`, else `<mod name>*.{zip,rar,7z}`),
+while `cache.py restore` stores archives under whatever name the host served
+(`Mod files-1086-1-0-1590189064.7z`). `validate` then reports `Missing downloads`. After the
+review check and before `validate` (so `install` and the `gui` lane see the same
+directory), `alias_archives` links the restored archive under a matching name inside
+`--archives`:
+
+1. For every `--select`ed component (and its options with `IsSelected = true`), each `Extract`
+   source under `<<modDirectory>>` is matched against the archive directory as the validator
+   does: case-insensitive, only `*` and `?` are wildcards, and `{...}` and `[...]` are
+   **literal** (ModSync.ts runs picomatch with `nobrace`/`nobracket`, so `*.{zip,rar,7z}`
+   does not mean "zip or rar or 7z"). A source that already matches is left alone.
+2. For an unmatched top-level source, the archive comes from `--archive-map`: the component's
+   `ModLink`s are looked up like `cache.py` keys them (no query, fragment or userinfo). A
+   literal basename is paired with the link whose URL ends in it; otherwise the component
+   needs exactly one mapped file and exactly one unmatched source. A source is never paired
+   by position.
+3. The alias is a hardlink to the restored file (a relative symlink if hardlinking fails),
+   created in the archive directory only. A literal basename is used as written. A wildcard
+   source gets `<mod name>.<restored extension>` (the mod name cleaned the way ModSync.ts
+   `sanitizeFileName` does); when the validator would not match that name, as with a braced
+   group, the source with every `*` removed is used instead (`Mod*.{zip,rar,7z}` becomes
+   `Mod.{zip,rar,7z}`; the archive is detected by its bytes, and its extract folder is `Mod`,
+   which the generated `Mod*\...` sources match). Names are unique (`Mod (2).7z` on a
+   collision) and never overwrite anything.
+4. `converted.toml` is not changed, so the review manifest hashes stay valid.
+
+The restored file must be a regular, non-symlink file whose map name is a plain file name in
+the archive directory. Map entries with several or conflicting files, unmapped links,
+ambiguous pairings, nested (`<<modDirectory>>\sub\x.zip`) or `..` sources that match
+nothing, and unsafe or missing files are not aliased.
+
+The report gets `archive_aliases` (`count` and `aliases`: `{component, component_guid, alias,
+source, method}` with `method` `hardlink` or `symlink`) and `alias_unresolved` (one entry
+per component: `component`, `component_guid`, the first `reason`, and `patterns` with a
+reason per source). Reasons: `no_archive_map`, `archive_map_unreadable`, `no_mapped_archive`,
+`multi_file_map_entry`, `ambiguous_mapped_archives`, `mapped_archive_missing_or_unsafe`,
+`nested_pattern_not_aliased`, `path_escapes_archives_dir`, `alias_not_created`. Each
+unresolved component also prints a `::warning::ports: no archive alias for ...`. Nothing is
+skipped: `validate` still runs and still fails with the same `Missing downloads` line for
+every component that stayed unresolved. Rust lanes do not alias (they bind through
+`--archive-map` at convert time).
+
 The `install` job seals `report.json` and every `convert.log` with `seal.py` and uploads
 the result (`ports-diagnostics-<game>-<impl>-<mode>`, 7 days) even when the lane fails.
 The key is the `DIAGNOSTICS_ENCRYPTION_KEY` secret, passed to `seal.py` as
