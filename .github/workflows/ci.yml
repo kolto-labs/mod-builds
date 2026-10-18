@@ -489,16 +489,13 @@ jobs:
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
-          # Reviewed policy skips (docs/ci.md). Rust lanes only: ports.py deselects
-          # the skipped component; the TypeScript lanes have no deselect mechanism.
-          policy=()
-          if [[ '${{ matrix.implementation }}' == rust ]]; then
-            policy+=(--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching")
-            if [[ "$GAME" == k1 ]]; then
-              policy+=(--allow-uncached-by-policy "Optional Widescreen & Extended Widescreen Support Mods::Remastered Cutscenes")
-            elif [[ "$GAME" == k2 ]]; then
-              policy+=(--allow-uncached-by-policy "Enhanced Widescreen Support Mods::K2 Cutscenes Rescaled")
-            fi
+          # Reviewed policy skips (docs/ci.md). ports.py leaves the skipped components out of
+          # the install: Rust with --deselect, TypeScript with --select of the rest.
+          policy=(--allow-uncached-by-policy "Optional Install Assistant - Quicker TSLPatching::Quicker TSLPatching")
+          if [[ "$GAME" == k1 ]]; then
+            policy+=(--allow-uncached-by-policy "Optional Widescreen & Extended Widescreen Support Mods::Remastered Cutscenes")
+          elif [[ "$GAME" == k2 ]]; then
+            policy+=(--allow-uncached-by-policy "Enhanced Widescreen Support Mods::K2 Cutscenes Rescaled")
           fi
           remote=()
           if [[ -n "$RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID" && -n "$MOD_CACHE_BUCKET" ]]; then
@@ -509,12 +506,21 @@ jobs:
             --archive-map "$RUNNER_TEMP/archive-map.json" --report "$RUNNER_TEMP/restore-report.json" \
             "${policy[@]}" "${remote[@]}"
 
+      - name: Install Wine for legacy patchers and Execute
+        if: matrix.implementation == 'typescript'
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends wine wine64 wine32:i386 >/dev/null
+
       - name: Install the full guide
         env:
           REVIEW: ci/${{ matrix.game }}-${{ matrix.implementation }}-review.json
+          WINEDEBUG: '-all'
+          WINEDLLOVERRIDES: 'mscoree,mshtml='
         run: |
-          review=(); if [[ -f "$REVIEW" ]]; then review=(--review-manifest "$REVIEW"); fi
-          if [[ '${{ matrix.implementation }}' == rust ]]; then review+=(--restore-report "$RUNNER_TEMP/restore-report.json"); fi
+          review=(--restore-report "$RUNNER_TEMP/restore-report.json")
+          if [[ -f "$REVIEW" ]]; then review+=(--review-manifest "$REVIEW"); fi
           python tools/modsync-ci/ports.py \
             --implementation '${{ matrix.implementation }}' --mode '${{ matrix.mode }}' \
             --source .modsync-source --guide "content/$GAME/full.md" \

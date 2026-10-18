@@ -400,6 +400,7 @@ IMPLEMENTATION_SECTIONS = {
 
 
 TYPESCRIPT_PHYSICAL_INSTALL_FLAG = "--ci-physical-install"
+TYPESCRIPT_GAMES = {"k1": "kotor1", "k2": "kotor2"}
 SKIPPED_BY_POLICY = "skipped-by-reviewed-policy"
 SKIPPED_REPORT_KEY = "skipped_by_reviewed_policy"
 LANE_SKIPS_PATH = Path(__file__).with_name("archive_selections.json")
@@ -438,14 +439,16 @@ def load_policy_skips(path, guide):
     return list(merged.values())
 
 
-def load_lane_skips(game, path=None):
+def load_lane_skips(game, path=None, implementation="rust"):
     """Return the reviewed lane skips for one game from archive_selections.json.
 
     The `lane_skips` table maps k1/k2 to a list of {section, heading, reason}
     objects, each optionally pinned with a `guid` and a `kind` (both or neither;
     see LANE_SKIP_KINDS). The whole table is validated whatever the game, so a
     malformed entry for the other game still blocks. A missing file or table
-    skips nothing.
+    skips nothing. Entries pinned with a `guid`/`kind` record the Rust converter's
+    unreviewed-draft state and name Rust GUIDs, so the TypeScript lanes apply only
+    the unpinned entries (the policy skips such as the 4GB Patcher).
     """
     path = Path(path or LANE_SKIPS_PATH)
     if not path.is_file():
@@ -478,13 +481,21 @@ def load_lane_skips(game, path=None):
             if key in seen:
                 raise Blocked("lane_skips_duplicate")
             seen.add(key)
-            if name == game:
+            if name == game and not (implementation == "typescript" and "guid" in entry):
                 skip = {"section": entry["section"], "heading": entry["heading"],
                         "reason": entry["reason"], "urls": [], "source": "lane_skips"}
                 if "guid" in entry:
                     skip.update(guid=entry["guid"], kind=entry["kind"])
                 result.append(skip)
     return result
+
+
+def normalized_reference(value):
+    """A GUID reference in the lowercase hyphenated form, whether written {BRACED} or bare."""
+    try:
+        return str(uuid.UUID(str(value)))
+    except ValueError:
+        return str(value).lower()
 
 
 def canonical_guid(value):
@@ -588,7 +599,7 @@ def coverage(guide, converted, report=None, implementation="rust", skipped=()):
                      if record["component_guid"] is not None}
     for other in (component for index, component in enumerate(components) if index not in exempt):
         if isinstance(other, dict) and skipped_guids & {
-                str(each).lower() for each in other.get("Dependencies", [])}:
+                normalized_reference(each) for each in other.get("Dependencies", [])}:
             raise Blocked("policy_skipped_component_has_dependents")
     if report is not None:
         report[SKIPPED_REPORT_KEY] = records
@@ -633,12 +644,20 @@ def gui_widescreen_scope(converted, policy_guids):
     return excluded, bool(widescreen)
 
 
-def select_base_components(converted):
+def component_phase(component):
+    """The install phase a converted component belongs to: widescreen or base."""
+    return "widescreen" if component.get("IsWidescreen", False) else "base"
+
+
+def select_base_components(converted, deselect=(), destination=None):
     """Write IsSelected=true for every base-phase, platform-neutral component.
 
     Widescreen and Aspyr-only components stay unselected: the GUI driver
     refuses them, and the CLI installs them through its own phase flow.
+    Components named in `deselect` (GUIDs) are also written unselected. The
+    result replaces `converted`, or is written to `destination` when given.
     """
+    deselect = {normalized_reference(each) for each in deselect}
     text = converted.read_text(encoding="utf-8")
     document = tomllib.loads(text)
     key = "thisMod" if "thisMod" in document else "Components"
@@ -646,7 +665,8 @@ def select_base_components(converted):
     if not isinstance(components, list) or not components:
         raise Blocked("selection_components_missing")
     expected = [not (component.get("IsWidescreen", False)
-                     or component.get("AspyrOnly", False))
+                     or component.get("AspyrOnly", False)
+                     or normalized_reference(component.get("Guid")) in deselect)
                 for component in components]
     header = "[[" + key + "]]"
     index = -1
@@ -674,8 +694,18 @@ def select_base_components(converted):
             component.pop("IsSelected", None)
     if updated != document:
         raise Blocked("selection_rewrite_changed_other_fields")
-    converted.write_text(rewritten, encoding="utf-8")
+    (destination or converted).write_text(rewritten, encoding="utf-8")
     return sum(expected)
+
+
+def typescript_import_command(command, guide, output):
+    """The ModSync.ts import-md invocation whose output the lanes and the review hash."""
+    name = guide.parent.name
+    if name not in TYPESCRIPT_GAMES:
+        raise Blocked("guide_target_game_unknown")
+    return command + ["import-md", str(guide), "--output", str(output),
+                      "--game", TYPESCRIPT_GAMES[name],
+                      "--source-url", "content/" + name + "/full.md"]
 
 
 def guid(value):
@@ -705,9 +735,15 @@ def review_manifest(path, guide, converted):
         raise Blocked("review_manifest_reviewer_required")
     if manifest.get("unresolved") != []:
         raise Blocked("review_manifest_unresolved")
-    if (manifest.get("guide_sha256") != digest(guide)
-            or manifest.get("converted_sha256") != digest(converted)):
-        raise Blocked("review_manifest_hash_mismatch")
+    stale = [name for name, path in (("guide_sha256", guide), ("converted_sha256", converted))
+             if manifest.get(name) != digest(path)]
+    if stale:
+        raise Blocked(
+            "review_manifest_hash_mismatch: " + ", ".join(stale) + " differ from this run. The converted "
+            "TOML depends on the guide and on the ModSync.ts ref (MODSYNC_TS_REF) that built it. Regenerate with: "
+            "python3 tools/modsync-ci/gen_ts_review.py --source <ModSync.ts checkout of that ref, built with "
+            "`pnpm install --frozen-lockfile && pnpm build`> --game " + guide.parent.name
+            + ", then review the diff of ci/" + guide.parent.name + "-typescript-review.json")
     document = tomllib.loads(converted.read_text(encoding="utf-8"))
     components = document.get("thisMod", document.get("Components", []))
     reviews = manifest.get("components")
@@ -726,8 +762,7 @@ def review_manifest(path, guide, converted):
         if (review.get("instructions") != component.get("Instructions", [])
                 or review.get("options") != component.get("Options", [])):
             raise Blocked("review_manifest_instructions_mismatch")
-        phase = "widescreen" if component.get("IsWidescreen", False) else "base"
-        if (review.get("phase") != phase or review.get("unresolved") != []
+        if (review.get("phase") != component_phase(component) or review.get("unresolved") != []
                 or not isinstance(review.get("assessment"), str)
                 or not review["assessment"].strip()):
             raise Blocked("review_manifest_phase_or_assessment_unresolved")
@@ -817,12 +852,7 @@ def execute(args, report):
             raise Blocked("typescript_source_entrypoint_missing")
         run(["pnpm", "build"], source, private, "build", report, env)
         command = ["node", str(source / "packages/cli/dist/main.js")]
-        if guide.parent.name not in ("k1", "k2"):
-            raise Blocked("guide_target_game_unknown")
-        target_game = {"k1": "kotor1", "k2": "kotor2"}[guide.parent.name]
-        run(command + ["import-md", str(guide), "--output", str(converted),
-                       "--game", target_game,
-                       "--source-url", "content/" + guide.parent.name + "/full.md"],
+        run(typescript_import_command(command, guide, converted),
             source, private, "convert", report, env)
         report["selected_component_count"] = select_base_components(converted)
     if digest(guide) != report["guide_sha256"]:
@@ -831,11 +861,9 @@ def execute(args, report):
     report["stage"] = "coverage"
     skipped = []
     if args.restore_report is not None:
-        if args.implementation != "rust":
-            raise Blocked("policy_skips_supported_for_rust_only")
         skipped = load_policy_skips(args.restore_report.resolve(strict=True), guide)
-    if args.implementation == "rust":
-        skipped = merge_lane_skips(skipped, load_lane_skips(guide.parent.name))
+    skipped = merge_lane_skips(skipped, load_lane_skips(
+        guide.parent.name, implementation=args.implementation))
     report["component_count"] = coverage(
         guide, converted, report, args.implementation, skipped)
     deselect = []
@@ -863,8 +891,18 @@ def execute(args, report):
     if args.implementation == "typescript":
         report["stage"] = "review"
         choices = review_manifest(args.review_manifest, guide, converted)
+        selected_input = converted
+        if policy_guids:
+            selected_input = private / "converted-policy.toml"
+            report["selected_after_policy_count"] = select_base_components(
+                converted, policy_guids, selected_input)
+        document = tomllib.loads(converted.read_text(encoding="utf-8"))
+        installable = [guid(component["Guid"])
+                       for component in document.get("thisMod", document.get("Components", []))
+                       if guid(component["Guid"]) not in policy_guids]
+        report["installable_component_count"] = len(installable)
         directories = [str(converted), "--kotor", str(game),
-                       "--mods", str(archives), "--all"]
+                       "--mods", str(archives), "--select", ",".join(installable)]
         run(command + ["validate"] + directories,
             source, private, "validate", report, env)
         if args.mode == "gui":
@@ -874,7 +912,7 @@ def execute(args, report):
             driver_report = private / "gui-report.json"
             gui_work = private / "gui-work"
             run([sys.executable, str(Path(__file__).resolve().with_name("gui_typescript.py")),
-                 "--source", str(source), "--input", str(converted),
+                 "--source", str(source), "--input", str(selected_input),
                  "--game-dir", str(game), "--archives", str(archives),
                  "--work-dir", str(gui_work), "--report", str(driver_report),
                  "--timeout", "7000"],
@@ -890,7 +928,7 @@ def execute(args, report):
                     or result.get("status") != "installed"
                     or result.get("reason") != "real_ui_install_and_checkpoint_hashes_verified"
                     or result.get("ui_completed") is not True
-                    or result.get("input_sha256") != report["converted_sha256"]
+                    or result.get("input_sha256") != digest(selected_input)
                     or type(result.get("verified_game_files")) is not int
                     or result["verified_game_files"] <= 0):
                 raise Blocked("gui_completion_not_verified")
@@ -1005,8 +1043,9 @@ def main(argv=None):
                         help="cache.py restore --archive-map JSON passed to the Rust convert (ignored by TypeScript)")
     parser.add_argument("--restore-report", type=Path,
                         help="cache.py restore --report JSON; its reviewed skipped_steps are exempted from "
-                             "coverage, recorded in the report and deselected (Rust only; TypeScript is refused). "
-                             "Rust lanes also apply the reviewed lane_skips of archive_selections.json")
+                             "coverage, recorded in the report and left out of the install (Rust --deselect, "
+                             "TypeScript --select of the rest). Both implementations also apply the reviewed "
+                             "lane_skips of archive_selections.json (TypeScript: the unpinned entries only)")
     for name in ("source", "guide", "game-dir", "archives", "work-dir", "report"):
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args(argv)

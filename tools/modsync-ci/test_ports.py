@@ -568,6 +568,20 @@ class SelectionTests(unittest.TestCase):
                 item.pop("IsSelected")
         self.assertEqual(original, result)
 
+    def test_deselect_names_are_unselected_in_the_destination_only(self):
+        text = '[[thisMod]]\nGuid = "{AAAAAAAA-0000-0000-0000-000000000001}"\nName = "a"\nIsSelected = false\n\n' \
+               '[[thisMod]]\nGuid = "{AAAAAAAA-0000-0000-0000-000000000002}"\nName = "b"\nIsSelected = false\n'
+        path = self.write(text)
+        destination = path.with_name(path.stem + "-policy.toml")
+        self.addCleanup(destination.unlink, missing_ok=True)
+        count = ports.select_base_components(
+            path, {"aaaaaaaa-0000-0000-0000-000000000002"}, destination)
+        self.assertEqual(count, 1)
+        self.assertEqual(path.read_text(encoding="utf-8"), text)
+        self.assertEqual([c["IsSelected"] for c in tomllib.loads(destination.read_text())["thisMod"]],
+                         [True, False])
+        self.assertEqual(ports.select_base_components(path), 2)
+
     def test_missing_selection_key_is_blocked(self):
         path = self.write('[Config]\nA = 1\n\n[[thisMod]]\nGuid = "x"\nName = "n"\n')
         with self.assertRaisesRegex(ports.Blocked, "selection_rewrite_incomplete"):
@@ -872,10 +886,6 @@ class ExecuteCommandTests(unittest.TestCase):
             with self.subTest(override=override):
                 _, _, error = self.run_gui_lane(override)
                 self.assertEqual(error, "gui_completion_not_verified")
-
-    def test_typescript_refuses_policy_skips(self):
-        _, _, error = self.run_policy_lane("cli", implementation="typescript")
-        self.assertEqual(error, "policy_skips_supported_for_rust_only")
 
     def test_rust_lane_without_restore_report_is_unchanged(self):
         _, args = self.prepare("k1")
@@ -1593,11 +1603,22 @@ class LaneSkipLaneTests(unittest.TestCase):
                              [FOUR_GB_GUID])
         self.assertIn("--exclude-widescreen", staged["gui"])
 
-    def test_typescript_lanes_are_not_given_the_lane_skip(self):
-        commands, report, error = self.run_lane(implementation="typescript")
-        self.assertEqual(error, "guide_steps_without_instructions")
-        self.assertEqual(report["skipped_by_reviewed_policy"], [])
-        self.assertTrue(all("--deselect" not in command for _, command in commands))
+    def test_typescript_lanes_take_the_unpinned_lane_skip_and_ignore_rust_guid_pins(self):
+        pinned = lane_entry(heading="Mod Two", guid="50000000-0000-0000-0000-000000000003",
+                            kind="unreviewed_draft")
+        root, _ = self.prepare("k1")
+        path = lane_skips_file(root, {"k1": [lane_entry(), pinned]})
+        self.assertEqual([skip["heading"] for skip in ports.load_lane_skips("k1", path)],
+                         ["4GB Patcher", "Mod Two"])
+        typescript = ports.load_lane_skips("k1", path, implementation="typescript")
+        self.assertEqual([skip["heading"] for skip in typescript], ["4GB Patcher"])
+        self.assertNotIn("guid", typescript[0])
+
+    def test_typescript_lane_validation_still_covers_pinned_entries(self):
+        root, _ = self.prepare("k1")
+        path = lane_skips_file(root, {"k1": [lane_entry(guid="not-a-guid", kind="unreviewed_draft")]})
+        with self.assertRaisesRegex(ports.Blocked, "lane_skips_invalid"):
+            ports.load_lane_skips("k1", path, implementation="typescript")
 
     def test_malformed_table_blocks_the_rust_lane_before_validate(self):
         commands, _, error = self.run_lane(table={"k1": [lane_entry(reason="")]})
@@ -1629,6 +1650,172 @@ PENDING_WIDE = "80000000-0000-0000-0000-000000000004"
 def pending_entry(heading, guid, kind="unreviewed_draft", section="Mod List"):
     return {"section": section, "heading": heading, "guid": guid, "kind": kind,
             "reason": "unreviewed draft: deselected pending human review, delegated by owner 2026-10-18"}
+
+
+TS_ONE = "40000000-0000-0000-0000-000000000001"
+TS_TWO = "40000000-0000-0000-0000-000000000002"
+TS_BRACED_DEPENDENCY = "{" + MOVIES_GUID.upper() + "}"
+
+
+class TypeScriptPolicySkipTests(unittest.TestCase):
+    prepare = ExecuteCommandTests.prepare
+
+    def run_lane(self, mode="cli", converted=None, keys=(HELPER, MOVIES), table=None, hashes=None,
+                 report_guide=None):
+        root, args = self.prepare("k1")
+        args.guide.write_text(GUIDE_WITH_HELPER, encoding="utf-8")
+        args.implementation = "typescript"
+        args.mode = mode
+        args.review_manifest = root / "review.json"
+        if keys is not None:
+            args.restore_report = restore_report(
+                root / "restore.json", (report_guide or args.guide).resolve(), *keys)
+        if table is not None:
+            path = lane_skips_file(root, table)
+            patch = mock.patch.object(ports, "LANE_SKIPS_PATH", path)
+            patch.start()
+            self.addCleanup(patch.stop)
+        commands = []
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append((stage, list(command)))
+            if stage == "convert":
+                (private / "converted.toml").write_text(converted or helper_document(), encoding="utf-8")
+            if stage == "gui":
+                raise ports.Blocked("gui_stopped_by_test")
+
+        def fake_review(path, guide, converted_path):
+            if hashes is not None:
+                hashes.append(ports.digest(converted_path))
+            return []
+
+        report = {"commands": []}
+        error = None
+        with mock.patch.object(ports, "run", fake_run), \
+                mock.patch.object(ports, "review_manifest", fake_review):
+            try:
+                ports.execute(args, report)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        return args, commands, report, error
+
+    def selected(self, command):
+        return [value for flag, value in zip(command, command[1:]) if flag == "--select"]
+
+    def test_cli_selects_exactly_the_installable_components_and_never_all_or_deselect(self):
+        _, commands, report, error = self.run_lane()
+        self.assertIsNone(error)
+        installs = [(stage, command) for stage, command in commands if stage.startswith("install_")]
+        self.assertEqual([stage for stage, _ in installs], ["install_base", "install_widescreen"])
+        for stage, command in [("validate", dict(commands)["validate"])] + installs:
+            self.assertEqual(self.selected(command), [TS_ONE + "," + TS_TWO], stage)
+            self.assertNotIn("--all", command, stage)
+            self.assertNotIn("--deselect", command, stage)
+        self.assertEqual(report["installable_component_count"], 2)
+        self.assertEqual([record["component_guid"] for record in report["skipped_by_reviewed_policy"]
+                          if record["component_guid"]], [MOVIES_GUID])
+
+    def test_without_skips_every_component_is_selected(self):
+        _, commands, report, error = self.run_lane(
+            keys=None, converted=helper_document(movies_instructions=True))
+        self.assertIsNone(error)
+        self.assertEqual(self.selected(dict(commands)["validate"]),
+                         [TS_ONE + "," + TS_TWO + "," + MOVIES_GUID])
+        self.assertEqual(report["skipped_by_reviewed_policy"], [])
+
+    def test_the_review_hash_does_not_depend_on_the_policy_skips(self):
+        hashes = []
+        args, _, report, error = self.run_lane(
+            hashes=hashes, converted=helper_document(movies_instructions=True))
+        self.assertIsNone(error)
+        converted = next(Path(args.work_dir).glob("ports-*/converted.toml"))
+        self.assertEqual(hashes, [report["converted_sha256"]])
+        self.assertEqual(report["converted_sha256"], ports.digest(converted))
+        without = []
+        self.run_lane(keys=None, hashes=without, converted=helper_document(movies_instructions=True))
+        self.assertEqual(hashes, without)
+
+    def test_policy_skips_are_unselected_in_the_gui_input_only(self):
+        args, commands, report, error = self.run_lane(mode="gui")
+        self.assertEqual(error, "gui_stopped_by_test")
+        private = next(Path(args.work_dir).glob("ports-*"))
+        staged = dict(commands)
+        self.assertEqual(Path(staged["gui"][staged["gui"].index("--input") + 1]),
+                         private / "converted-policy.toml")
+        loaded = tomllib.loads((private / "converted-policy.toml").read_text(encoding="utf-8"))
+        self.assertEqual({item["Name"]: item["IsSelected"] for item in loaded["thisMod"]},
+                         {"Mod One": True, "Mod Two": True, "Loose Movies": False})
+        original = tomllib.loads((private / "converted.toml").read_text(encoding="utf-8"))
+        self.assertIs(original["thisMod"][2]["IsSelected"], True)
+        self.assertEqual(report["converted_sha256"], ports.digest(private / "converted.toml"))
+
+    def test_the_unpinned_lane_skip_applies_to_typescript_and_pinned_ones_do_not(self):
+        converted = four_gb_document()
+        pinned = lane_entry(heading="Mod Two", guid="50000000-0000-0000-0000-000000000003",
+                            kind="unreviewed_draft")
+        root, args = self.prepare("k1")
+        args.guide.write_text(GUIDE_4GB, encoding="utf-8")
+        args.implementation = "typescript"
+        args.review_manifest = root / "review.json"
+        patch = mock.patch.object(ports, "LANE_SKIPS_PATH",
+                                  lane_skips_file(root, {"k1": [lane_entry(), pinned]}))
+        patch.start()
+        self.addCleanup(patch.stop)
+        commands = []
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append((stage, list(command)))
+            if stage == "convert":
+                (private / "converted.toml").write_text(converted, encoding="utf-8")
+
+        report = {"commands": []}
+        with mock.patch.object(ports, "run", fake_run), \
+                mock.patch.object(ports, "review_manifest", return_value=[]):
+            ports.execute(args, report)
+        self.assertEqual(self.selected(dict(commands)["validate"]),
+                         ["50000000-0000-0000-0000-000000000001,50000000-0000-0000-0000-000000000003"])
+        record, = report["skipped_by_reviewed_policy"]
+        self.assertEqual((record["heading"], record["source"]), ("4GB Patcher", "lane_skips"))
+
+    def test_a_dependent_written_in_braced_form_blocks_the_skip(self):
+        converted = helper_document().replace(
+            "IsSelected = false", 'IsSelected = false\nDependencies = ["' + TS_BRACED_DEPENDENCY + '"]', 1)
+        _, commands, _, error = self.run_lane(converted=converted)
+        self.assertEqual(error, "policy_skipped_component_has_dependents")
+        self.assertNotIn("validate", dict(commands))
+
+    def test_a_restore_report_for_another_guide_still_blocks(self):
+        _, _, _, error = self.run_lane(report_guide=Path(tempfile.gettempdir()) / "other" / "full.md")
+        self.assertEqual(error, "restore_report_guide_mismatch")
+
+
+class ReviewManifestRegenerationTests(unittest.TestCase):
+    def test_hash_mismatch_says_how_to_regenerate(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        (root / "k2").mkdir()
+        guide = root / "k2" / "full.md"
+        guide.write_text(GUIDE, encoding="utf-8")
+        converted = root / "converted.toml"
+        converted.write_text(document(component("Mod One", TS_ONE)), encoding="utf-8")
+        manifest = root / "review.json"
+        manifest.write_text(json.dumps({
+            "schema_version": 1, "reviewer": "x", "unresolved": [],
+            "guide_sha256": ports.digest(guide), "converted_sha256": "0" * 64,
+            "components": []}), encoding="utf-8")
+        with self.assertRaises(ports.Blocked) as caught:
+            ports.review_manifest(manifest, guide, converted)
+        message = str(caught.exception)
+        self.assertTrue(message.startswith("review_manifest_hash_mismatch: converted_sha256 "))
+        self.assertNotIn("guide_sha256 differ", message)
+        for expected in ("MODSYNC_TS_REF", "tools/modsync-ci/gen_ts_review.py", "--game k2",
+                         "ci/k2-typescript-review.json"):
+            self.assertIn(expected, message)
+
+    def test_component_phase_is_the_rule_review_manifest_checks(self):
+        self.assertEqual(ports.component_phase({}), "base")
+        self.assertEqual(ports.component_phase({"IsWidescreen": False}), "base")
+        self.assertEqual(ports.component_phase({"IsWidescreen": True}), "widescreen")
 
 
 class PendingReviewSkipLaneTests(unittest.TestCase):

@@ -1,0 +1,4598 @@
+{
+  "schema_version": 1,
+  "reviewer": "delegated-by-owner (orchestrator, 2026-10-18)",
+  "unresolved": [],
+  "guide_sha256": "f442bdf574031623ed577609730d887069b9bc8e38e8e2f38ecc43a7e7487d5f",
+  "converted_sha256": "9bc0d5f951a64655dec905cf8c1d521db762641d0ca585121be484b846e04ba4",
+  "components": [
+    {
+      "guid": "b6422393-ae5e-5224-ab84-d6a3e55501ef",
+      "instructions": [
+        {
+          "Guid": "{E3BBC779-F8F0-53D0-A7A9-9F43F1F335B6}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\3C-FD Patcher*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{09B997EE-ECBF-57EA-9C79-E9C3228C3FF0}",
+          "Action": "Execute",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\3C-FD Patcher*\\*.exe"
+          ]
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "09b997ee-ecbf-57ea-9c79-e9c3228c3ff0": "yes"
+      }
+    },
+    {
+      "guid": "efceef8f-75fc-58cf-8116-5eac04e0f93e",
+      "instructions": [
+        {
+          "Guid": "{6414CCE5-8D9B-5B8D-8B0D-84CEBC641283}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Water Restoration*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{0FDD7E2B-09BB-5BD7-8DA5-357A89F8CF03}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Water Restoration*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "2a9e26f4-d383-556e-97a1-aac46b39b435",
+      "instructions": [
+        {
+          "Guid": "{F56EE365-A51E-5341-9C00-92D6A5534B28}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Stutter Fix*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{A02F5501-7E9F-57EB-AA01-AB348BE77B08}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Stutter Fix*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "0979a4d8-c31d-5efc-88bc-d9f8a29a2ec5",
+      "instructions": [
+        {
+          "Guid": "{FEB9697A-CF81-5FE0-8D9A-8BB7C32859D8}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\4GB Patcher*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{5ACDA67D-77A3-5061-A53E-7E23A4B8A9FF}",
+          "Action": "Execute",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\4GB Patcher*\\*.exe"
+          ]
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "omitted by reviewed policy",
+      "unresolved": [],
+      "choices": {
+        "5acda67d-77a3-5061-a53e-7e23a4b8a9ff": "yes"
+      }
+    },
+    {
+      "guid": "8758e82b-6fc2-5cb1-b3df-5563fde0641f",
+      "instructions": [
+        {
+          "Guid": "{0D525958-207A-539C-9ABC-F7F90DBB2336}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TSLRCM*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{BE9E32AA-541F-5BA4-B8DC-C1C49DD069DB}",
+          "Action": "Execute",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TSLRCM*\\*.exe"
+          ]
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "be9e32aa-541f-5ba4-b8dc-c1c49dd069db": "yes"
+      }
+    },
+    {
+      "guid": "64bdb0e9-d76c-5805-99af-14913d307659",
+      "instructions": [
+        {
+          "Guid": "{6CFF75D3-B651-5ABD-90ED-B10A4DD78843}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TSLRCM Tweak Pack*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{51A5C210-07D6-5AF3-BA71-CF760A908BC5}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TSLRCM Tweak Pack*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "51a5c210-07d6-5af3-ba71-cf760a908bc5": "0"
+      }
+    },
+    {
+      "guid": "b7bb9b00-2fab-5143-bbd3-7edafc12101e",
+      "instructions": [
+        {
+          "Guid": "{85883203-C683-5C15-A45A-CA1BEDB0B745}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Silent Sion*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{B28B4E1C-D71C-5C25-BD03-4C35AF5A4FA7}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Silent Sion*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "c12a73e7-e673-5b6d-a222-cc9f160a1763",
+      "instructions": [
+        {
+          "Guid": "{65BFDDE7-6732-511F-9E2F-D5841267666C}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Thematic KOTOR 2 Companions*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{E1D33C52-FDA9-5095-8404-F65AF863A249}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Thematic KOTOR 2 Companions*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "e1d33c52-fda9-5095-8404-f65af863a249": "0"
+      }
+    },
+    {
+      "guid": "0f682d00-f8fe-5d6e-a085-5df99f3419dd",
+      "instructions": [
+        {
+          "Guid": "{00E8E2C9-9ABB-53CF-8BB6-622118913A4E}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Saving Throw Fixes*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{FEC77DDE-49D7-5F00-B3A7-CEDD6F31ED91}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Saving Throw Fixes*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "429ae558-7fed-5486-b94c-16f7c336c9d3",
+      "instructions": [
+        {
+          "Guid": "{3270D9EC-F8DA-534C-939F-B803AC0BB8DF}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Classic Class Attack*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{BB7EA7C7-A021-5F2C-97A6-DFED2EE6CD82}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Classic Class Attack*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "bb7ea7c7-a021-5f2c-97a6-dfed2ee6cd82": "0"
+      }
+    },
+    {
+      "guid": "6b67c098-cf1c-5ac8-a7f2-b545be6fd50e",
+      "instructions": [
+        {
+          "Guid": "{AEDB5C75-CD29-50F3-B88C-D7DE887E2AA7}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Robes with Shadows*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{1E21F7A2-80FA-578E-8663-20E94C58C1FD}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Robes with Shadows*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "cfb4e69c-7989-5836-b7a3-802bc556c20a",
+      "instructions": [
+        {
+          "Guid": "{00796FBE-2740-572D-B8CF-2D59A2E4FF16}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\K2CP*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{13841C87-F3DA-5E2B-B76D-0C2498A43EBC}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\K2CP*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "13841c87-f3da-5e2b-b76d-0c2498a43ebc": "0"
+      }
+    },
+    {
+      "guid": "c7a325b8-c316-5a75-a387-5b5869e42111",
+      "instructions": [
+        {
+          "Guid": "{E4312D11-8F84-5DA1-9CA8-94D8791204D8}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Remote Tells Influence Patch for TSLRCM.zip"
+          ]
+        },
+        {
+          "Guid": "{A346780C-47DF-59BB-9F87-852EAFB7276D}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Remote Tells Influence Patch for TSLRCM\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "fa51657c-818b-51ae-bedc-320b88f24626",
+      "instructions": [
+        {
+          "Guid": "{E0BBCAC0-C007-5E4F-A6E5-619299A266B1}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Better Czerka Salvager*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{9D6534E1-E0FB-5133-BB3B-43664023222F}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Better Czerka Salvager*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "9d6534e1-e0fb-5133-bb3b-43664023222f": "0"
+      }
+    },
+    {
+      "guid": "14888cc7-b17b-560e-9498-da144dc39eea",
+      "instructions": [
+        {
+          "Guid": "{05DE5820-9F0D-5C1F-BD2E-249CB66FB85F}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate HR Textures*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{00FF3B26-3AB3-533A-AE9D-F081815F910C}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate HR Textures*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "77cdad13-0b75-58f9-b921-1c8086815971",
+      "instructions": [
+        {
+          "Guid": "{C88AD877-3242-584A-9C8A-D50933EE733C}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Character Overhaul*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{BDECC6EC-E729-5B8E-861E-E12D7B2F4B6A}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Character Overhaul*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "9f8f6115-f5a1-5678-bd0a-0e6b39359988",
+      "instructions": [
+        {
+          "Guid": "{421406D5-7B14-54CD-B8BC-8725441E13C8}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Nar Shaddaa*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{55FB3CB4-A28C-56D1-9EAB-979893B60A2C}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Nar Shaddaa*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "7c3884fc-a06a-5e69-bb36-a12c056db661",
+      "instructions": [
+        {
+          "Guid": "{F2112648-99C6-5601-A6CD-9C50FE5E2897}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Dantooine*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{3DC62E6D-521A-5C73-AB95-DCF55BE2D41B}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Dantooine*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "c7495590-470e-5c20-af88-2cfb2858e551",
+      "instructions": [
+        {
+          "Guid": "{07673268-0CC8-51D1-81D7-0FB75093065C}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Dxun*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{DEB32713-0F74-5BB3-95CA-2DB04B9EF1F6}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Dxun*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "6e9683a8-d8b0-5c25-af9e-86385d9f43d1",
+      "instructions": [
+        {
+          "Guid": "{19C67950-BB99-5105-B900-FADC95454516}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Onderon*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{8924EDCF-0F02-5CF7-B980-567A9885A552}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Onderon*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "e01a446b-11fd-5b7b-a7d8-8dd106628674",
+      "instructions": [
+        {
+          "Guid": "{F7D1E82F-E26F-5024-BADD-F888C6CB47F8}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Korriban*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{D782C300-CE2B-5E33-B232-F0B66866BC19}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Korriban*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "e1cbf517-1a79-5f2a-9fa8-0ec3d79b2840",
+      "instructions": [
+        {
+          "Guid": "{64732F0E-4705-5E1E-8FD4-FBB1BA8D6954}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Malachor*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{B068B44F-1508-508D-B81A-C4F46677E42B}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Malachor*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "eab6db56-cc6e-58f6-8f5c-f443ef54e56a",
+      "instructions": [
+        {
+          "Guid": "{AD7DFA42-7C6F-542D-A54F-34D93327B22D}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Korriban Sith Art*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{8E1CB452-87D0-5B2A-B867-42F084F8299B}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Korriban Sith Art*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "73057bb0-999a-5e7c-b776-2cf10d6af5fe",
+      "instructions": [
+        {
+          "Guid": "{8A24801D-254A-5985-AA72-01AC23CCC5F7}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ritual and Water Textures*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{0482061B-F847-533F-97ED-65CEF185D2EE}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ritual and Water Textures*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "fdf7b324-9d67-5a75-92eb-02b76de10828",
+      "instructions": [
+        {
+          "Guid": "{9CE91344-4B28-5901-9F94-3D182D1A5625}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\PFHC06 Fix*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{E710F8E4-D282-5C62-8477-0AD33825AAA6}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\PFHC06 Fix*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "e873f00b-a051-57ff-9051-cb79967fd48d",
+      "instructions": [
+        {
+          "Guid": "{63134A53-E795-5C2D-A3DB-84025FC7417B}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Droid Special Weapons Fix*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{A3FB8A1A-A9FE-5A9C-ADEA-63EA7941A931}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Droid Special Weapons Fix*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "a3fb8a1a-a9fe-5a9c-adea-63ea7941a931": "0"
+      }
+    },
+    {
+      "guid": "fb695f97-aaac-5f04-9380-c93da393a6ca",
+      "instructions": [
+        {
+          "Guid": "{96C52325-CDAD-56D9-8468-950EF7B277A8}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Honest Merchant*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{5B6A6734-E630-5E95-B1E6-E9DD622B47C3}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Honest Merchant*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "5b6a6734-e630-5e95-b1e6-e9dd622b47c3": "0"
+      }
+    },
+    {
+      "guid": "172a906c-4803-57de-aa2b-4959f3f04bbf",
+      "instructions": [
+        {
+          "Guid": "{A3F9865A-78AF-5402-B9BC-983C13258281}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\JC's Minor Fixes*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{A8374392-3855-5405-BEC3-2E11F55CE3C0}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\JC's Minor Fixes*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "986db4ed-b287-501f-b82e-1992e1aeb102",
+      "instructions": [
+        {
+          "Guid": "{A45ECD8F-E491-50F7-91DB-50045BB53764}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Maintenance Reskin*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{F6106003-C008-55F1-AED1-2B3D3E6E64DA}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Maintenance Reskin*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "c66d571d-930c-5e2c-aebf-cf62af3a8976",
+      "instructions": [
+        {
+          "Guid": "{67E725D5-F26D-59A2-9114-FE48E2A8AE26}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Sign Placeable*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{5D68973A-9450-5DCF-AFF8-012C7CE8E857}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Sign Placeable*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "6e2e80d5-e347-59df-9e89-32d06157130d",
+      "instructions": [
+        {
+          "Guid": "{ED970B80-07DC-526A-A337-3777712E135D}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Kiosk*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{519AB994-BB49-5139-8E8D-D1B4E3569FAA}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Kiosk*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "ab8aa659-28ba-5ab1-b920-92d45e298e55",
+      "instructions": [
+        {
+          "Guid": "{BD807780-1173-5BD3-82E0-EF91B3133567}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Desk*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{9305C6AC-BBBA-5E9D-87DA-9D26DF16F923}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Desk*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "a3998f48-7b97-5c72-b405-f04f46d0270e",
+      "instructions": [
+        {
+          "Guid": "{5B2739B2-A01F-54EC-8FA7-72EBF21D26C1}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Hires Beam Effects*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{DA1718E8-7208-5B51-B6F3-B4B14BC9B90F}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Hires Beam Effects*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "bc10f919-eed2-5e9f-a169-4b084373dbfe",
+      "instructions": [
+        {
+          "Guid": "{CB1316DB-B62A-51E1-8C9A-27C64A9DB740}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Fire and Ice HD*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{80D59E88-D31D-5044-A5B7-94385B8495D7}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Fire and Ice HD*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "4d979153-fb19-5664-acea-dddc546902fd",
+      "instructions": [
+        {
+          "Guid": "{D7E0642E-DB8A-5E97-A630-932B2BACA0F4}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Animated Energy Shields*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{47244794-0A3E-59A7-BC4F-B94F4B9A5B1A}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Animated Energy Shields*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "85f7c208-ecb7-5b39-baac-1f423f346f0e",
+      "instructions": [
+        {
+          "Guid": "{374EC5AD-6DAB-5020-A45F-F2B2E47359F0}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Blaster Visual Effects*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{57D066C9-E385-5492-A474-424F2E9F3CEF}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Blaster Visual Effects*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "1d2811a6-fa15-5c8a-b115-ed5642e082b6",
+      "instructions": [
+        {
+          "Guid": "{191A32D3-CA3A-5C31-A638-E91833FB17BE}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Head Model Fixes*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{AD4247CF-4631-5E95-8387-4D7FEDE21BD0}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Head Model Fixes*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "1c388560-65bb-54d6-9687-b52ac8b46410",
+      "instructions": [
+        {
+          "Guid": "{68C32B16-9E27-5A5F-A018-48C77028B2C1}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\New Holocron Textures*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{E7E88C23-70FC-5721-838F-821309ED27FC}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\New Holocron Textures*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "ec0a86e3-3a95-5880-bb73-917ccbe71ff2",
+      "instructions": [
+        {
+          "Guid": "{89BCB108-9C22-563E-AB1B-2FB7256203B7}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Thigh-High Boots for Twi'lek*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{784D1B2A-91DD-5F97-838E-E54619AAD8EB}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Thigh-High Boots for Twi'lek*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "36ea92bd-b42b-5817-bc05-0ea7fdb50650",
+      "instructions": [
+        {
+          "Guid": "{621717B8-9CEE-5AC2-8C70-02EA1634C069}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Better Twi'lek Heads*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{9F710E28-5649-57FA-B82A-B65A78A52FCA}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Better Twi'lek Heads*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "9f710e28-5649-57fa-b82a-b65a78a52fca": "0"
+      }
+    },
+    {
+      "guid": "8bdd0780-07b8-5cb7-9950-345ebca52b7c",
+      "instructions": [
+        {
+          "Guid": "{C3375258-741A-5E6E-B975-D58B7AD6E68C}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Twi'lek Male Diversity*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{4A62D274-7CFE-55B3-81EC-1252B5BD6488}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Twi'lek Male Diversity*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "4a62d274-7cfe-55b3-81ec-1252b5bd6488": "0"
+      }
+    },
+    {
+      "guid": "b94e7626-3364-5d39-ae0b-579b369f910f",
+      "instructions": [
+        {
+          "Guid": "{BF469180-ACE0-5339-B569-8F481A1E7689}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Dahnis Unique Look*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{1AE6A832-7C95-5ABE-9D90-176957B0E169}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Dahnis Unique Look*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "1ae6a832-7c95-5abe-9d90-176957b0e169": "0"
+      }
+    },
+    {
+      "guid": "8c7d2975-348a-572e-b4ec-30f43897dc6a",
+      "instructions": [
+        {
+          "Guid": "{A3B36D02-FDAE-5E55-A00E-49442E7C60B7}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Darth Malak's Armor*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{4FA5AE62-889C-520A-A049-A9D551DA54AD}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Darth Malak's Armor*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "c9ba7c01-6125-515d-a5ec-e284a43cb9eb",
+      "instructions": [
+        {
+          "Guid": "{786D8F8D-0094-5ED5-AACA-B47DBA7C09E3}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Supermodel Fix*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{ECD9CA96-5D51-5395-A690-6A0C2CCB4E9D}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Supermodel Fix*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "def892ea-6e67-5fc7-8ee0-bb6fc8f13c8b",
+      "instructions": [
+        {
+          "Guid": "{239FF55F-380F-59D8-AE89-E1D2A7144C00}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Worn-Out Mando Armor*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{7FE3E12E-B234-5361-889A-1E122098FEE7}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Worn-Out Mando Armor*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "a5219126-69ca-5cac-8219-cbf929843a7d",
+      "instructions": [
+        {
+          "Guid": "{075653A1-125B-5CB3-BE8E-2CF5E393A0E3}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD NPC Portraits*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{3C568624-DC35-5F65-B880-47FE19D72089}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD NPC Portraits*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "f2877144-3c80-54cb-9410-c6ed3bcd00a1",
+      "instructions": [
+        {
+          "Guid": "{C9DE3256-7970-5303-BA82-DDE051BD32D0}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD PC Portraits*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{C06828AE-C716-57B5-84DF-1E1D746DEECA}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD PC Portraits*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "cddc71ea-89d6-55ce-8580-858bd6e297de",
+      "instructions": [
+        {
+          "Guid": "{61A53908-FDBC-58ED-BD1B-9F208E6D6985}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Stylized Portraits TSL*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{A9E6960C-1142-54BF-9315-DE6CE83C07E8}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Stylized Portraits TSL*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "68c66418-032d-524b-bdd9-af3842b727a6",
+      "instructions": [
+        {
+          "Guid": "{35E726A5-D672-55FD-A23B-C1993B2515CC}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\PFHC03 Restoration*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{95E82003-A040-53D5-B2BF-FA8C4D38362E}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\PFHC03 Restoration*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "95e82003-a040-53d5-b2bf-fa8c4d38362e": "0"
+      }
+    },
+    {
+      "guid": "a54d346a-01bc-54ed-9093-2a80b98c6817",
+      "instructions": [
+        {
+          "Guid": "{C72A0219-6426-5A05-95E2-937F30708C5A}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\4K Atton*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{D97A2E39-E773-5AB0-A9DA-E15CC7A0C638}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\4K Atton*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "614409eb-bedc-5343-ac1c-fb721eabab0a",
+      "instructions": [
+        {
+          "Guid": "{DD9244DB-9315-5014-89CE-59EDCBC14B34}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Atton with Scruff*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{812167A9-6FA9-5FAA-84A3-53C5ED3E9631}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Atton with Scruff*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "d41d8b62-50e6-5f0f-a78b-b1fdaaab0d56",
+      "instructions": [
+        {
+          "Guid": "{90043754-F513-5507-AD8E-4D7B868BB495}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Rounder G0-T0*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{7923FCB8-1DDC-536F-8AE4-6B0D8950177A}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Rounder G0-T0*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "db9bb158-ba3b-500c-8ef8-463d7eb18e8a",
+      "instructions": [
+        {
+          "Guid": "{8625AD27-F1AA-51F1-ABB8-03302E053144}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Dark Harbinger*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{5F050E7D-F39A-5BD8-9A9E-0F8883479502}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Dark Harbinger*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "798278f3-815f-50ea-a29a-59aa5ba6a397",
+      "instructions": [
+        {
+          "Guid": "{F6D1B198-513B-5641-A856-BBAB937CAB6B}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Vrook*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{B4A1D84F-B73C-52F3-86FA-6D1922AC4A45}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Vrook*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "4c3f0e84-1d1d-5729-9562-b7146a802311",
+      "instructions": [
+        {
+          "Guid": "{90A7385F-C384-5166-AD0A-6E306675572D}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Darth Nihilus*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{749FBDB6-9022-5BA2-8A30-67CC3C84965A}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Darth Nihilus*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "e99a9c69-f073-587f-89f1-14675059dfaa",
+      "instructions": [
+        {
+          "Guid": "{6E785D67-F862-5720-815A-E050E24B3D38}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Darth Sion Remake*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{CF40CAED-A8AD-5B8D-94FC-AF8C8493473C}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Darth Sion Remake*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "7f86a7f7-c961-5f60-b814-4d44437c7462",
+      "instructions": [
+        {
+          "Guid": "{BFDFE7EE-829A-518E-8D11-FCF08970E8B2}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Detran's Revan*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{88E76844-F2F0-5192-AB28-A4B43460DC5C}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Detran's Revan*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "13064dc0-b532-5301-875b-11be8c731220",
+      "instructions": [
+        {
+          "Guid": "{7608B239-D6AF-57A9-9CAC-5E789C9C4C72}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Lore-Friendly Mandalore*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{A76F4A01-9EF6-58B0-AC3C-EF874AB18857}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Lore-Friendly Mandalore*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "a24c3450-983b-5fdd-abb3-88615f157a71",
+      "instructions": [
+        {
+          "Guid": "{BB365DCA-CFBF-5F6D-BBD0-439BBD4D08AD}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Visas Reduced Model Clipping*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{AC3633E3-95BA-5B08-A4CF-EB6DAD609FAE}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Visas Reduced Model Clipping*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "16daf03b-305d-59f0-96c3-64f212832ef5",
+      "instructions": [
+        {
+          "Guid": "{F19C28FB-0E32-5BB3-9C3B-8F54FD6D6FC8}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Visas Marr*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{834C3222-A58A-57EF-8CBC-7A26592AD094}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Visas Marr*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "8c4077fb-d656-55c8-8a3a-054886124f49",
+      "instructions": [
+        {
+          "Guid": "{66244BBD-29E5-5D26-BBA3-446FA44AECBE}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Mira Unpoofed*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{AF1B342E-C88A-5704-83B9-B049FF054647}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Mira Unpoofed*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "dbc9c3f0-f672-5db5-b59d-7e23612eb70f",
+      "instructions": [
+        {
+          "Guid": "{FD40AD60-4837-5784-A435-48A5AE1F3860}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\T3M4 HD 2K*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{31F99110-FFD0-5196-826E-F1BFCD118D2D}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\T3M4 HD 2K*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "6fc76d71-ba75-5770-a9ef-3a99417c4c64",
+      "instructions": [
+        {
+          "Guid": "{5F86075D-33EC-5AAB-B853-C81CF2C3D676}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Astromechs*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{3A01D7FC-1720-53B1-B66A-2CAD5E00C80D}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Astromechs*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "1de55ad5-3597-57a9-bee2-cfa18b726adc",
+      "instructions": [
+        {
+          "Guid": "{3A6DE164-AB3E-5451-B185-BA6A4202CB6C}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\War Droid HD*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{1EA1AAC1-3351-575A-BA8A-C26F64AF6D62}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\War Droid HD*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "738c9d7a-4b94-58e0-b0e2-a20eff38ff88",
+      "instructions": [
+        {
+          "Guid": "{B791B333-E7F6-55E6-8EE9-015984FA145A}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Duros*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{3B1F3A84-80AE-55D3-8247-77C9A05045EE}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Duros*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "8a5c33c8-e6d5-5d86-9ba3-f54a28ca5d71",
+      "instructions": [
+        {
+          "Guid": "{F938C76F-920A-5322-AE9F-EF444D6D679D}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Ithorians*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{DDB86389-A2CD-5BB8-A796-4AB765A5BDDE}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Ithorians*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "5175f6fa-3ca5-585e-b25f-6562053bc545",
+      "instructions": [
+        {
+          "Guid": "{A7B4C413-A7D1-5FC3-BA17-345B81E3248B}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\N_oldAMH01 HD*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{BD9FB8BD-72A0-5F9D-AD70-6AA2E3D96FA4}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\N_oldAMH01 HD*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "48be03bb-a8b8-53a8-a5d3-1a9c310161ca",
+      "instructions": [
+        {
+          "Guid": "{85BE2E1F-28FF-5134-887E-A8CFD51D8B90}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Canonical Jedi Exile*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{C85AE8CE-E146-56DD-AB01-B36D0BAA8377}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Canonical Jedi Exile*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "84ecde5c-f903-5143-bf12-37c8ef5bcc52",
+      "instructions": [
+        {
+          "Guid": "{4589BF77-EF6F-5B4C-90AC-4F557852E7E9}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Lightsaber Visual Effects*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{5491ACEF-CF9F-548B-B097-140864DE27D0}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Lightsaber Visual Effects*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "e87f1950-7a98-5663-9ad8-73ce7de84ebf",
+      "instructions": [
+        {
+          "Guid": "{7C971DC7-7364-5F76-8991-8E22BAA6CA8F}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Lightsaber Hilt Variety*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{6712202E-F82D-5105-8E92-081D46A7843A}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Lightsaber Hilt Variety*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "83326858-aa28-5a86-9b49-24c1a182a369",
+      "instructions": [
+        {
+          "Guid": "{115276C8-E434-5DD6-8783-75D898167185}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Random Panels*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{78AFEB71-E13F-5D3C-B650-69F89B2633A7}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Random Panels*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "f87bd4a2-577b-5ed7-ba39-584d4e69debd",
+      "instructions": [
+        {
+          "Guid": "{0F9211AE-3732-5F3B-BABD-AFAED08F26B2}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Neglected Computer Panel*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{C12B3988-A425-5542-9564-87318A80C5E6}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Neglected Computer Panel*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "faabb22f-e85a-52f4-afe4-3c00dc273147",
+      "instructions": [
+        {
+          "Guid": "{CB4DB57E-0F8F-5886-9E51-8F380FD1AF74}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Improved Peragus Asteroids*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{280997A5-426A-555E-BC54-B8C59D273104}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Improved Peragus Asteroids*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "7e4e92cd-fc14-5e52-8c97-23fc5a442d87",
+      "instructions": [
+        {
+          "Guid": "{DBA37C73-B172-598F-9F35-E9B867C1DB12}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Swoop Monitor Replacement*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{E8EF5BC9-5DC0-5961-8765-B1962FDE4CE5}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Swoop Monitor Replacement*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "ecbeab03-54e5-5a9b-9afa-c774170ab68c",
+      "instructions": [
+        {
+          "Guid": "{91813F7D-4830-5D15-8FD9-4274201BFD29}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Terminal Texture*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{D98D37D8-F0A8-57D2-89B2-7A632A3ACBE9}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Terminal Texture*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "4046bc49-e646-5f90-8f0e-cca265882620",
+      "instructions": [
+        {
+          "Guid": "{2A22E01B-A5BC-5DD1-AD15-28B9C901E60E}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Animated Computer Panel*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{39C193DC-27B3-590F-A529-22B39CB76A0A}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Animated Computer Panel*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "39c193dc-27b3-590f-a529-22b39cb76a0a": "0"
+      }
+    },
+    {
+      "guid": "9c04941a-de0d-50a1-b1db-18d460f9af1c",
+      "instructions": [
+        {
+          "Guid": "{9F868BC6-C0CA-5DFB-9CF2-DACE446769AA}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Workbench*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{325FDEEC-CBC2-516A-8EA9-C500A3BB7A33}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Workbench*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "e4cf2464-7e1d-52a5-82bc-79a8ce9c54e9",
+      "instructions": [
+        {
+          "Guid": "{592602CD-93B6-55C7-A04A-D3BF14CA1CC6}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Backdrop Improvements*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{587314F1-8D16-5BBE-ADA2-5E6F098E503E}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Backdrop Improvements*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "c6e04d12-316b-5232-8a7c-62e0126b4b4f",
+      "instructions": [
+        {
+          "Guid": "{A1348822-46F4-5F58-8E75-C7D981B93F0A}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Citadel Station Backdrop*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{C1EAAE9B-6BE4-5ADB-BBE0-FB3671CE1BD6}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Citadel Station Backdrop*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "3b9c63fd-e493-59c7-82fd-2e902c410731",
+      "instructions": [
+        {
+          "Guid": "{B17A4E63-93BA-5938-A996-669A2317801C}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HQ Skyboxes II*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{5BED9E5A-9AD7-51EA-AF44-BAEAB984F380}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HQ Skyboxes II*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "5bed9e5a-9ad7-51ea-af44-baeab984f380": "0"
+      }
+    },
+    {
+      "guid": "71b6a015-ed9d-532c-b273-32cb1b6972dd",
+      "instructions": [
+        {
+          "Guid": "{3F30E0F5-FF8F-5BC3-AF37-7CC9800B34B1}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ebon Hawk Cockpit Upgrade I*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{286245FC-0B23-57FD-A695-58ECDFB34A0A}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ebon Hawk Cockpit Upgrade I*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "8c9f604f-656d-576b-aa32-a742f795f69c",
+      "instructions": [
+        {
+          "Guid": "{9AD43BD6-9354-5646-B572-4456E50CEDAE}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ebon Hawk Cockpit Upgrade II*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{6E42B769-F377-542F-83CD-276AC989D17F}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ebon Hawk Cockpit Upgrade II*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "0101876e-b534-5075-a5bc-77b6c2fa4909",
+      "instructions": [
+        {
+          "Guid": "{BA633B99-6C24-5AF0-B0E0-9ACF6DF717B8}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Spark Effect*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{F27617E4-F300-5333-885D-A03432F99E75}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Spark Effect*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "8d9917fe-2648-5ca2-9d0d-40af0bfd09a4",
+      "instructions": [
+        {
+          "Guid": "{5D526971-9BF8-515C-8C23-C57086536D4C}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Transparent Cockpit Windows*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{E0C5BAF6-4E69-5C2F-858A-1EC72DED939B}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Transparent Cockpit Windows*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "e0c5baf6-4e69-5c2f-858a-1ec72ded939b": "0"
+      }
+    },
+    {
+      "guid": "d78d10a3-cdcf-5376-bcc7-d6c4169c555d",
+      "instructions": [
+        {
+          "Guid": "{F77F62C8-E67E-5D1E-AF61-EC104B59A3A0}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Cockpit Skyboxes*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{5F6C6357-6E09-518B-99D8-306177AC8A06}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HD Cockpit Skyboxes*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "4d4e86d0-35d3-53b1-b2d6-7d0f474f1191",
+      "instructions": [
+        {
+          "Guid": "{38EBBCFD-918A-5376-8417-788ACC41FD98}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\FTL Loop*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{7EC7DB06-99AD-5A2A-917B-C7FAA6E5F26C}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\FTL Loop*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "7e30d317-f4ed-591a-b908-5042492253be",
+      "instructions": [
+        {
+          "Guid": "{98C15D7E-523E-5B99-80C5-1BE498F29DE7}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Aleema Keto's Robe Fix*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{5345E051-49AC-5EB5-A0FE-6374BA76B84A}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Aleema Keto's Robe Fix*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "3c1c5637-2dbf-5bca-bc96-9f7b682ab21e",
+      "instructions": [
+        {
+          "Guid": "{BA552F10-3BD1-521F-BCB7-53C49E136A9A}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Short-Term Memory Fix*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{5D9C0754-96E1-5FDF-AFA8-AD0DC894D519}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Short-Term Memory Fix*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "5d9c0754-96e1-5fdf-afa8-ad0dc894d519": "0"
+      }
+    },
+    {
+      "guid": "3aa3f1fb-9b53-57e3-80b0-a36beca00d2a",
+      "instructions": [
+        {
+          "Guid": "{A5993B0B-E665-5DB2-87BA-F019A3912A92}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Onderon News Makes Sense*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{BFA4662A-D366-5897-867F-EE62D3DD3B98}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Onderon News Makes Sense*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "bfa4662a-d366-5897-867f-ee62d3dd3b98": "0"
+      }
+    },
+    {
+      "guid": "6b189d4a-3012-5d66-99b5-7c25b45cf574",
+      "instructions": [
+        {
+          "Guid": "{9DD91706-728B-571C-8CD2-78935DA35146}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Hawk Downloadable Map*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{7000669B-7DB2-5068-A470-425A7477164F}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Hawk Downloadable Map*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "7000669b-7db2-5068-a470-425a7477164f": "0"
+      }
+    },
+    {
+      "guid": "22aa8c89-dff5-5104-94d9-f220601783a0",
+      "instructions": [
+        {
+          "Guid": "{DFC299D7-A843-5CF0-8D8A-B3E4D2661399}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Kinrath Egg Crystal Drop*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{8C723999-2923-5EB9-8CEF-1178EEF03449}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Kinrath Egg Crystal Drop*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "a6fc3d45-0f1a-5942-b15e-2ea89829ccd1",
+      "instructions": [
+        {
+          "Guid": "{3EC950E6-3EA5-5B30-AF69-FFE17A28C5B0}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Thorium Charge Mod*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{CEE78BA6-C0FA-511F-A5BE-47C16485B483}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Thorium Charge Mod*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "e114daec-1f82-5c20-b4e6-a2ac33fa7245",
+      "instructions": [
+        {
+          "Guid": "{36D9F5CC-FA39-5B84-9EB3-2B9008D3B79F}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Kill the Ithorian*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{F09E1AEF-8C33-555D-9A4C-3E53A21C3D57}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Kill the Ithorian*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "0accefc0-4832-5459-944d-738796ed215f",
+      "instructions": [
+        {
+          "Guid": "{DF78073D-26AB-589E-B9BB-81A5176FC5EC}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Red Floating Lightsabers*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{6A0A8E5E-8109-5157-9020-6482C62EFCA7}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Red Floating Lightsabers*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "b32a6f8f-58d7-5bca-914b-227917670510",
+      "instructions": [
+        {
+          "Guid": "{8269C34E-5DEB-57FB-9C5F-E12E918BD3DD}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Mira or Hanharr*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{C5624D23-A29B-56C0-93EC-5B8937211A9C}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Mira or Hanharr*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "af603c40-32e6-5e05-abdb-629455b3556e",
+      "instructions": [
+        {
+          "Guid": "{EC8CCBDF-4AEF-524D-A63E-510563407BB2}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Kreia's Fall Cutscene*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{01444B19-B385-5291-96AC-1A0247987307}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Kreia's Fall Cutscene*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "01444b19-b385-5291-96ac-1a0247987307": "0"
+      }
+    },
+    {
+      "guid": "1dbab514-da89-531e-b0ea-c45a975baf1f",
+      "instructions": [
+        {
+          "Guid": "{11DEFA07-7CE8-5EC0-B833-D201CB5537FF}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\PartySwap*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{DA714485-2ED4-58D7-89C4-CB103E89691B}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\PartySwap*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "da714485-2ed4-58d7-89c4-cb103e89691b": "0"
+      }
+    },
+    {
+      "guid": "63f1fc3c-d980-5759-8ac7-089f586856c2",
+      "instructions": [
+        {
+          "Guid": "{E5E60718-F3A7-5C2F-AF17-F4282F5C82E0}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Extended Enclave*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{2D20AF77-64B1-5C2A-ACD2-B97DAF447DE7}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Extended Enclave*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "2d20af77-64b1-5c2a-acd2-b97daf447de7": "0"
+      }
+    },
+    {
+      "guid": "52380173-6fd0-58f7-a376-e4f19e9cd57a",
+      "instructions": [
+        {
+          "Guid": "{B36BA0BE-B7CA-5391-ABC5-6C706FFCB3D5}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\PartySwap-EE Compatch*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{F04826FC-5351-5D0F-81D6-0B75B2B23C03}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\PartySwap-EE Compatch*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "f04826fc-5351-5d0f-81d6-0b75b2b23c03": "0"
+      }
+    },
+    {
+      "guid": "3ffb0be7-ae0b-5102-9d95-0516b28048ad",
+      "instructions": [
+        {
+          "Guid": "{EF333717-22F3-5C6E-AA50-CD4A973FAE3B}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Extended Korriban Arrival*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{8135801E-2512-52AB-BD89-129984D23639}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Extended Korriban Arrival*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "8135801e-2512-52ab-bd89-129984d23639": "0"
+      }
+    },
+    {
+      "guid": "cc623ea3-f058-51b1-9221-45fc3d3a09ea",
+      "instructions": [
+        {
+          "Guid": "{6DC20575-DB9C-5FA1-AE5E-B4AD07C48BED}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Prologue Item Recovery*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{12E34895-2059-5669-8A71-2AAF16D7FBD1}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Prologue Item Recovery*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "12e34895-2059-5669-8a71-2aaf16d7fbd1": "0"
+      }
+    },
+    {
+      "guid": "d476eac4-12f2-5513-a4e5-7315e16b226f",
+      "instructions": [
+        {
+          "Guid": "{E7D88D99-2494-56FB-8A2C-FFB2DD935B8E}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Balance Tweak Pack*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{3547D67E-2FFE-5436-923C-F0E2F45665A6}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Balance Tweak Pack*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "3547d67e-2ffe-5436-923c-f0e2f45665a6": "0"
+      }
+    },
+    {
+      "guid": "0740f19d-bdcf-591a-97d4-0f6f442b6417",
+      "instructions": [
+        {
+          "Guid": "{EC0BD78F-9D0D-5B99-A7D0-0786A9C1E599}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Mines Overhaul*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{2B8545EB-5D75-5E1D-A6DB-6A531C659A84}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Mines Overhaul*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "2b8545eb-5d75-5e1d-a6db-6a531c659a84": "0"
+      }
+    },
+    {
+      "guid": "fa922c2f-3d65-5973-9ea8-1d42e4422261",
+      "instructions": [
+        {
+          "Guid": "{D73533B7-B01D-52B1-A6BE-4729689C113D}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\No Health Regeneration*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{53ACC5C4-EEE9-564A-8B9B-82F2592D6B4A}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\No Health Regeneration*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "53acc5c4-eee9-564a-8b9b-82f2592d6b4a": "0"
+      }
+    },
+    {
+      "guid": "de463212-bdc3-55b5-801b-20c07c456b87",
+      "instructions": [
+        {
+          "Guid": "{5B4382F5-D65D-5E1D-B99D-5F6C467D4B0C}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Thematic Sith Lords*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{FC62CF3B-429B-502F-BEA0-825B4BF7C5CE}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Thematic Sith Lords*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "fc62cf3b-429b-502f-bea0-825b4bf7c5ce": "0"
+      }
+    },
+    {
+      "guid": "0dab200d-3bb0-5750-a5a0-4649bc9024de",
+      "instructions": [
+        {
+          "Guid": "{66CB9741-D8B0-553E-B68D-94C60961FB21}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Thematic Jedi Masters*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{01BE3E81-AFDC-511C-BC42-B638DD3E9056}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Thematic Jedi Masters*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "01be3e81-afdc-511c-bc42-b638dd3e9056": "0"
+      }
+    },
+    {
+      "guid": "0174b50d-b41b-5ac3-8732-42e5339991b6",
+      "instructions": [
+        {
+          "Guid": "{10395D0B-F733-5519-BF0E-1890FB3B39D7}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Better Disciple Meditation*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{892B2299-AE04-50EF-9BD2-AA70C136B6C0}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Better Disciple Meditation*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "892b2299-ae04-50ef-9bd2-aa70c136b6c0": "0"
+      }
+    },
+    {
+      "guid": "034ae21a-93dc-5b2c-a8ba-2045c8402610",
+      "instructions": [
+        {
+          "Guid": "{EE8799EB-2A1A-54DA-91D2-3EECAE3D89A7}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Bao-Dur & Heavy Armor*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{E31A147D-C854-5F35-B2C6-190CAC39AC58}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Bao-Dur & Heavy Armor*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "e31a147d-c854-5f35-b2c6-190cac39ac58": "0"
+      }
+    },
+    {
+      "guid": "42039518-c2aa-5cf9-a0eb-a41a14b85365",
+      "instructions": [
+        {
+          "Guid": "{A542C6C0-2BE5-5B1C-AA4C-B836076B8DB7}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\JC's Crystal Attunement*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{F739CF22-560D-5333-A3F5-5322CD890B4C}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\JC's Crystal Attunement*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "f739cf22-560d-5333-a3f5-5322cd890b4c": "0"
+      }
+    },
+    {
+      "guid": "6938dfa3-42df-541b-be0b-32824608c765",
+      "instructions": [
+        {
+          "Guid": "{FA5AFCB4-3E21-538A-A6A4-100833AC6881}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Jekk'Jekk'Tarr Thugs*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{A3843607-31D9-5D79-A117-CDE0982AAD2F}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Jekk'Jekk'Tarr Thugs*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "a3843607-31d9-5d79-a117-cde0982aad2f": "0"
+      }
+    },
+    {
+      "guid": "1bc18544-647f-5b98-b7c5-7a026ac598d4",
+      "instructions": [
+        {
+          "Guid": "{BD5E2D8E-71C5-5EA0-9D85-9AE7273BCB4B}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Logical Jekk'Jekk Tarr*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{0718DCFA-348C-5D95-A8ED-CC72D684BCFF}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Logical Jekk'Jekk Tarr*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "0718dcfa-348c-5d95-a8ed-cc72d684bcff": "0"
+      }
+    },
+    {
+      "guid": "7e250a91-9789-5a9c-859e-1545f8560290",
+      "instructions": [
+        {
+          "Guid": "{B68583E6-D9E2-5D26-AF05-FA3F0D4E4CDF}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Mira's Vanilla Escape*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{DEB0D960-78C3-5E48-80AD-E1E35468274A}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Mira's Vanilla Escape*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "deb0d960-78c3-5e48-80ad-e1e35468274a": "0"
+      }
+    },
+    {
+      "guid": "82c6c8b1-a44e-5c9f-aac5-d4eabd40611f",
+      "instructions": [
+        {
+          "Guid": "{7FCC6CB9-2BA0-5BDE-B5EB-81A0872AB9E1}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Kreia's Longsword*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{C7880996-1EFB-5E86-BBB3-AF24264AFBE1}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Kreia's Longsword*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "c7880996-1efb-5e86-bbb3-af24264afbe1": "0"
+      }
+    },
+    {
+      "guid": "ad059813-42af-5d73-8c2d-45c529101bfd",
+      "instructions": [
+        {
+          "Guid": "{6214A4B2-A908-5CA3-92EB-C01383BFE736}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Harbinger Performance Fix*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{76F7F409-89A6-59F5-BC03-A95471251FB4}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Harbinger Performance Fix*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "76f7f409-89a6-59f5-bc03-a95471251fb4": "0"
+      }
+    },
+    {
+      "guid": "3fc08659-1637-5afd-ba5b-4152db43c95a",
+      "instructions": [
+        {
+          "Guid": "{88B3C747-302B-5079-BB7F-E6A85CD4357A}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Visas VO Tweak*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{881D540A-DABA-5840-8F1F-F47251691664}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Visas VO Tweak*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "67b6bff2-5363-5221-8f20-411a1830c63a",
+      "instructions": [
+        {
+          "Guid": "{C16A00CC-FF04-5BAD-B841-213BC8C75CEA}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Sion and a Male Exile*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{1A5D7581-EA13-5417-AAB8-946D7B41487A}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Sion and a Male Exile*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "1a5d7581-ea13-5417-aab8-946d7b41487a": "0"
+      }
+    },
+    {
+      "guid": "c5d9dbd1-d05d-5afb-98e6-a71bd886c0ec",
+      "instructions": [
+        {
+          "Guid": "{F9CE3B12-097C-5CD7-983A-53741944FB22}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Assassins with Lightsabers*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{60D18594-F772-5C56-BB3E-C48A1EF1D7A8}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Assassins with Lightsabers*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "60d18594-f772-5c56-bb3e-c48a1ef1d7a8": "0"
+      }
+    },
+    {
+      "guid": "f58a1946-16d8-53ce-b580-8deaf00c8ecd",
+      "instructions": [
+        {
+          "Guid": "{97F81C77-C8C2-55E0-97D0-AF74B4474BB3}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\True Sith Assassins*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{502532FB-DCAC-5875-B546-B323B435629D}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\True Sith Assassins*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "502532fb-dcac-5875-b546-b323b435629d": "0"
+      }
+    },
+    {
+      "guid": "80684497-56ae-5fb0-a82a-4e262295aa25",
+      "instructions": [
+        {
+          "Guid": "{B2B8EC47-5441-59EC-9D9E-F6EFB4179DF4}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\For Mandalore!*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{EAE7D404-C1E8-5B99-B4BB-48BFC631A9FA}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\For Mandalore!*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "eae7d404-c1e8-5b99-b4bb-48bfc631a9fa": "0"
+      }
+    },
+    {
+      "guid": "1cc25b80-c70d-5fb7-98b1-d9bb07e95cb3",
+      "instructions": [
+        {
+          "Guid": "{1145D810-0DA7-5E9B-9687-DF548B790197}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Peragus Medical Bay Enhancement*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{C61B4EFE-33EB-54F3-B44D-30618E048DF9}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Peragus Medical Bay Enhancement*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "c61b4efe-33eb-54f3-b44d-30618e048df9": "0"
+      }
+    },
+    {
+      "guid": "8a60ec4b-f3df-5064-b577-4bdeaea67484",
+      "instructions": [
+        {
+          "Guid": "{81607D4C-83FC-5CCC-A9A6-0723639EDFEB}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HQ Blasters*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{153E3136-862F-55F9-8B4E-00119747AF74}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HQ Blasters*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "153e3136-862f-55f9-8b4e-00119747af74": "0"
+      }
+    },
+    {
+      "guid": "3ec8226d-fb44-503d-a292-984857b66c5a",
+      "instructions": [
+        {
+          "Guid": "{B226B80E-EB8F-5946-BB4C-4E3054376863}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Droid Model Fix*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{0769052A-ED8F-5463-A2F3-B9A7DA1B9C9F}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Droid Model Fix*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "b8086b9c-b672-5532-aa9b-ffdba50fb57b",
+      "instructions": [
+        {
+          "Guid": "{528C2159-29A8-5CFA-9F94-CABD632E911F}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Quarterstaff Replacements*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{2A85A6B6-7640-5B5A-921E-56252E0F861D}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Quarterstaff Replacements*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "2a85a6b6-7640-5b5a-921e-56252e0f861d": "0"
+      }
+    },
+    {
+      "guid": "1b3c2717-8ebb-5db4-9f5f-eda0ade787cd",
+      "instructions": [
+        {
+          "Guid": "{8F44F443-7BA6-5A2D-89E1-747ACB672331}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Upscaled Icon Overhaul*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{52C62955-1A44-5EA9-A2D9-635836CD2D1B}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Upscaled Icon Overhaul*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "be25ffb8-f3f1-5f23-9159-ce43aa1ffdba",
+      "instructions": [
+        {
+          "Guid": "{EF6ECA07-13AE-55EE-AAE5-59BB4C3E2599}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Rescaled Trandoshans*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{279A95A7-5EA2-5BAA-8C4B-564784A95885}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Rescaled Trandoshans*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "279a95a7-5ea2-5baa-8c4b-564784a95885": "0"
+      }
+    },
+    {
+      "guid": "d8136628-8211-5107-9cb3-ba419389e9a6",
+      "instructions": [
+        {
+          "Guid": "{FD4C22E6-EC15-54C8-ADA6-1EFE3C0C969B}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Visually Repair HK*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{6250FD25-B514-5789-9B00-762CCAC06036}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Visually Repair HK*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "6250fd25-b514-5789-9b00-762ccac06036": "0"
+      }
+    },
+    {
+      "guid": "a45d15c2-9b42-5ef3-8dee-681e19bed13c",
+      "instructions": [
+        {
+          "Guid": "{024A1CA2-015A-582F-B88B-CC85292D6B28}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Expanded Ending*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{A3B69DF7-EE6C-589C-AC11-5EB4F9B5188E}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Expanded Ending*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "a3b69df7-ee6c-589c-ac11-5eb4f9b5188e": "0"
+      }
+    },
+    {
+      "guid": "aa83fa1b-87c9-58b6-9d11-948bcf6fd800",
+      "instructions": [
+        {
+          "Guid": "{65C1220F-3A25-5820-8959-3FDAA62A168F}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Consistent Bastila Recognition*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{BC6F7682-759C-5BB4-A3E7-E85F2687C02F}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Consistent Bastila Recognition*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "bc6f7682-759c-5bb4-a3e7-e85f2687c02f": "0"
+      }
+    },
+    {
+      "guid": "10fb89f0-e193-5ac8-b5bd-1e8b8ea0d1c8",
+      "instructions": [
+        {
+          "Guid": "{88F05E6D-9008-5E11-8575-916330AB7F25}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Handmaiden Fit Model*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{25A16A09-04BC-5214-918F-C2DD55DF8970}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Handmaiden Fit Model*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "25a16a09-04bc-5214-918f-c2dd55df8970": "0"
+      }
+    },
+    {
+      "guid": "87120693-4161-59a5-874a-8366909124d4",
+      "instructions": [
+        {
+          "Guid": "{40A77060-DD41-5FC9-8176-6FBA69187EE4}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\JC's Handmaiden Sisters*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{DECA517A-599B-57AF-8CF1-CAB94FB775C2}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\JC's Handmaiden Sisters*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "deca517a-599b-57af-8cf1-cab94fb775c2": "0"
+      }
+    },
+    {
+      "guid": "19034423-0618-56b0-9ec1-b504f709fe60",
+      "instructions": [
+        {
+          "Guid": "{0D58C210-2D21-5699-A0B2-6FDEA003CC04}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Replacement Loadscreens*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{52D90C81-6414-560F-9326-712AF475C7AC}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Replacement Loadscreens*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "826d50c8-ba56-5fb6-ab1d-45b501ca548c",
+      "instructions": [
+        {
+          "Guid": "{E032F95C-868E-5BAA-A0BD-7B007C5A499F}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Vibrocutter Changes*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{5D019C16-2629-5B2C-A05A-D90C37BAB235}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Vibrocutter Changes*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "5d019c16-2629-5b2c-a05a-d90c37bab235": "0"
+      }
+    },
+    {
+      "guid": "c4fb3847-d93e-5858-8892-95881f190d4b",
+      "instructions": [
+        {
+          "Guid": "{BFDCAE22-20FF-5C93-86A2-87F9E2C67B64}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Peragus Monitor Adjust*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{CC2919E5-538B-5CA4-8A9B-8E0DDEA3FA8C}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Peragus Monitor Adjust*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "c37e5398-79c5-58cb-883a-a94dddfab120",
+      "instructions": [
+        {
+          "Guid": "{6B7B58F3-34A0-5429-9079-93DEEEBC0AD5}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Replacement Peragus II*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{AA440B1B-CC67-58DA-9423-757C3EC5A32E}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Replacement Peragus II*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "e2a0d7c6-8f17-5c02-b404-d825de1097b1",
+      "instructions": [
+        {
+          "Guid": "{9B2B4E64-16F9-5474-B791-5DE3CE5BA3DA}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TSL Galaxymap Fixpack*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{214A705B-3F4A-5952-8120-88E4EAB66C38}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TSL Galaxymap Fixpack*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "214a705b-3f4a-5952-8120-88e4eab66c38": "0"
+      }
+    },
+    {
+      "guid": "bd90073b-0364-5882-a497-ee0183148b1c",
+      "instructions": [
+        {
+          "Guid": "{CA05C1FA-624D-59EA-91A2-4BF338EFC8B8}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Fixed Hologram Models*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{74B81CC2-CC05-515F-A132-E96C729828B9}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Fixed Hologram Models*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "74b81cc2-cc05-515f-a132-e96c729828b9": "0"
+      }
+    },
+    {
+      "guid": "3e3bfb0d-b11d-57cc-87e4-fd1114da0a7d",
+      "instructions": [
+        {
+          "Guid": "{68C40CCE-1E68-5C07-9813-D3EDAA6E3BAE}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Relighting TSL*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{F559F957-94A8-5E6F-8D18-443D18A7ECF9}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Relighting TSL*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "57efb80a-26d1-507c-bbca-4ed3d2bad627",
+      "instructions": [
+        {
+          "Guid": "{9ECE2DBB-667F-570E-B8A0-AA5C934A1FA6}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Companion Clothes*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{D40EE481-2432-5E0C-B1A5-792B8A85B1CC}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Companion Clothes*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "d40ee481-2432-5e0c-b1a5-792b8a85b1cc": "0"
+      }
+    },
+    {
+      "guid": "26269e71-42d8-547a-9a88-685fabb32105",
+      "instructions": [
+        {
+          "Guid": "{2094A99E-8FF1-54E1-A9AF-E91128E338F0}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Improved EnlightenmentCorruption*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{52240A58-4B65-5244-8F0C-F29A667C01F6}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Improved EnlightenmentCorruption*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "564cdf29-627c-5e72-baec-41fd6f0382a0",
+      "instructions": [
+        {
+          "Guid": "{B3B7DFF9-38AB-54B1-AF85-EEB17F5FA8C8}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Repair Affects Stun Droid*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{49049AFB-A809-55FF-8E11-599AE6EEFB01}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Repair Affects Stun Droid*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "49049afb-a809-55ff-8e11-599ae6eefb01": "0"
+      }
+    },
+    {
+      "guid": "79408a01-b5b3-5537-99a1-c94d29aa26b1",
+      "instructions": [
+        {
+          "Guid": "{67E6E1E0-1063-5426-B971-74A3FFA3AD81}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Improved Force Sight*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{0391AFD8-4DF6-5913-A3B5-E85CFFEA272A}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Improved Force Sight*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "0391afd8-4df6-5913-a3b5-e85cffea272a": "0"
+      }
+    },
+    {
+      "guid": "7f01ce5e-3b5c-5915-b115-7523b08f1ea1",
+      "instructions": [
+        {
+          "Guid": "{7F830EFB-6710-5189-9DF6-AACA420296A2}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Alignment Affects Force Powers*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{FA1E23FE-01FB-5020-B451-EAF4D0EF0411}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Alignment Affects Force Powers*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "fa1e23fe-01fb-5020-b451-eaf4d0ef0411": "0"
+      }
+    },
+    {
+      "guid": "3c1619b0-143a-5951-b461-350f13dac801",
+      "instructions": [
+        {
+          "Guid": "{2ABE1B97-4272-5D95-BF18-F0479D119C2E}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Character Overhaul Patches*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{7A91D0B3-489D-5C7E-930B-1D94AC77F1A4}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Ultimate Character Overhaul Patches*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "9c676b12-fe2a-5bba-adc3-6e101b142ad1",
+      "instructions": [
+        {
+          "Guid": "{3A449CB5-5F04-5738-A4C9-185A45D1E3C7}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Bao-DurDarth Maul*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{063E74D6-D159-571B-83FC-305CD0168A52}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Bao-DurDarth Maul*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "1107e72d-9384-5093-803e-724d988576e3",
+      "instructions": [
+        {
+          "Guid": "{9DA1E564-8469-572F-A6C0-38E46DA619A4}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Realistic Visual Effects*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{5A2D384F-3347-577D-862F-D01BE42F6973}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Realistic Visual Effects*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "5a2d384f-3347-577d-862f-d01be42f6973": "0"
+      }
+    },
+    {
+      "guid": "886826e5-e451-58a6-be86-2462dfb7e2bc",
+      "instructions": [
+        {
+          "Guid": "{79F43046-3201-543B-BFCC-B4C2F3CC5D80}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Remove Duplicate TGATPC*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{7837C6C3-82BB-5CCC-8B6A-5ED5A04EE3B4}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Remove Duplicate TGATPC*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "7837c6c3-82bb-5ccc-8b6a-5ed5a04ee3b4": "0"
+      }
+    },
+    {
+      "guid": "fcf675c1-0d85-5340-9303-f59af7e33051",
+      "instructions": [
+        {
+          "Guid": "{1C160AB7-1498-53BB-ADCC-421703E8BBCC}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TOMB*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{D65183C2-DE76-54A9-8118-885892062479}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TOMB*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "d65183c2-de76-54a9-8118-885892062479": "0"
+      }
+    },
+    {
+      "guid": "d7c1dba9-7cf5-5529-aa2f-da29ff420d9a",
+      "instructions": [
+        {
+          "Guid": "{F18E08A5-9643-5640-A5AB-BF4F0EC2F141}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Character Textures & Model Fixes*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{D554114B-BD94-517C-A394-D4566CECF27F}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Character Textures & Model Fixes*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "base",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "2f4831a4-9b13-5503-84eb-b9ed9d08847e",
+      "instructions": [
+        {
+          "Guid": "{FE9BFF17-9924-581B-9B8D-EBCA7090F22D}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Main Menu Fix*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{FDB8CEF2-87B3-552A-8D10-FE43307DC070}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Main Menu Fix*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "widescreen",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "fc637fa9-3ed5-523a-bc62-61ca2e96098e",
+      "instructions": [
+        {
+          "Guid": "{FEB53D66-5EC2-54F2-B5A7-8421295A6713}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\K2 Cutscenes Rescaled*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{A80601AA-9DB6-530A-B381-FA728D0B194B}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\K2 Cutscenes Rescaled*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "widescreen",
+      "assessment": "omitted by reviewed policy",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "c57400a3-83ee-5050-bee2-12cfb79e5a99",
+      "instructions": [
+        {
+          "Guid": "{08D35F22-3F9B-57AA-8D7B-147E433866DB}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\K2 Remastered Cutscenes*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{F94D8E90-101B-5ED2-B5D2-23AD7EDBD6BD}",
+          "Action": "Patcher",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\K2 Remastered Cutscenes*"
+          ],
+          "Destination": "<<kotorDirectory>>"
+        }
+      ],
+      "options": [],
+      "phase": "widescreen",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "unresolved": [],
+      "choices": {
+        "f94d8e90-101b-5ed2-b5d2-23ad7edbd6bd": "0"
+      }
+    },
+    {
+      "guid": "fefef1be-875d-5cc1-8a8a-af9e29c8cf76",
+      "instructions": [
+        {
+          "Guid": "{99C68895-2559-57FB-A61C-25DB567DB49B}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Loading Screen Rescaled*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{9E6C53F1-C43D-53F8-8058-009FCDC31585}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Loading Screen Rescaled*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "widescreen",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "be993942-942e-5e84-a22e-dff31a7f00b4",
+      "instructions": [
+        {
+          "Guid": "{C2FC00BE-A4B7-53CE-ABF8-1C70D841883F}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Workbench Camera Tweak*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{7059A9DE-64E8-55DC-9EF2-9A5988CD6F18}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Workbench Camera Tweak*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "widescreen",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    },
+    {
+      "guid": "66533dc6-96f3-5f45-8f01-f4eb715640be",
+      "instructions": [
+        {
+          "Guid": "{EF6E7B59-DF1E-5277-B8ED-2A5C183FF490}",
+          "Action": "Extract",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Upscaled Maps*.{zip,rar,7z}"
+          ]
+        },
+        {
+          "Guid": "{0042D19F-3D9C-530C-989A-97825F99F150}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Upscaled Maps*\\*"
+          ],
+          "Destination": "<<kotorDirectory>>\\Override"
+        }
+      ],
+      "options": [],
+      "phase": "widescreen",
+      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "unresolved": [],
+      "choices": {}
+    }
+  ]
+}

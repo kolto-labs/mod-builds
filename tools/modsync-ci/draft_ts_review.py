@@ -8,9 +8,9 @@ Given the converted TOML of one lane run and the guide it came from, this writes
 
 Prefilled from the inputs only: schema_version, guide_sha256, converted_sha256, and per
 component (converted order) the guid, the instructions and options records copied verbatim.
-phase is filled only through ports.component_phase when ports.py provides that function;
-ports.py currently holds the rule inline, so phase is a TODO. assessment, reviewer, every
-unresolved list and every Choose/Patcher/Execute answer are left for the reviewer.
+phase comes from ports.component_phase, the rule review_manifest checks. assessment, reviewer,
+every unresolved list and every Choose/Patcher/Execute answer are left for the reviewer
+(tools/modsync-ci/gen_ts_review.py fills them by documented default for the delegated manifests).
 
 A draft is NOT a review. It has a top-level "draft": true, an empty reviewer, non-empty
 unresolved lists, an empty assessment and TODO answers, so ports.review_manifest blocks it
@@ -34,7 +34,6 @@ DRAFT_SUFFIX = "-typescript-review.draft.json"
 CHECKLIST_SUFFIX = "-typescript-review.checklist.md"
 REVIEWED_NAME = re.compile(r"[^/]*-typescript-review\.json")
 PROMPT_ACTIONS = ("Choose", "Patcher", "Execute")
-PHASE_TODO = "TODO: base or widescreen"
 CHOICE_TODO = "TODO: CLI answer for this prompt"
 UNRESOLVED_TODO = "TODO: resolve every checklist item, then replace this list with []"
 DRAFT_KEYS = ("draft", "draft_notice")
@@ -64,11 +63,6 @@ def normalized_guid(value, what):
         return ports.guid(value)
     except (ports.Blocked, ValueError):
         raise Refused(what + " has no valid GUID: " + repr(value)) from None
-
-
-def inferred_phase(component):
-    rule = getattr(ports, "component_phase", None)
-    return rule(component) if rule is not None else PHASE_TODO
 
 
 def component_list(document):
@@ -124,7 +118,7 @@ def build(converted, guide):
             "guid": identity,
             "instructions": instructions,
             "options": options,
-            "phase": inferred_phase(component),
+            "phase": ports.component_phase(component),
             "assessment": "",
             "unresolved": [UNRESOLVED_TODO],
             "choices": {prompt["instruction_guid"]: CHOICE_TODO for prompt in prompts},

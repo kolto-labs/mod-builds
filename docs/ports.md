@@ -17,10 +17,13 @@ Each lane:
    unpack`, which verifies every file. See [steam.md](steam.md).
 3. Restores archives with `cache.py restore --archive-map`. This is best effort; a missing
    archive fails the install step that needs it. See [cache.md](cache.md).
-4. Runs `ports.py`, passing `--review-manifest ci/<game>-<impl>-review.json` when
-   that file exists. TypeScript requires it; Rust ignores it. Rust lanes also pass
+4. TypeScript lanes install Wine (`wine wine64 wine32:i386`, no recommends): `Execute`
+   and the legacy TSLPatcher run through `wine` outside Windows.
+5. Runs `ports.py`, passing `--review-manifest ci/<game>-<impl>-review.json` when
+   that file exists. TypeScript requires it; Rust ignores it. Every lane also passes
    `--restore-report`, the `cache.py restore --report` JSON of step 3 (see
-   [Reviewed policy skips](#reviewed-policy-skips)).
+   [Reviewed policy skips](#reviewed-policy-skips)); the restore step passes the same
+   `--allow-uncached-by-policy` step flags to all implementations.
 
 Lanes run on Linux only: the adapters and GUI drivers are POSIX and Xvfb only.
 
@@ -212,10 +215,18 @@ TypeScript (`pnpm build`, then the built CLI; the guide's parent directory selec
 
 ```text
 node packages/cli/dist/main.js import-md full.md --output converted.toml --game kotor1
-node packages/cli/dist/main.js validate converted.toml --kotor GAME --mods ARCHIVES --all
-node packages/cli/dist/main.js install converted.toml --kotor GAME --mods ARCHIVES --all --phase base [--choice GUID=ANSWER ...] --ci-physical-install
-node packages/cli/dist/main.js install converted.toml --kotor GAME --mods ARCHIVES --all --phase widescreen [--choice GUID=ANSWER ...] --ci-physical-install
+node packages/cli/dist/main.js validate converted.toml --kotor GAME --mods ARCHIVES --select GUID,GUID,...
+node packages/cli/dist/main.js install converted.toml --kotor GAME --mods ARCHIVES --select GUID,GUID,... --phase base [--choice GUID=ANSWER ...] --ci-physical-install
+node packages/cli/dist/main.js install converted.toml --kotor GAME --mods ARCHIVES --select GUID,GUID,... --phase widescreen [--choice GUID=ANSWER ...] --ci-physical-install
 ```
+
+`--select` lists every converted component except the reviewed policy skips (see
+[Reviewed policy skips](#reviewed-policy-skips)), lowercase and hyphenated. ModSync.ts
+has no `--deselect`: `--select` selects exactly the GUIDs given and turns every other
+mod off (`applySelectionFlags`), and it does not pull dependencies in, so a component
+that depends on a skipped one fails `validate` with `dependency-missing` (the lane stops
+earlier with `policy_skipped_component_has_dependents`). Without skips the list is
+every component, as `--all` was.
 
 `--ci-physical-install` is passed to both TypeScript `install` commands (`cli` mode)
 and nowhere else. Without it (or `MODSYNC_CI_PHYSICAL_INSTALL=1`) ModSync.ts refuses
@@ -225,13 +236,18 @@ branch the option is unknown and the install fails. With the flag, ModSync.ts us
 portable, advisory lockfile in place of native OS ownership, and still refuses
 `CreateDirectory` and canonical authored guides. The TypeScript `gui` mode runs
 `gui_typescript.py` instead of these commands and does not pass the flag. The lanes
-still need the human-authored `ci/<game>-typescript-review.json` and have no policy-skip
-mechanism.
+still need the committed `ci/<game>-typescript-review.json`. `validate` and the CLI
+`install` read `IsSelected` from nowhere (they use `--select`); the `gui` lane has no
+select flag and reads `IsSelected` from its input, so with policy skips it gets
+`converted-policy.toml`, a copy of the reviewed TOML in which the skipped components are
+also `IsSelected = false` (`report.selected_after_policy_count`). The review hash is
+bound to `converted.toml` (before that copy), so it does not depend on the restore
+report. The GUI input hash is checked against the copy.
 
 ## TypeScript review manifest (schema 1)
 
-A human-reviewed JSON file bound to one exact conversion. Without it the lane stops
-with `review_manifest_required`.
+A JSON file bound to one exact conversion. Without it the lane stops with
+`review_manifest_required`.
 
 | Field | Value |
 | --- | --- |
@@ -246,7 +262,18 @@ Each component entry has `guid`, the exact `instructions` and `options` records,
 `phase` (`base` or `widescreen`), a nonempty `assessment`, `unresolved: []` and
 `choices` (instruction UUID → CLI answer). Every `Choose`, `Patcher` and `Execute`
 instruction needs an answer. If the converter output changes, the manifest no
-longer matches and must be reviewed again.
+longer matches and must be regenerated (see [Regenerating](#regenerating-the-delegated-manifests)).
+The `phase` rule is `ports.component_phase` (`widescreen` if `IsWidescreen`, else `base`),
+used by `review_manifest` and `draft_ts_review.py` alike.
+
+The committed `ci/k1-typescript-review.json` and `ci/k2-typescript-review.json` are
+**delegated**, not hand-reviewed: the owner delegated the review sign-off to the
+orchestrator on 2026-10-18 (`reviewer` is `delegated-by-owner (orchestrator, 2026-10-18)`)
+so the rest of the guide can install. Every answer is a documented default, stated in
+each `assessment`: `Patcher` `0` (the first `namespaces.ini` entry, the namespace
+prompt's own default), `Execute` `yes` (inert: ModSync.ts's `Execute` never prompts).
+There is no `Choose` in either conversion; the generator refuses one. Components omitted by
+the reviewed policy stay listed with the assessment `omitted by reviewed policy`.
 
 The check is structural: it matches records, hashes and UUID coverage. It does not
 prove the review is correct and does not bypass the port's own install gates.
@@ -261,17 +288,39 @@ python3 tools/modsync-ci/draft_ts_review.py PORTS_WORK/ports-*/converted.toml co
 
 It writes `ci/drafts/<game>-typescript-review.draft.json` and
 `<game>-typescript-review.checklist.md`. The draft carries the hashes, component GUIDs and
-the verbatim `instructions` and `options` records. `phase` is filled only if `ports.py`
-exposes a `component_phase` function (it does not yet, so it is a TODO). `reviewer`,
+the verbatim `instructions` and `options` records, and `phase` from
+`ports.component_phase`. `reviewer`,
 `unresolved`, `assessment` and every `choices` answer are placeholders, and the draft has
 `draft: true`, so `ports.review_manifest` blocks it. A human completes it, removes the
 `draft*` keys and commits it as `ci/<game>-typescript-review.json`; the tool refuses to
 write that path or anything under `ci/`. Use the TOML the lane itself hashed
 (`converted_sha256` in its report), not a fresh conversion.
 
+### Regenerating the delegated manifests
+
+`converted_sha256` is the hash of `import-md` output plus `select_base_components`, so it
+depends on the guide and on the ModSync.ts ref the workflow builds (`MODSYNC_TS_REF`,
+default `feat/physical-install`; repository variable unset at the time of writing). A moved
+ref can change it; the lane then stops with `review_manifest_hash_mismatch: converted_sha256
+differ ...`, and the message names the fix. From the repository root:
+
+```bash
+git clone --branch "$MODSYNC_TS_REF" https://github.com/bodencrouch/ModSync.ts.git ts-ci-ref
+(cd ts-ci-ref && pnpm install --frozen-lockfile && pnpm build)    # pnpm 10.33.0, Node 22
+python3 tools/modsync-ci/gen_ts_review.py --source ts-ci-ref           # k1 and k2, writes ci/
+python3 tools/modsync-ci/gen_ts_review.py --source ts-ci-ref --check   # exit 1 when stale
+```
+
+`gen_ts_review.py` converts exactly as the lane does, drafts through
+`draft_ts_review.build`, fills the defaults above, drops the `draft*` keys, validates with
+`ports.review_manifest` and writes `ci/<game>-typescript-review.json` (deterministic, so a
+diff shows what the new ref changed). Review that diff; the defaults are only as good as
+the conversion. `--converted FILE` skips the conversion for a TOML the lane already
+produced. Conversion is byte-reproducible for a fixed ref and guide.
+
 ## Reviewed policy skips
 
-Rust lanes restore with the reviewed `--allow-uncached-by-policy` step flags
+All lanes restore with the reviewed `--allow-uncached-by-policy` step flags
 (see [ci.md](ci.md#install-lanes-and-uncached-links)); the restore only asserts
 the link is skipped. `ports.py --restore-report restore-report.json` makes the lane
 guarantee it. It reads the report's `skipped_steps` (refusing a report that is not
@@ -284,10 +333,12 @@ guarantee it. It reads the report's `skipped_steps` (refusing a report that is n
   instructions. A step that is not a heading of the guide, appears twice in the
   counted sections, or whose component another component lists in `Dependencies`
   blocks the lane.
-- **Selection.** `validate` and `install` receive `--deselect <component Guid>`
+- **Selection.** Rust: `validate` and `install` receive `--deselect <component Guid>`
   for exactly those components. The Rust CLI selects every top-level component by
   default and does not read `IsSelected` (no `--use-file-selection`), so the flag is
-  the control; `convert` has no deselect option and is unchanged.
+  the control; `convert` has no deselect option and is unchanged. TypeScript: `validate`
+  and both `install` phases receive `--select` with every other component's GUID instead
+  of `--all` (see above), and the GUI input copy marks the skipped ones unselected.
 - **Report.** The lane report gets `skipped_by_reviewed_policy`: one record per
   step with `status: "skipped-by-reviewed-policy"`, `section`, `heading`, the
   restore `reason`, `urls`, and `component_guid` (`null` when the converter makes
@@ -318,7 +369,7 @@ the Aspyr patch or after 3C-FD, K1 says to run it only after widescreen content 
 never on the Steam executable unless the widescreen `.exe` was applied.
 
 `tools/modsync-ci/archive_selections.json` therefore carries a small `lane_skips`
-table, read by `ports.py` for the **Rust** lanes only (no restore report needed):
+table, read by `ports.py` (no restore report needed):
 
 ```json
 "lane_skips": {"k1": [{"section": "Mod List", "heading": "4GB Patcher", "reason": "..."}],
@@ -345,15 +396,18 @@ table, read by `ports.py` for the **Rust** lanes only (no restore report needed)
   `reader_rejection`), recorded in the lane report's `skipped_by_reviewed_policy`
   (lane-skip records carry `"source": "lane_skips"` and `urls: []`), and passed to
   `validate` and `install` as `--deselect <component Guid>`.
-- **Not applied elsewhere.** TypeScript lanes do not read the table (they have no
-  deselect mechanism). The Rust `gui` lane applies it as a GUI subset (see
+- **TypeScript reads only the unpinned entries.** Entries with a `guid`/`kind` pin record the
+  Rust converter's unreviewed-draft state and name Rust GUIDs, so TypeScript lanes skip
+  them (the whole table is still validated). They therefore apply the `4GB Patcher` skip
+  (the guide-order and Steam-executable reasoning holds for either converter; the reason
+  text mentions the Rust converter) plus the restore-report skips, and install the rest.
+  TypeScript's own conversion generates instructions for the other 150/119 components, so
+  they are not omitted. The Rust `gui` lane applies the table as a GUI subset (see
   [GUI mode](#gui-mode)).
 
-`--restore-report` is refused for `--implementation typescript`
-(`policy_skips_supported_for_rust_only`): those lanes have no deselect mechanism
-and `validate --all` would select the step, so `ci.yml` does not pass the flags to
-them. The Rust `gui` lane forwards the same GUIDs to `gui_rust.py --deselect`
-(see [GUI mode](#gui-mode)).
+`--restore-report` is accepted by both implementations. The Rust `gui` lane forwards the
+same GUIDs to `gui_rust.py --deselect` (see [GUI mode](#gui-mode)); the TypeScript lanes
+use `--select` of the remainder.
 
 ## GUI mode
 

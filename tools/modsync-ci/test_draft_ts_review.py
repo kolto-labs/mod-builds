@@ -127,17 +127,12 @@ class DraftContent(Fixture):
             self.assertNotEqual(entry["unresolved"], [])
         self.assertEqual(draft["reviewer"], "")
 
-    def test_phase_is_not_guessed_while_ports_has_no_rule(self):
-        self.assertFalse(hasattr(ports, "component_phase"))
-        self.run_main()
-        self.assertEqual({entry["phase"] for entry in self.draft()["components"]},
-                         {draft_ts_review.PHASE_TODO})
-
-    def test_phase_reuses_a_ports_rule_when_one_exists(self):
-        ports.component_phase = lambda component: "widescreen" if component.get("IsWidescreen") else "base"
-        self.addCleanup(delattr, ports, "component_phase")
+    def test_phase_comes_from_the_ports_rule(self):
         self.run_main()
         self.assertEqual([entry["phase"] for entry in self.draft()["components"]], ["base", "widescreen"])
+        self.assertEqual([entry["phase"] for entry in self.draft()["components"]],
+                         [ports.component_phase(component)
+                          for component in ports.tomllib.loads(CONVERTED)["thisMod"]])
 
     def test_choices_are_todo_placeholders_for_every_prompt_including_options(self):
         self.run_main()
@@ -177,7 +172,7 @@ class CannotPassAsReviewed(Fixture):
             path.write_text(json.dumps(broken), encoding="utf-8")
             self.assertEqual(self.blocked_reason(path), reason, label)
         for key, value, reason in (
-                ("phase", draft_ts_review.PHASE_TODO, "review_manifest_phase_or_assessment_unresolved"),
+                ("phase", "TODO: base or widescreen", "review_manifest_phase_or_assessment_unresolved"),
                 ("assessment", "", "review_manifest_phase_or_assessment_unresolved"),
                 ("unresolved", [draft_ts_review.UNRESOLVED_TODO], "review_manifest_phase_or_assessment_unresolved")):
             broken = json.loads(json.dumps(draft))
