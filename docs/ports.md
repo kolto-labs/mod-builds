@@ -52,15 +52,57 @@ Rust (`cargo build --locked --bin modsync`, isolated target directory):
 
 ```text
 convert full.md converted.toml --format toml --parse-directions --auto-generate-local --source-path ARCHIVES [--archive-map MAP]
-convert converted.toml converted-reviewed.toml --format toml --source-path ARCHIVES --review-verified-drafts
+convert full.md converted-bound-pending.toml --format toml --parse-directions --source-path ARCHIVES --resolved-archives resolved-archives.json   # with --archive-map; see below
+convert converted-bound-pending.toml converted-bound.toml --format toml --source-path ARCHIVES --auto-generate-local --archive-map MAP
+convert converted[-bound].toml converted-reviewed.toml --format toml --source-path ARCHIVES --review-verified-drafts
 validate --input converted.toml --game-dir GAME --source-dir ARCHIVES [--deselect GUID ...]
 install --input converted.toml --game-dir GAME --source-dir ARCHIVES [--deselect GUID ...] --non-interactive --phase all
 ```
 
 `validate` takes the same `--deselect GUID` flags (see below).
 
-The second `convert` replaces `converted.toml` with `converted-reviewed.toml` before
-it is hashed. See [Verified draft review](#verified-draft-review).
+The two middle `convert` lines are the archive binding pass and run only with
+`--archive-map`; see [Archive binding](#archive-binding). The last `convert` reads
+`converted-bound.toml` when the binding pass was used, otherwise `converted.toml`, and
+replaces `converted.toml` with `converted-reviewed.toml` before it is hashed. See
+[Verified draft review](#verified-draft-review).
+
+### Archive binding
+
+ModSync.rs `1c67994` also lets `--review-verified-drafts` clear a method-bound loose-file
+draft that `convert --resolved-archives` wrote (`bind_loose_method`, replayed by the
+verifier). Every component of the real guides has an `InstallationMethod`, so this is the
+only draft the verifier can clear there. `--resolved-archives` binds only a method-only
+loose-file component that has no instructions yet and conflicts with
+`--auto-generate-local`, so the pass runs **before** local generation, from the guide:
+
+1. The plain `convert` runs as before and its `converted.toml` is kept as the fallback.
+2. `ports.py` builds `resolved-archives.json` from `converted.toml` and the
+   `--archive-map` JSON: `[{componentGuid, filenames: [file], sha256, sizeBytes}]`. A
+   component is listed only if **every** link in its `ResourceRegistry` maps (links are
+   compared without query, fragment and userinfo, as `cache.py` keys them) to the same
+   **one** file, that file is a `.zip`/`.7z`/`.rar` regular file (not a symlink) with a safe
+   literal name in the archive directory, and the GUID appears once. Multi-archive,
+   partly mapped and unmapped components are skipped. The hash and size are computed from
+   the file, and the converter rechecks them. Nothing is listed, and no pass runs, when no
+   component qualifies.
+3. `bind_archives`: `convert full.md converted-bound-pending.toml --parse-directions
+   --source-path ARCHIVES --resolved-archives JSON`.
+4. `bind_generate_local`: `--auto-generate-local --archive-map MAP` on that output, so
+   every component the binding did not take still gets its generated instructions.
+5. The result is used only if both steps exit 0, no component or option was lost, no
+   component lost its instructions, draft record or prose-draft warning, and no unbound
+   component lost instructions. Otherwise `converted.toml` is kept, the lane continues,
+   and `draft_review.bind_failed` holds the reason (`bind_archives_failed`,
+   `bind_generate_local_failed`, `bound_output_drops_instructions_or_drafts`,
+   `bound_output_components_changed`, `archive_map_unreadable`, ...). An interrupt or
+   timeout still stops the lane.
+
+`draft_review.bound` is the number of components the pass bound (`Generator =
+"resolved-filenames"`); it is 0 when the pass did not run. Binding happens after
+`convert` generated instructions, so the order matters: a binding pass on the finished
+`converted.toml` binds 0 of 139 on k2, because the generated instructions already make
+every component ineligible.
 
 ### Verified draft review
 
@@ -70,7 +112,8 @@ exactly, and records a `Verification` receipt. Prose, method-bound, gapful, edit
 bare-filename and multi-archive drafts stay fenced. `ports.py` never sets
 `RequiresReview` itself; this tool is the only automatic clearing.
 
-- **Report.** The lane report gets `draft_review`: `cleared` (a count) and `skipped`
+- **Report.** The lane report gets `draft_review`: `bound` (see [Archive binding](#archive-binding)),
+  `cleared` (a count) and `skipped`
   (`component_guid`, `name`, `reason` of each draft left fenced, parsed from the
   `{cleared, skipped}` JSON the converter prints on stderr into
   `review_verified_drafts.log`). The parse is kept even when the step fails.
@@ -90,32 +133,21 @@ bare-filename and multi-archive drafts stay fenced. `ports.py` never sets
   rejected drafts, or (without `DraftReview`) the prose-draft `InstallationWarning`. The
   reviewed-identity receipt is verified only by the Rust `validate`/`install`.
 - Rust lanes only; TypeScript lanes do not run it.
-- **Why it clears nothing on the real guides today (measured, not assumed).** The verifier
-  accepts only a draft whose `DraftReview` has `Generator = "resolved-filenames"` and a
-  `Derivation`, and which has no `MethodContext`, no gaps and no prose-draft warning.
-  `--auto-generate-local` (what the lane runs) records neither `Generator` nor
-  `Derivation`; only `convert --resolved-archives <json>` or `--auto` does, and clap makes
-  `--resolved-archives` conflict with `--auto-generate-local`. Replacing the local pass with a
-  `--resolved-archives` pass does not help either: every component of `k1/full.md` (197) and
-  `k2/full.md` (151) has an `InstallationMethod`, so `--parse-directions` gives each one a
-  `DraftReview.MethodContext` and a method gap, and the verifier refuses a `MethodContext`
-  ("Method-bound drafts are not verifiable by archive replay"). `resolved::generate` binds
-  a method-only loose-file component but keeps that `MethodContext`. Run against ModSync.rs
-  `aa7b355` with the real k2 guide and synthetic one-file archives for the 139 uniquely
-  mapped components, the pipelines tried all cleared 0: today's (`--parse-directions --auto-generate-local`), a separate
-  `--resolved-archives` pass on the instruction-free components (0 of 98 bound, the guide
-  preamble is not read back from a TOML input), and `--parse-directions --resolved-archives`
-  in one run (40 bound with `Generator` and `Derivation`, all refused as method-bound).
-  On a small synthetic guide without `Installation Method` lines, `--parse-directions`
-  followed by `--resolved-archives` for the instruction-free components did clear them, and
-  the component with a prose step stayed fenced, so the verifier itself works as designed.
-  `ports.py` therefore keeps the single `--auto-generate-local` convert and does not
-  reorder passes; a reordering would change nothing on K1/K2 and would drop the filename
-  matching fallback for unmapped links.
-  Clearing the real guides needs a Rust change: the verifier must accept the
-  `MethodContext` that `bind_loose_method` itself wrote (`ArchiveBinding = "Bound"` with a
-  matching `ArchiveMethodBinding`/`Derivation`), and its replay must rebuild a
-  method-bound component through `bind_loose_method`.
+- **What it clears on the real guides.** The verifier accepts a draft whose `DraftReview`
+  has `Generator = "resolved-filenames"` and a `Derivation`, with no gaps and no prose-draft
+  warning. It does not accept an `--auto-generate-local` draft (no `Generator`/`Derivation`),
+  so with `aa7b355` alone nothing cleared (0 of 151 on k2; k1 was not measured). From `1c67994` it
+  also accepts the `MethodContext` that `bind_loose_method` wrote, which is why the
+  [archive binding pass](#archive-binding) exists. Prose drafts, patcher-method components,
+  multi-archive and unmapped components stay fenced and still stop the lane through the
+  block below.
+- **Measured (k2, ModSync.rs `1c67994`, real `content/k2/full.md`, synthetic one-file
+  archives for the 139 uniquely mapped components, not the real archives).** The pass
+  bound 40 and the review cleared 40; 111 stayed fenced. Instruction counts were unchanged
+  (147 of 151 components, 267 instructions: 42 components from the guide's own steps plus
+  105 generated). The same run without the pass cleared 0. The real archives were not
+  available, so the real count depends on their contents (the replay must reproduce the
+  bound instructions exactly) and may differ from 40.
 
 TypeScript (`pnpm build`, then the built CLI; the guide's parent directory selects
 `kotor1` or `kotor2`):
@@ -287,8 +319,9 @@ component: `ComponentGuid`, `ComponentName`, `Success`, `InstructionsGenerated`,
 
 - `convert_skips`: `total`, `generated`, `by_cause` and `components` (guid, name, cause,
   converter `reason`; components that already had instructions are only counted).
-- `draft_review`: `cleared`, `skipped` and, when the lane stops on it, `unreviewed`
-  (see [Verified draft review](#verified-draft-review)).
+- `draft_review`: `bound`, `bind_failed` (only when the binding pass was not used),
+  `cleared`, `skipped` and, when the lane stops on it, `unreviewed` (see
+  [Archive binding](#archive-binding) and [Verified draft review](#verified-draft-review)).
 - `steps_without_instructions`, when `guide_steps_without_instructions` blocks the lane:
   one record per guide step lacking instructions with `heading`, `component_guid`,
   `urls` (the component's links, with any `#fragment` removed because a MEGA fragment is

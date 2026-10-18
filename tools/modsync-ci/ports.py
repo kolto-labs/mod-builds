@@ -12,7 +12,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
-from urllib.parse import urldefrag
+from urllib.parse import urldefrag, urlsplit, urlunsplit
 import uuid
 
 
@@ -126,11 +126,161 @@ def record_draft_review(log, report):
             break
     else:
         return
-    report["draft_review"] = {
-        "cleared": len(result["cleared"]),
-        "skipped": [{"component_guid": str(item["guid"]).lower(),
-                     "name": item.get("name"), "reason": item.get("reason")}
-                    for item in result["skipped"]]}
+    report.setdefault("draft_review", {}).update(
+        cleared=len(result["cleared"]),
+        skipped=[{"component_guid": str(item["guid"]).lower(),
+                  "name": item.get("name"), "reason": item.get("reason")}
+                 for item in result["skipped"]])
+
+
+BIND_STAGE = "bind_archives"
+BIND_GENERATE_STAGE = "bind_generate_local"
+BIND_GENERATOR = "resolved-filenames"
+BIND_SUFFIXES = (".zip", ".7z", ".rar")
+BIND_UNSAFE_NAME = re.compile(r"[/\\*?\[\]\x00-\x1f\x7f]")
+INTERRUPTED = "command_interrupted_or_timed_out"
+
+
+def canonical_link(url):
+    """Guide link as cache.py keys it: query, fragment and userinfo dropped, host lowercased."""
+    text = str(url).strip()
+    try:
+        parts = urlsplit(text)
+        host = parts.hostname or ""
+        if parts.port:
+            host += ":" + str(parts.port)
+    except ValueError:
+        return text
+    return urlunsplit((parts.scheme, host, parts.path, "", ""))
+
+
+def mapped_archives(path):
+    """archive_map.json as {canonical link: file name}; a link with several or conflicting files maps to None."""
+    mapping = {}
+    for link, value in json.loads(path.read_text(encoding="utf-8")).items():
+        if isinstance(value, list):
+            value = value[0] if len(value) == 1 else None
+        name = value if isinstance(value, str) else None
+        key = canonical_link(link)
+        mapping[key] = name if mapping.get(key, name) == name else None
+    return mapping
+
+
+def components_of(path):
+    document = tomllib.loads(path.read_text(encoding="utf-8"))
+    return [component for component in document.get("thisMod", document.get("Components", []))
+            if isinstance(component, dict)]
+
+
+def component_archive(component, mapping):
+    """The one archive file all of a component's links map to; None if unmapped, partly mapped or several."""
+    registry = component.get("ResourceRegistry")
+    names = set()
+    for link in registry if isinstance(registry, dict) else ():
+        names.add(mapping.get(canonical_link(link)))
+    return names.pop() if len(names) == 1 and None not in names else None
+
+
+def resolved_archive_bindings(converted, mapping, archives):
+    """--resolved-archives entries for components whose links map to exactly one archive present in `archives`."""
+    components = components_of(converted)
+    seen = {}
+    for component in components:
+        seen[component.get("Guid")] = seen.get(component.get("Guid"), 0) + 1
+    bindings = []
+    for component in components:
+        guid, name = component.get("Guid"), component_archive(component, mapping)
+        if (not isinstance(guid, str) or not guid or seen[guid] != 1 or name is None
+                or not 0 < len(name) <= 255 or name in (".", "..") or BIND_UNSAFE_NAME.search(name)
+                or not name.lower().endswith(BIND_SUFFIXES)):
+            continue
+        path = archives / name
+        if path.is_symlink() or not path.is_file():
+            continue
+        with path.open("rb") as handle:
+            sha256 = hashlib.file_digest(handle, "sha256").hexdigest()
+        bindings.append({"componentGuid": guid, "filenames": [name], "sha256": sha256,
+                         "sizeBytes": path.stat().st_size})
+    return bindings
+
+
+def bound_result(before, after):
+    """(components bound by the resolved-filename pass, problem): problem names anything `after` lost from `before`."""
+    def flatten(components, found):
+        for component in components:
+            record = component.get("DraftReview") or {}
+            found[str(component.get("Guid", "")).lower()] = (
+                len(component.get("Instructions") or []), "DraftReview" in component,
+                bool(component.get("InstallationWarning")), record.get("Generator") == BIND_GENERATOR)
+            flatten([option for option in component.get("Options") or [] if isinstance(option, dict)], found)
+        return found
+
+    old, new = components_of(before), components_of(after)
+    if [item.get("Guid") for item in old] != [item.get("Guid") for item in new]:
+        return 0, "bound_output_components_changed"
+    kept = flatten(new, {})
+    for guid, (count, drafted, warned, _) in flatten(old, {}).items():
+        if guid not in kept:
+            if count or drafted or warned:
+                return 0, "bound_output_drops_instructions_or_drafts"
+            continue
+        new_count, new_drafted, new_warned, new_bound = kept[guid]
+        if ((count and not new_count) or (drafted and not new_drafted) or (warned and not new_warned)
+                or (new_count < count and not new_bound)):
+            return 0, "bound_output_drops_instructions_or_drafts"
+    return sum(1 for item in new
+               if (item.get("DraftReview") or {}).get("Generator") == BIND_GENERATOR), None
+
+
+def bind_archives(command, source, guide, converted, archives, archive_map, private, report, env):
+    """Bind method-only loose-file components to their one mapped archive (convert --resolved-archives).
+
+    --resolved-archives only touches components without instructions and conflicts with
+    --auto-generate-local, so it runs from the guide (--parse-directions) and the local
+    generation pass then runs on its output. That branch is used only when both exit 0 and
+    nothing the plain convert produced is lost; otherwise the plain converted.toml is kept
+    and the failure is recorded. Returns the TOML the verified review should read.
+    """
+    review = report.setdefault("draft_review", {})
+    review["bound"] = 0
+    if archive_map is None:
+        return converted
+    try:
+        bindings = resolved_archive_bindings(
+            converted, mapped_archives(archive_map.resolve(strict=True)), archives)
+    except (OSError, ValueError, AttributeError):
+        review["bind_failed"] = "archive_map_unreadable"
+        return converted
+    if not bindings:
+        return converted
+    plan = private / "resolved-archives.json"
+    plan.write_text(json.dumps(bindings), encoding="utf-8")
+    bound, staged = private / "converted-bound.toml", private / "converted-bound-pending.toml"
+    try:
+        run(command + ["convert", str(guide), str(staged), "--format", "toml", "--parse-directions",
+                       "--source-path", str(archives), "--resolved-archives", str(plan)],
+            source, private, BIND_STAGE, report, env)
+        run(command + ["convert", str(staged), str(bound), "--format", "toml",
+                       "--source-path", str(archives), "--auto-generate-local",
+                       "--archive-map", str(archive_map.resolve(strict=True))],
+            source, private, BIND_GENERATE_STAGE, report, env)
+    except Blocked as failure:
+        if str(failure) == INTERRUPTED:
+            raise
+        review["bind_failed"] = str(failure)
+        return converted
+    if not bound.is_file() or bound.is_symlink():
+        review["bind_failed"] = "bind_output_missing"
+        return converted
+    try:
+        count, problem = bound_result(converted, bound)
+    except (OSError, ValueError):
+        count, problem = 0, "bound_output_unreadable"
+    if problem:
+        review["bind_failed"] = problem
+        return converted
+    review["bound"] = count
+    return bound if count else converted
 
 
 def draft_pending(component):
@@ -206,7 +356,11 @@ def reclassify_policy_skips(report, guids):
 def print_diagnostics(report):
     """Put the skip causes and every uncovered step in the CI log so one read is enough."""
     review = report.get("draft_review")
-    if review:
+    if review and (review.get("bound") or review.get("bind_failed")):
+        print(f"ports: archive binding bound {review.get('bound', 0)} component(s)"
+              + (f"; not used: {review['bind_failed']}" if review.get("bind_failed") else ""),
+              file=sys.stderr)
+    if review and ("cleared" in review or "unreviewed" in review):
         print(f"ports: verified-draft review cleared {review.get('cleared', 0)} component(s); "
               f"left fenced: {len(review.get('skipped', []))}", file=sys.stderr)
         for item in review.get("unreviewed", []):
@@ -591,8 +745,10 @@ def execute(args, report):
         finally:
             record_convert_skips(private / "convert.log", report)
         reviewed = private / "converted-reviewed.toml"
+        review_input = bind_archives(command, source, guide, converted, archives,
+                                     args.archive_map, private, report, env)
         try:
-            run(command + ["convert", str(converted), str(reviewed), "--format", "toml",
+            run(command + ["convert", str(review_input), str(reviewed), "--format", "toml",
                            "--source-path", str(archives), "--review-verified-drafts"],
                 source, private, DRAFT_REVIEW_STAGE, report, env)
         finally:

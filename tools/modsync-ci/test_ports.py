@@ -1126,6 +1126,277 @@ class VerifiedDraftReviewTests(unittest.TestCase):
         self.assertNotIn(ports.DRAFT_REVIEW_STAGE, commands)
 
 
+BIND_ONE = "70000000-0000-0000-0000-000000000001"
+BIND_TWO = "70000000-0000-0000-0000-000000000002"
+LINK_ONE = "https://example.invalid/files/1-one/"
+LINK_TWO = "https://example.invalid/files/2-two/"
+LINK_EXTRA = "https://example.invalid/files/3-extra/"
+
+
+def linked(name, guid, *links, bound=False, instructed=True):
+    registry = "{" + ", ".join('"' + link + '" = {}' for link in links) + "}"
+    block = component(name, guid, ResourceRegistry=registry)
+    if not instructed:
+        block = block[:block.index("[[thisMod.Instructions]]")]
+    record = draft_block("thisMod", guid)
+    if bound:
+        record = record.replace("RequiresReview = true\n",
+                                'RequiresReview = true\nGenerator = "resolved-filenames"\n')
+    return block + "\n" + record
+
+
+class ArchiveBindingTests(unittest.TestCase):
+    prepare = ExecuteCommandTests.prepare
+
+    def archives(self, **files):
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(directory))
+        for name, content in files.items():
+            (directory / name.replace("_", ".")).write_bytes(content)
+        return directory
+
+    def write(self, text, name="converted.toml"):
+        path = self.archives() / name
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_links_are_compared_the_way_the_archive_map_keys_them(self):
+        self.assertEqual(ports.canonical_link("HTTPS://User@Example.COM:8443/files/12-a/?do=download&r=1#top"),
+                         "https://example.com:8443/files/12-a/")
+        self.assertEqual(ports.canonical_link("https://example.invalid/?page_id=371"),
+                         "https://example.invalid/")
+
+    def test_archive_map_keeps_only_single_file_links(self):
+        path = self.write(json.dumps({LINK_ONE + "?x=1": "one.zip", LINK_TWO: ["a.zip", "b.zip"],
+                                      LINK_EXTRA: ["only.7z"]}))
+        self.assertEqual(ports.mapped_archives(path), {
+            ports.canonical_link(LINK_ONE): "one.zip", ports.canonical_link(LINK_TWO): None,
+            ports.canonical_link(LINK_EXTRA): "only.7z"})
+
+    def test_conflicting_entries_for_one_canonical_link_map_to_nothing(self):
+        path = self.write(json.dumps({LINK_ONE: "one.zip", LINK_ONE + "?v=2": "other.zip"}))
+        self.assertEqual(ports.mapped_archives(path), {ports.canonical_link(LINK_ONE): None})
+
+    def bindings(self, blocks, mapping, **files):
+        archives = self.archives(**files)
+        path = self.write(document(*blocks))
+        return ports.resolved_archive_bindings(path, mapping, archives)
+
+    def test_only_components_with_exactly_one_mapped_present_archive_are_bound(self):
+        mapping = {ports.canonical_link(LINK_ONE): "one.zip", ports.canonical_link(LINK_TWO): "two.zip",
+                   ports.canonical_link(LINK_EXTRA): None}
+        blocks = [
+            linked("Mod One", BIND_ONE, LINK_ONE + "?download=1"),
+            linked("Mod Two", BIND_TWO, LINK_TWO, LINK_EXTRA),
+            linked("Mod Three", "70000000-0000-0000-0000-000000000003", LINK_EXTRA),
+            linked("Mod Four", "70000000-0000-0000-0000-000000000004", "https://example.invalid/unmapped"),
+            linked("Mod Five", "70000000-0000-0000-0000-000000000005", LINK_ONE, LINK_TWO),
+            linked("Mod Six", "70000000-0000-0000-0000-000000000006"),
+        ]
+        found = self.bindings(blocks, mapping, one_zip=b"one", two_zip=b"two")
+        self.assertEqual(found, [{
+            "componentGuid": BIND_ONE, "filenames": ["one.zip"],
+            "sha256": hashlib.sha256(b"one").hexdigest(), "sizeBytes": 3}])
+
+    def test_unsafe_missing_unsupported_and_linked_archives_are_never_listed(self):
+        names = ["a/b.zip", "..", "wild*.zip", "x.txt", "gone.zip", "link.zip"]
+        blocks = [linked("Mod " + str(index), "70000000-0000-0000-0000-00000000010" + str(index),
+                         "https://example.invalid/" + str(index)) for index in range(len(names))]
+        mapping = {ports.canonical_link("https://example.invalid/" + str(index)): name
+                   for index, name in enumerate(names)}
+        archives = self.archives(x_txt=b"x")
+        outside = self.archives(target_zip=b"t")
+        (archives / "link.zip").symlink_to(outside / "target.zip")
+        path = self.write(document(*blocks))
+        self.assertEqual(ports.resolved_archive_bindings(path, mapping, archives), [])
+
+    def test_a_guid_that_appears_twice_is_never_listed(self):
+        mapping = {ports.canonical_link(LINK_ONE): "one.zip"}
+        blocks = [linked("Mod One", BIND_ONE, LINK_ONE), linked("Mod Again", BIND_ONE, LINK_ONE)]
+        self.assertEqual(self.bindings(blocks, mapping, one_zip=b"one"), [])
+
+    def test_bound_result_counts_bound_components_and_accepts_the_normal_changes(self):
+        before = self.write(document(linked("Mod One", BIND_ONE, LINK_ONE, instructed=False),
+                                     linked("Mod Two", BIND_TWO, LINK_TWO)))
+        after = self.write(document(linked("Mod One", BIND_ONE, LINK_ONE, bound=True),
+                                    linked("Mod Two", BIND_TWO, LINK_TWO)))
+        self.assertEqual(ports.bound_result(before, after), (1, None))
+
+    def test_bound_result_rejects_lost_instructions_or_drafts_or_components(self):
+        full = document(linked("Mod One", BIND_ONE, LINK_ONE), linked("Mod Two", BIND_TWO, LINK_TWO))
+        before = self.write(full)
+        lost_instructions = self.write(document(
+            linked("Mod One", BIND_ONE, LINK_ONE, instructed=False), linked("Mod Two", BIND_TWO, LINK_TWO)))
+        lost_draft = self.write(document(
+            component("Mod One", BIND_ONE, ResourceRegistry='{"' + LINK_ONE + '" = {}}'),
+            linked("Mod Two", BIND_TWO, LINK_TWO)))
+        lost_component = self.write(document(linked("Mod One", BIND_ONE, LINK_ONE)))
+        self.assertEqual(ports.bound_result(before, lost_instructions)[1],
+                         "bound_output_drops_instructions_or_drafts")
+        self.assertEqual(ports.bound_result(before, lost_draft)[1],
+                         "bound_output_drops_instructions_or_drafts")
+        self.assertEqual(ports.bound_result(before, lost_component)[1], "bound_output_components_changed")
+
+    def run_lane(self, converted, bound_output, mapping=True, fail=None, files=None, interrupt=False):
+        root, args = self.prepare("k1")
+        args.implementation = "rust"
+        for name, content in (files if files is not None else {"one.zip": b"one", "two.zip": b"two"}).items():
+            (root / "archives" / name).write_bytes(content)
+        if mapping:
+            args.archive_map = root / "archive-map.json"
+            args.archive_map.write_text(json.dumps(
+                {LINK_ONE: "one.zip", LINK_TWO: "two.zip"} if mapping is True else mapping), encoding="utf-8")
+        commands, seen = [], {}
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append((stage, list(command)))
+            report["stage"] = stage
+            if stage == "convert":
+                (private / "converted.toml").write_text(converted, encoding="utf-8")
+            if stage == ports.BIND_STAGE:
+                seen["plan"] = json.loads(Path(command[command.index("--resolved-archives") + 1]).read_text())
+                if fail == stage:
+                    raise ports.Blocked("command_interrupted_or_timed_out" if interrupt else stage + "_failed")
+                Path(command[3]).write_text(converted, encoding="utf-8")
+            if stage == ports.BIND_GENERATE_STAGE:
+                if fail == stage:
+                    raise ports.Blocked(stage + "_failed")
+                Path(command[3]).write_text(bound_output, encoding="utf-8")
+            if stage == ports.DRAFT_REVIEW_STAGE:
+                seen["review_input"] = Path(command[2]).read_text(encoding="utf-8")
+                (private / (stage + ".log")).write_text(DRAFT_REPORT, encoding="utf-8")
+
+        report = {"commands": []}
+        error = None
+        with mock.patch.object(ports, "run", reviewing(fake_run)):
+            try:
+                ports.execute(args, report)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        return root, commands, report, error, seen
+
+    def documents(self):
+        converted = document(linked("Mod One", BIND_ONE, LINK_ONE), linked("Mod Two", BIND_TWO, LINK_TWO))
+        bound = document(linked("Mod One", BIND_ONE, LINK_ONE, bound=True), linked("Mod Two", BIND_TWO, LINK_TWO))
+        return converted, bound
+
+    def test_pass_order_commands_and_bound_count(self):
+        converted, bound = self.documents()
+        root, commands, report, _, seen = self.run_lane(converted, bound)
+        stages = [stage for stage, _ in commands]
+        self.assertEqual(stages[:5], ["build", "convert", ports.BIND_STAGE, ports.BIND_GENERATE_STAGE,
+                                      ports.DRAFT_REVIEW_STAGE])
+        private = next((root / "work").glob("ports-*"))
+        archives = str((root / "archives").resolve())
+        binding = dict(commands)[ports.BIND_STAGE]
+        self.assertEqual(binding[1:], [
+            "convert", str(root / "content" / "k1" / "full.md"), str(private / "converted-bound-pending.toml"),
+            "--format", "toml", "--parse-directions", "--source-path", archives,
+            "--resolved-archives", str(private / "resolved-archives.json")])
+        self.assertNotIn("--auto-generate-local", binding)
+        generate = dict(commands)[ports.BIND_GENERATE_STAGE]
+        self.assertEqual(generate[1:], [
+            "convert", str(private / "converted-bound-pending.toml"), str(private / "converted-bound.toml"),
+            "--format", "toml", "--source-path", archives, "--auto-generate-local",
+            "--archive-map", str((root / "archive-map.json").resolve())])
+        self.assertEqual(dict(commands)[ports.DRAFT_REVIEW_STAGE][2], str(private / "converted-bound.toml"))
+        self.assertEqual(seen["review_input"], bound)
+        self.assertEqual(seen["plan"], [{
+            "componentGuid": BIND_ONE, "filenames": ["one.zip"],
+            "sha256": hashlib.sha256(b"one").hexdigest(), "sizeBytes": 3}, {
+            "componentGuid": BIND_TWO, "filenames": ["two.zip"],
+            "sha256": hashlib.sha256(b"two").hexdigest(), "sizeBytes": 3}])
+        self.assertEqual(report["draft_review"]["bound"], 1)
+        self.assertEqual(report["draft_review"]["cleared"], 1)
+        self.assertNotIn("bind_failed", report["draft_review"])
+
+    def test_a_failed_binding_pass_keeps_the_plain_converted_toml(self):
+        converted, bound = self.documents()
+        for stage in (ports.BIND_STAGE, ports.BIND_GENERATE_STAGE):
+            with self.subTest(stage=stage):
+                _, commands, report, _, seen = self.run_lane(converted, bound, fail=stage)
+                self.assertEqual(seen["review_input"], converted)
+                self.assertEqual(report["draft_review"]["bound"], 0)
+                self.assertEqual(report["draft_review"]["bind_failed"], stage + "_failed")
+                self.assertEqual(report["draft_review"]["cleared"], 1)
+                self.assertIn(ports.DRAFT_REVIEW_STAGE, [name for name, _ in commands])
+
+    def test_an_interrupted_binding_pass_stops_the_lane(self):
+        converted, bound = self.documents()
+        _, commands, _, error, _ = self.run_lane(converted, bound, fail=ports.BIND_STAGE, interrupt=True)
+        self.assertEqual(error, "command_interrupted_or_timed_out")
+        self.assertNotIn(ports.DRAFT_REVIEW_STAGE, [name for name, _ in commands])
+
+    def test_output_that_loses_instructions_is_not_used(self):
+        converted, _ = self.documents()
+        lossy = document(linked("Mod One", BIND_ONE, LINK_ONE, bound=True, instructed=False),
+                         linked("Mod Two", BIND_TWO, LINK_TWO, instructed=False))
+        _, _, report, _, seen = self.run_lane(converted, lossy)
+        self.assertEqual(seen["review_input"], converted)
+        self.assertEqual(report["draft_review"]["bound"], 0)
+        self.assertEqual(report["draft_review"]["bind_failed"], "bound_output_drops_instructions_or_drafts")
+
+    def test_no_binding_is_attempted_without_a_map_or_a_unique_present_archive(self):
+        converted, bound = self.documents()
+        cases = {"no map": dict(mapping=False),
+                 "multi-file entries": dict(mapping={LINK_ONE: ["a.zip", "b.zip"], LINK_TWO: ["c.zip", "d.zip"]}),
+                 "archives missing": dict(files={})}
+        for label, options in cases.items():
+            with self.subTest(label):
+                _, commands, report, _, seen = self.run_lane(converted, bound, **options)
+                stages = [name for name, _ in commands]
+                self.assertNotIn(ports.BIND_STAGE, stages)
+                self.assertNotIn(ports.BIND_GENERATE_STAGE, stages)
+                self.assertEqual(seen["review_input"], converted)
+                self.assertEqual(report["draft_review"]["bound"], 0)
+                self.assertNotIn("bind_failed", report["draft_review"])
+
+    def test_an_unreadable_map_keeps_the_plain_converted_toml(self):
+        root, args = self.prepare("k1")
+        args.archive_map = root / "archive-map.json"
+        args.archive_map.write_text("[1]", encoding="utf-8")
+        review = {}
+        private = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(private))
+        with mock.patch.object(ports, "run", side_effect=AssertionError("must not run")):
+            kept = ports.bind_archives(["modsync"], root, args.guide, private / "converted.toml",
+                                       root / "archives", args.archive_map, private, {"draft_review": review}, {})
+        self.assertEqual(kept, private / "converted.toml")
+        self.assertEqual(review, {"bound": 0, "bind_failed": "archive_map_unreadable"})
+
+    def test_bound_and_failure_are_printed_for_the_ci_log(self):
+        report = {"draft_review": {"bound": 40, "cleared": 40, "skipped": [{}] * 111,
+                                   "bind_failed": "bind_archives_failed"}}
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            ports.print_diagnostics(report)
+        self.assertIn("archive binding bound 40 component(s); not used: bind_archives_failed", stderr.getvalue())
+        self.assertIn("cleared 40 component(s); left fenced: 111", stderr.getvalue())
+        with contextlib.redirect_stderr(io.StringIO()) as stderr:
+            ports.print_diagnostics({"draft_review": {"bound": 0}})
+        self.assertEqual(stderr.getvalue(), "")
+
+    def test_typescript_lanes_never_bind(self):
+        _, args = self.prepare("k2")
+        args.implementation = "typescript"
+        args.archive_map = args.guide.parent / "map.json"
+        args.archive_map.write_text("{}", encoding="utf-8")
+        args.guide.write_text(GUIDE.replace("## CRITICAL: Platform Notes\n\n### Platform Fix A\n\n", ""),
+                              encoding="utf-8")
+        stages = []
+
+        def fake_run(command, source, private, stage, report, env):
+            stages.append(stage)
+            if stage == "convert":
+                (private / "converted.toml").write_text(document(
+                    component("Mod One", "20000000-0000-0000-0000-000000000001"),
+                    component("Mod Two", "20000000-0000-0000-0000-000000000002")), encoding="utf-8")
+
+        with mock.patch.object(ports, "run", fake_run):
+            with self.assertRaises(ports.Blocked):
+                ports.execute(args, {"commands": []})
+        self.assertNotIn(ports.BIND_STAGE, stages)
+
+
 class LaneSkipTableTests(unittest.TestCase):
     def setUp(self):
         self.directory = Path(tempfile.mkdtemp())
