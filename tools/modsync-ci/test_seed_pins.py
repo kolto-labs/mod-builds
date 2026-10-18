@@ -270,7 +270,7 @@ class PinnedRestoreAndRefreshTests(PinFixture):
     def test_failed_refresh_still_downgrades_a_non_pinned_entry(self):
         item = item_for(NEXUS_URL)
         self.write_manifest(item, self.stored_entry(status="verified", evidence="download-without-upstream-metadata",
-                                                    checked_at=cache.time.time() - 30 * DAY))
+                                                    checked_at=cache.time.time() - 30 * DAY, store=False))
         with mock.patch.object(cache, "refresh_one", side_effect=ValueError(cache.NEXUS_REASON)):
             self.run_main(item, "refresh")
         self.assertEqual(self.read_entry(item)["status"], "stale-unknown")

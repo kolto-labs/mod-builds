@@ -1534,7 +1534,9 @@ def acquire(item, old, root, args, pins):
     Valid local object: reused when pinned, or when it has no validators and was checked inside
     --max-age-days; otherwise one conditional request (304 reuses it). A missing, corrupt or changed
     object comes from the optional remote, then P2P (both only for a hash the manifest knows), then
-    the website. When restoring and the website cannot be reached, the last valid local copy is used.
+    the website. When the website cannot be reached (restore and refresh alike, unless --force), the
+    last valid local copy is returned unchanged with source "stale-local": its manifest entry keeps
+    its old checked_at and validators, so the next run asks the website again.
     """
     if not (local_valid(root, old) and objects_match_selection(item, old)):
         if recover_objects(item, old, root, args, pins) and objects_match_selection(item, old):
@@ -1546,7 +1548,7 @@ def acquire(item, old, root, args, pins):
     try:
         result = download(item, old, root, args)
     except (ValueError, OSError, HTTPException, subprocess.SubprocessError, zipfile.BadZipFile):
-        if args.force or args.command != "restore":
+        if args.force:
             raise
         warn("upstream could not be checked for " + item["id"][:8] + "; using the last cached copy")
         return old, "stale-local"

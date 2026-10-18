@@ -164,9 +164,25 @@ class RevalidationTests(Fixture):
         self.assertEqual((code, report["entries"][0]["source"]), (0, "stale-local"))
         self.assertEqual(self.restored(), self.payload)
 
-    def test_refresh_does_not_hide_an_unreachable_website(self):
+    def test_refresh_falls_back_to_the_last_cached_copy_without_marking_it_checked(self):
         self.populate()
         self.age(30)
+        before = self.manifest()
+        with mock.patch.object(cache, "request", side_effect=ValueError("network request failed")):
+            code, report = self.run_main("refresh")
+        self.assertEqual((code, report["entries"][0]["source"]), (0, "stale-local"))
+        self.assertEqual(self.manifest(), before)
+
+    def test_refresh_with_force_does_not_hide_an_unreachable_website(self):
+        self.populate()
+        self.age(30)
+        with mock.patch.object(cache, "request", side_effect=ValueError("network request failed")):
+            code, report = self.run_main("refresh", "--force")
+        self.assertEqual((code, report["entries"][0]["status"]), (1, "unresolved"))
+
+    def test_refresh_without_a_valid_local_copy_stays_unresolved(self):
+        self.populate()
+        (self.root / "objects" / self.sha).unlink()
         with mock.patch.object(cache, "request", side_effect=ValueError("network request failed")):
             code, report = self.run_main("refresh")
         self.assertEqual((code, report["entries"][0]["status"]), (1, "unresolved"))

@@ -25,7 +25,11 @@ games grow. See [ci.md](ci.md#actions-cache-size-and-eviction).
 
 ## Source order per archive
 
-`cache.py` (`acquire`) takes the first of these that yields a verified archive:
+`cache.py` (`acquire`) takes the first of these that yields a verified archive. In
+short: cached copy, revalidated by a conditional GET against the website; when it
+changed or is missing, the optional bucket, then P2P, then the website; when the
+website cannot be reached, the last cached copy (`stale-local`). Unchanged files are
+never downloaded again:
 
 1. **Local copy from the restored Actions cache.** A valid copy (hashes, sizes,
    integrity and reviewed selection all match) is revalidated by a conditional GET
@@ -46,8 +50,11 @@ games grow. See [ci.md](ci.md#actions-cache-size-and-eviction).
 4. **The website** (the guide link's host; see [Freshness and providers](#freshness-and-providers)).
 
 Whatever lands is re-hashed and integrity-checked before use. If a valid local copy
-exists but the website cannot be reached to revalidate it on `restore`, the last
-valid local copy is used and the report source is `stale-local`. The command fails a link only when no source yields the archive
+exists but the website cannot be reached to revalidate it, the last valid local copy
+is used for both `restore` and `refresh` (not with `--force`) and the report source is
+`stale-local`; a warning without URLs is printed. A `stale-local` refresh leaves the
+manifest entry as it was (`checked_at` and validators are not bumped), so the next run
+asks the website again. The command fails a link only when no source yields the archive
 (`unresolved`). `.bik` is never cached: `kept_objects` skips any object with a
 `.bik` name.
 
