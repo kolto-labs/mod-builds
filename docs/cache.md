@@ -1,17 +1,50 @@
 # Caches
 
-CI keeps two caches. Both only make runs faster; the guides in
-`content/k1/full.md` and `content/k2/full.md` decide what gets installed. A cache
-never papers over a failure: a guide link that is not cached stops the lane that
-needs it.
+CI keeps two caches and an optional bucket. They only make runs faster; the
+guides in `content/k1/full.md` and `content/k2/full.md` decide what gets installed.
+A missing or stale cache is refilled from the next source. A lane stops at restore
+only when no source yields a required archive (see
+[Source order](#source-order-per-archive)).
 
-| Cache | Holds | Lives in | Written by |
+| Store | Holds | Lives in | Written by |
 | --- | --- | --- | --- |
-| Game | One encrypted, movie-free copy of K1 or K2 | Actions cache, key `game-<game>-v1` | `game` job |
-| Archives | Mod downloads named by the guides | S3-compatible bucket (Cloudflare R2 in CI), prefix `modsync-archives` | `mods` job |
+| Game cache | One encrypted, movie-free copy of K1 or K2 | Actions cache, key `game-<game>-v1` | `game` job |
+| Archive cache | Mod downloads named by the guides, at most 3 GiB per run | Actions cache, key `mod-archives-<run id>`, restored by the `mod-archives-` prefix | `mods` job |
+| R2 bucket (optional) | Archives and `manifest.json` | S3-compatible bucket (Cloudflare R2 in CI), prefix `modsync-archives` | `mods` job, only when the bucket secrets exist |
 
 The game cache is described in [steam.md](steam.md). The archives add up to tens
-of GB, too large for the 10 GB Actions cache, so they live in the bucket.
+of GB, far over what the Actions cache can hold, so `cache.py refresh` keeps only
+what fits `--cache-limit-bytes 3221225472` (3 GiB): pinned objects first, then the
+smallest. A link whose objects do not fit is reported `over-cache-limit` and its archive
+is fetched by the lane that needs it. The optional bucket can hold the full set.
+
+## Source order per archive
+
+`cache.py` (`acquire`) takes the first of these that yields a verified archive:
+
+1. **Local copy from the restored Actions cache.** A valid copy (hashes, sizes,
+   integrity and reviewed selection all match) is revalidated by a conditional GET
+   (ETag or Last-Modified): a 304 reuses it. A pinned entry is never revalidated.
+   A copy with no validators is reused without a request while it is under
+   `--max-age-days` old (14 days, the maximum); after that it is downloaded again.
+2. **R2 bucket,** only when `--remote` is set (the workflow sets it when the
+   bucket credentials and `MOD_CACHE_BUCKET` exist), and only for a hash the
+   manifest or a seed pin already knows. An unreachable bucket is skipped, not an
+   error.
+3. **P2P,** only when the archive has a `p2p` block with a `magnet` in
+   `tools/modsync-ci/seed_pins.json` (see `p2p_fetch.py`). It runs
+   the ModSync.rs binary (`MODSYNC_BINARY` or
+   `.modsync-source/target/debug/modsync`) as
+   `torrent-download --sha256 ... --no-proxy` and needs a reachable seeder listed in
+   `p2p.peers`; runners cannot accept inbound connections. No pin carries a `p2p`
+   block today, so this step is inert.
+4. **The website** (the guide link's host; see [Freshness and providers](#freshness-and-providers)).
+
+Whatever lands is re-hashed and integrity-checked before use. If a valid local copy
+exists but the website cannot be reached to revalidate it on `restore`, the last
+valid local copy is used and the report source is `stale-local`. The command fails a link only when no source yields the archive
+(`unresolved`). `.bik` is never cached: `kept_objects` skips any object with a
+`.bik` name.
 
 `.bik` movies are never cached. `game_cache.py pack` deletes them before sealing,
 and `unpack` fails if the restored tree does not match the recorded inventory. The
@@ -20,10 +53,12 @@ one mod download that is mostly video is also never cached (see
 
 ## Backend and names
 
-The archive bucket is reached through `rclone`. Each job that needs it defines an
-rclone remote named `MODCACHE` (type `s3`, provider `Cloudflare`) from the values
-below. Write and read credentials are separate pairs. Secrets and variables only;
-never put values in the repository.
+The optional archive bucket is reached through `rclone`. Each job that uses it
+defines an rclone remote named `MODCACHE` (type `s3`, provider `Cloudflare`) from
+the values below. Write and read credentials are separate pairs. Secrets and
+variables only; never put values in the repository. When the read key or
+`MOD_CACHE_BUCKET` is empty, `install` and `manual` pass no `--remote` and skip the
+bucket.
 
 | Name | Kind | Used by |
 | --- | --- | --- |
@@ -38,11 +73,13 @@ Archive objects are stored as downloaded, named by their SHA-256.
 
 ## Layout
 
-`manifest.json` plus `objects/<sha256>`. Manifest entries are keyed by the SHA-256
-of the guide URL and record the object hash(es), size, type, upstream validators,
-the last attempt and the freshness evidence. Objects are copied with
-`--immutable`, and nothing is pruned automatically. The `mods` job uses the
-`mod-cache-writer` concurrency group so only one refresh writes at a time.
+`manifest.json` plus `objects/<sha256>`, in the Actions cache directory and, when
+configured, in the bucket. Manifest entries are keyed by the SHA-256 of the guide
+URL and record the object hash(es), size, type, upstream validators, the last
+attempt and the freshness evidence. Bucket objects are copied with `--immutable`
+and nothing is pruned there automatically; the Actions cache directory is pruned
+to the 3 GiB limit on every refresh. The `mods` job uses the `mod-cache-writer`
+concurrency group so only one refresh writes at a time.
 
 - A download that is not an archive (see [Loose files](#loose-files)) is recorded
   with extension `file`.
@@ -52,8 +89,20 @@ the last attempt and the freshness evidence. Objects are copied with
 ## Refreshing: the `mods` job
 
 Runs on every trigger except fork and Dependabot pull requests, which get no
-secrets. It is `continue-on-error`, so a failure never blocks an install. It runs
-`tools/modsync-ci/refresh_archives.py --max-items 500`:
+secrets. It is `continue-on-error`, so a failure never blocks an install. In order:
+
+1. Restore the Actions cache (`mod-archives-` prefix).
+2. Optional bucket refresh (`continue-on-error`; needs the write pair and
+   `MOD_CACHE_BUCKET`): `refresh_archives.py --max-items 500`, described below.
+3. Archive cache refresh (`continue-on-error`): `cache.py refresh --cache-dir
+   <dir> --cache-limit-bytes 3221225472`, with `--remote` when the bucket is
+   configured. It follows the [source order](#source-order-per-archive),
+   revalidates every archive and prunes to the limit (pinned first, then smallest).
+4. Save the Actions cache under `mod-archives-<run id>` (`if: always()`).
+
+`install` and `manual` only restore the Actions cache; they never save it.
+
+`refresh_archives.py` (step 2) maintains the optional bucket:
 
 1. Pull `manifest.json` from the bucket (not the objects).
 2. Drop links listed under `uncached` in `archive_selections.json` (see
@@ -85,34 +134,39 @@ ID from `cache.py discover`.
 
 ```sh
 python tools/modsync-ci/cache.py restore --guide content/<game>/full.md \
-  --cache-dir <dir> --destination <archives> --remote MODCACHE:<bucket>/modsync-archives
+  --cache-dir <dir> --destination <archives> \
+  [--remote MODCACHE:<bucket>/modsync-archives]
 ```
 
 `--archive-map <path>` (restore only) also writes `{guide link URL: restored filename
 or [filenames]}` for restored links, for `modsync convert --archive-map`.
 
-Restore is fail-closed. Install and manual jobs never add a link to the cache; only
-the `mods` job does. For every link in the guide, restore:
+Install and manual jobs restore the Actions cache first (`mod-archives-` prefix),
+then run `cache.py restore` against it, with `--remote` only when the read pair and
+`MOD_CACHE_BUCKET` exist. They never save the cache. For every link in the guide,
+restore takes the first source that yields a verified archive (see
+[Source order](#source-order-per-archive)), then:
 
-- fails that link (`cache missing; archive refresh job must populate it`) if the
-  manifest has no objects for it. It does not go and fetch a link the cache has
-  never held;
-- otherwise checks the hashes, sizes and archive integrity of the stored objects
-  and copies each into a lane-local directory under its original file name. A
-  duplicate file name, a hash mismatch, or a loose file that is not a reviewed
-  selection fails that link.
+- checks the hashes, sizes and archive integrity of the object and copies each
+  into a lane-local directory under its original file name. A duplicate file name,
+  a hash mismatch, or a loose file that is not a reviewed selection fails that
+  link.
   When two links under one guide mod heading would restore to the same stored name,
   the link with a reviewed seed pin keeps the name (otherwise the link whose own URL
   file name it is, otherwise guide order) and each other link gets
   `<stem>-<first 8 characters of its id>.<ext>`. Stored names and manifests are not
   changed, and the same name under different mod headings still fails.
 
-If a stored entry is stale (older than 14 days, an object missing or corrupt, or
-the reviewed selection changed), restore re-fetches that one already-known link
-from its source and verifies it, then tries to push the repair back. These jobs
-hold only the read pair, so that push is expected to fail. The workflow treats a
-non-zero first attempt as a warning and runs restore again against the local,
-already verified cache; the second attempt decides whether the job continues.
+A link the manifest does not know yet is fetched from the website like any other
+(there is no pre-populated-cache requirement), and a repaired or newly fetched
+entry is written to the local manifest. Because the lanes do not save the Actions
+cache, that repair lasts for the run only. The report's `source` field for each
+link is `local`, `revalidated`, `recovered` (bucket or P2P), `website` or
+`stale-local`.
+
+A link fails (`unresolved`) when no source yields a valid archive: it is not in the
+local cache, the bucket and P2P cannot supply it, and the website cannot be
+fetched or is blocked (login walls, Nexus, GameFront, CAPTCHAs).
 
 A link listed under `uncached` is not looked up in the manifest at all. Restore
 reports it with `status: "uncached-by-policy"` and a reason that starts with
@@ -120,8 +174,10 @@ reports it with `status: "uncached-by-policy"` and a reason that starts with
 (a link the cache failed to supply), and it still counts against the exit code.
 
 If any link remains unresolved or uncached by policy, the command exits 1 and the job stops at the
-restore step, before any install work. A lane therefore cannot start with a
-guide whose archives are not all present.
+restore step, before any install work. This is the only hard failure: a lane cannot
+start with a guide whose archives are not all present, but a stale cache, an
+unreachable bucket, an inert P2P step or an unreachable website with a valid local
+copy do not fail it.
 
 The one exception is opt-in and per lane: `--allow-uncached-by-policy VALUE`
 (repeatable, `restore` only). `VALUE` is one of:
@@ -152,8 +208,11 @@ only after confirming the lane never installs the named section or step (see
 
 - A conditional GET (ETag or Last-Modified) answered with 304 for a verified
   object counts as fresh. A full download must pass the archive check first. A
-  failed refresh marks the entry stale and keeps its bytes. A download without
-  upstream validators is accepted as verified, and is re-downloaded after 14 days.
+  failed `refresh` marks the entry stale and keeps its bytes; a failed check on
+  `restore` falls back to the last valid local copy. A download without
+  upstream validators is accepted as verified, is reused without a request for
+  14 days (`--max-age-days`, at most 14) and is downloaded again after that.
+  Pinned entries are never revalidated.
 - Hosts:
 
   | Host | Handling |
@@ -216,8 +275,7 @@ fetched, never uploaded and never restored:
   stay in the bucket as unreferenced orphans; purge them by hand.
 - `cache.py refresh` reports `uncached-by-policy` (not a failure), `import-existing`
   never copies it, and `refresh_one` raises before opening a connection.
-- `cache.py restore` reports `uncached-by-policy` and exits 1 (fail-closed, see
-  above) unless `--allow-uncached-by-policy` names the section (or `SECTION::STEP`) covering
+- `cache.py restore` reports `uncached-by-policy` and exits 1 (see above) unless `--allow-uncached-by-policy` names the section (or `SECTION::STEP`) covering
   every step that references the link; the status is then `uncached-skipped`.
 
 Today the list holds three reviewed entries, each a reviewed decision with its
@@ -286,8 +344,8 @@ All five fields are required. `url` is an https archive URL without query on the
 same host as the guide link; `file` is the filesystem-safe name restore writes;
 `sha256` and `size` pin the content. Such a link is kept by `discover`, resolved
 to `url` without fetching the landing page, and a download whose hash or size
-differs from the entry is rejected (re-review the entry). The `mods` job must run
-once to populate the cache; restore never fetches an unknown link. The archive map
+differs from the entry is rejected (re-review the entry). A link not yet
+in the cache is fetched from this URL by `restore` or `refresh`. The archive map
 key is the guide link without its query, as for every link.
 
 ## Operator seed (Nexus Mods and GameFront)
@@ -414,8 +472,9 @@ around.
 - **GameFront:** 2 links. The client has no adapter and does not request them; a
   manual request returns HTTP 403 with a Cloudflare challenge.
 
-Links with a reviewed pin are the exception: they restore from the bucket once
-seeded (see [Operator seed](#operator-seed-nexus-mods-and-gamefront)). Every other
+Links with a reviewed pin are the exception: once seeded they restore from the
+bucket, which needs the bucket credentials (see
+[Operator seed](#operator-seed-nexus-mods-and-gamefront)). Every other
 Nexus or GameFront link above stays blocked.
 - **DeadlyStream post 2503** (K2 cutscene videos): the entry pins the main file and
   its `_mods` file, 1920x1080 at 30fps. The two together are about 25.7 GB of Bink

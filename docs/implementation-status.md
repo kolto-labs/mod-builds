@@ -16,14 +16,19 @@ Everything runs from one workflow, `.github/workflows/ci.yml`; see [ci.md](ci.md
   download with SteamCMD (saved login if `STEAM_CONFIG_VDF` is set, then password,
   then `STEAM_GUARD_CODES`) and save it. Fails only if the game is still missing.
   `.bik` movies are never cached. See [steam.md](steam.md).
-- **`mods`:** refresh up to 500 due archive links per run into the S3-compatible
-  (Cloudflare R2) cache through `rclone`, with the write credentials. Unresolved
-  links are reported, not errors, and the job never blocks an install. It is the
-  only job that adds links to the cache. See [cache.md](cache.md).
+- **`mods`:** restores the Actions cache, optionally refreshes the Cloudflare R2
+  bucket (write credentials; skipped without them), then runs `cache.py refresh`,
+  which revalidates each archive and keeps at most 3 GiB (pinned first, then
+  smallest) in the Actions cache. Unresolved links are reported, not errors, and
+  the job never blocks an install. It is the only job that saves the cache. See
+  [cache.md](cache.md).
 - **`install` (k1, k2 × rust, typescript × cli, gui):** restore and verify the game
-  (a cache miss fails the lane), restore archives with read-only credentials,
-  then run `ports.py`. Archive restore is fail-closed: any link not restored and
-  verified stops the lane before install. TypeScript lanes fail at the start if
+  (a cache miss fails the lane), restore archives, then run `ports.py`. Per
+  archive, restore takes the first of: the restored Actions-cache copy
+  (revalidated by conditional GET), the optional R2 bucket (read-only credentials),
+  P2P (inert: no pin has a magnet), the website. The last valid local copy is used
+  if the website is unreachable. The lane stops before install only when no source
+  yields a required archive. TypeScript lanes fail at the start if
   `ci/<game>-typescript-review.json` is missing. Lanes run per game even if the
   other game failed. See [ports.md](ports.md).
 - **`manual` (k1, k2):** same restores, then `manual.py` with a reviewed plan. The
@@ -40,7 +45,7 @@ All jobs use Linux runners because the adapters are POSIX and Xvfb only.
 | --- | --- |
 | K1 game cache | Present, served by the fallback entry `steam-sealed-v3-excludingmovies-k1-Linux-*`; there is no `game-k1-v1` entry |
 | K2 game cache | Present: `game-k2-v1`, saved 2026-10-16 |
-| Mod archive cache | Partial. Contents are not readable from a workstation without the bucket credentials; per-run totals are in the `mods` step summary |
+| Mod archive cache | Partial. The Actions cache holds at most 3 GiB per run; the optional R2 bucket is not readable from a workstation without its credentials. Per-run totals are in the `mods` step summary |
 | Review manifests (`ci/<game>-<impl>-review.json`) | None committed (no `ci/` directory exists) |
 | Manual plans (`ci/<game>-manual-plan.json`) | None committed |
 
@@ -56,10 +61,12 @@ full-guide install has passed in CI for any lane.
   a seed and a downloader on the same runner move a random 3 MB zip byte for byte,
   and a download with a wrong `--sha256` is refused with no output file. It does
   not test DHT, trackers, SOCKS5, NAT traversal or any GUI.
-- **ModSync.ts:** has no P2P. Physical installation is unavailable:
-  `installer.ts` throws for every non-dry-run install, so a TypeScript lane cannot
-  complete an install even with a reviewed manifest. Only dry-run prediction on a
-  virtual filesystem works.
+- **ModSync.ts:** has no P2P. The CI lanes build it from `feat/physical-install`
+  (`MODSYNC_TS_REF`) and the `cli` lane passes `--ci-physical-install`; the default
+  branch throws for every non-dry-run install. The TypeScript lanes still need
+  `ci/<game>-typescript-review.json` and a policy-skip mechanism, and the GUI/server
+  route still reports `physicalRestore: false`, so no TypeScript lane is expected to
+  complete a full install yet.
 
 ## Known external blockers
 
@@ -71,8 +78,8 @@ None of these is bypassed.
 | GameFront | 2 links; HTTP 403 with a Cloudflare challenge | Never cached; the client has no adapter |
 | DeadlyStream post 2503 (K2 cutscenes) | About 25.7 GB of Bink video; listed under `uncached` in `archive_selections.json` | Never downloaded or uploaded; restore reports `uncached-by-policy` and K2 restore fails, except in the Rust install lanes, which pass the reviewed step-scoped `--allow-uncached-by-policy "Enhanced Widescreen Support Mods::K2 Cutscenes Rescaled"` and have `ports.py` deselect the component |
 
-Because restore is fail-closed, a guide that contains any of these links stops at
-the restore step in every install and manual lane.
+A guide that contains any of these links stops at the restore step in every
+install and manual lane, because no source can supply the archive.
 
 ## Rust lane gaps
 
@@ -96,6 +103,7 @@ the restore step in every install and manual lane.
    unresolved from the `mods` step summary.
 3. Commit reviewed `ci/<game>-typescript-review.json` manifests and
    `ci/<game>-manual-plan.json` plans.
-4. Finish the TypeScript physical install and the Rust archive-aware install work
+4. Finish the TypeScript physical install (review manifests, policy skip, GUI
+   route) and the Rust archive-aware install work
    (including the missing `Instructions` and the file-name limitation), then run
    every lane against the cached baselines.
