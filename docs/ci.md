@@ -78,7 +78,7 @@ named section or step may pass it. Checked against the lane code on the current
 | --- | --- | --- |
 | `rust` + `cli` | Yes. `ports.py` runs `install --phase all`; the converter leaves widescreen components selected (`IsSelected = true`, `WidescreenOnly = true`) | Not allowed |
 | `rust` + `gui` | No. `ports.py` passes `--exclude-widescreen` to `gui_rust.py`, which deselects every widescreen-only component in a private copy of the converted TOML and reports it as not covered | Not wired |
-| `typescript` + `cli`/`gui` | Not selected for install (`select_base_components`), but `validate --all` selects every mod, and both lanes require a reviewed manifest and an installer that is unavailable | Not wired |
+| `typescript` + `cli`/`gui` | Not selected for install (`select_base_components`), but `validate --all` selects every mod, and both lanes require a reviewed manifest that does not exist yet (and have no deselect mechanism). The `cli` lane now attempts a physical install (`--ci-physical-install`, see below); the `gui` lane does not | Not wired |
 | `manual` | Unknown: depends on the human-reviewed `ci/<game>-manual-plan.json`, which does not exist | Not wired |
 
 Reviewed policy (step-scoped, never a whole section). **Wired for the Rust install
@@ -112,15 +112,34 @@ the lane report as `skipped_by_reviewed_policy` and never counted as covered. Ev
 other Nexus and GameFront link still fails restore.
 
 The `typescript` lanes get neither the flags nor `--restore-report`: they require
-a reviewed manifest that does not exist and cannot complete an install, and
+a reviewed manifest that does not exist, have no deselect mechanism, and
 `validate --all` would select the skipped step.
 
 - **`typescript` lanes** first require `ci/<game>-typescript-review.json`, a
   human-reviewed manifest. If it is missing, the job fails; it never passes
-  without one. `ports.py` then validates it against the guide hashes. Even with a
-  manifest, a TypeScript lane cannot complete an install today: ModSync.ts
-  `installer.ts` throws for any non-dry-run install ("Independent TypeScript
-  physical installation is unavailable").
+  without one. `ports.py` then validates it against the guide hashes. No
+  `ci/*-typescript-review.json` exists yet (it must be human-authored), so these
+  lanes still fail at that step and are not claimed to pass; they also have no
+  policy-skip mechanism (`--restore-report` is refused).
+  - **Source ref.** The `typescript` lanes check out ModSync.ts at
+    `vars.MODSYNC_TS_REF`, default `feat/physical-install` (workflow-level env
+    `MODSYNC_TS_REF`), not the repository default branch. That branch is unmerged
+    and adds an opt-in, CI-only physical install; the default branch
+    (`claude/modsync-nodejs-typescript-0ea3qs` at the time of writing) throws for
+    any non-dry-run install. The Rust lanes keep the repository's default branch.
+  - **Physical install (`cli` lane).** After `validate`, `ports.py` runs
+    `install ... --phase base` and `install ... --phase widescreen`, each with
+    `--ci-physical-install`. ModSync.ts then guards the game and archive roots with
+    a portable lockfile (advisory; stale locks are never stolen) instead of native
+    OS ownership. The flag is passed only to these two TypeScript `install`
+    commands: not to `validate`, `import-md`, the Rust lanes, or the `manual` lane.
+  - **`gui` lane.** `gui_typescript.py` drives the web UI and gets no flag. On the
+    feat/physical-install commit (`2b3fecb`) its docs state the server and GUI
+    routes still report `physicalRestore: false`, so a physical GUI install is not
+    expected to work until ModSync.ts changes; untested here.
+  - Still refused by ModSync.ts with the flag: `CreateDirectory` instructions and
+    canonical authored guides (`rustAuthoringGuide`); Patcher/Execute steps run
+    but cannot be rolled back from checkpoints.
 - **`rust` lanes** use `ci/<game>-rust-review.json` only if it exists. They build
   with Cargo, which fetches private git dependencies (`kolto-labs/OdyPatcher`,
   `holowan-biolabs/odynsscomp`). A step before the build points `git` at
@@ -190,6 +209,7 @@ Names only.
 | `MOD_CACHE_BUCKET` | variable | R2 bucket |
 | `MODSYNC_SOURCE_TOKEN` | secret | Read access to the ModSync source repositories and their private Cargo git dependencies |
 | `MODSYNC_RS_REPOSITORY`, `MODSYNC_TS_REPOSITORY` | variable | Repositories to build for `rust` and `typescript` |
+| `MODSYNC_TS_REF` | variable (optional) | ModSync.ts ref the `typescript` lanes check out; default `feat/physical-install` |
 
 Each secret is only exposed to the steps that use it.
 

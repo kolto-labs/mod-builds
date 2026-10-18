@@ -235,6 +235,7 @@ IMPLEMENTATION_SECTIONS = {
 }
 
 
+TYPESCRIPT_PHYSICAL_INSTALL_FLAG = "--ci-physical-install"
 SKIPPED_BY_POLICY = "skipped-by-reviewed-policy"
 SKIPPED_REPORT_KEY = "skipped_by_reviewed_policy"
 LANE_SKIPS_PATH = Path(__file__).with_name("archive_selections.json")
@@ -718,7 +719,8 @@ def execute(args, report):
             if (digest(guide) != report["guide_sha256"]
                     or digest(converted) != report["converted_sha256"]):
                 raise Blocked("reviewed_inputs_changed")
-            run(command + ["install"] + directories + ["--phase", phase] + choices,
+            run(command + ["install"] + directories + ["--phase", phase] + choices
+                + [TYPESCRIPT_PHYSICAL_INSTALL_FLAG],
                 source, private, "install_" + phase, report, env)
         report["status"] = "installed"
         report["reason"] = "native_install_commands_succeeded"

@@ -26,6 +26,11 @@ on:
 permissions:
   contents: read
 
+env:
+  # ModSync.ts ref the typescript install lanes build. Physical install
+  # (--ci-physical-install) exists only on this branch, not on the repository default branch.
+  MODSYNC_TS_REF: ${{ vars.MODSYNC_TS_REF || 'feat/physical-install' }}
+
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -295,6 +300,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: ${{ steps.source.outputs.repository }}
+          ref: ${{ matrix.implementation == 'typescript' && env.MODSYNC_TS_REF || '' }}
           token: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
           path: .modsync-source
           persist-credentials: false

@@ -333,6 +333,7 @@ class AlternativeCutsceneSkipTests(unittest.TestCase):
             self.assertEqual([value for flag, value in zip(command, command[1:]) if flag == "--deselect"],
                              [PACK_A_GUID])
             self.assertNotIn(PACK_B_GUID, command)
+            self.assertNotIn("--ci-physical-install", command)
         self.assertEqual(report["status"], "installed")
 
 
@@ -628,6 +629,65 @@ class ExecuteCommandTests(unittest.TestCase):
                          hashlib.sha256(converted.read_bytes()).hexdigest())
         loaded = tomllib.loads(converted.read_text(encoding="utf-8"))
         self.assertTrue(all(item["IsSelected"] for item in loaded["thisMod"]))
+
+    def run_typescript_install(self, mode):
+        _, args = self.prepare("k2")
+        args.implementation = "typescript"
+        args.mode = mode
+        args.review_manifest = args.work_dir.parent / "review.json"
+        args.guide.write_text(GUIDE.replace("## CRITICAL: Platform Notes\n\n### Platform Fix A\n\n", ""),
+                              encoding="utf-8")
+        text = document(
+            component("Mod One", "20000000-0000-0000-0000-000000000001"),
+            component("Mod Two", "20000000-0000-0000-0000-000000000002"),
+        )
+        commands = []
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append((stage, list(command)))
+            if stage == "convert":
+                (private / "converted.toml").write_text(text, encoding="utf-8")
+            if stage == "gui":
+                raise ports.Blocked("gui_stopped_by_test")
+
+        report = {"commands": []}
+        answers = ["--choice", "20000000-0000-0000-0000-000000000009=1"]
+        error = None
+        with mock.patch.object(ports, "run", fake_run), \
+                mock.patch.object(ports, "review_manifest", return_value=answers):
+            try:
+                ports.execute(args, report)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        return commands, report, error, answers
+
+    def test_typescript_cli_installs_both_phases_with_the_physical_install_flag(self):
+        commands, report, error, answers = self.run_typescript_install("cli")
+        self.assertIsNone(error)
+        self.assertEqual(report["status"], "installed")
+        installs = [(stage, command) for stage, command in commands if stage.startswith("install_")]
+        self.assertEqual([stage for stage, _ in installs], ["install_base", "install_widescreen"])
+        for phase, (stage, command) in zip(("base", "widescreen"), installs):
+            self.assertEqual(ports.TYPESCRIPT_PHYSICAL_INSTALL_FLAG, "--ci-physical-install")
+            self.assertEqual(command.count("--ci-physical-install"), 1)
+            self.assertEqual(command[command.index("--phase") + 1], phase)
+            self.assertEqual(command[command.index("install"):][-3:], answers[:2] + ["--ci-physical-install"])
+            self.assertEqual(command[command.index("install") + 1:].count("--phase"), 1)
+
+    def test_typescript_flag_is_only_on_install_commands(self):
+        commands, _, error, _ = self.run_typescript_install("cli")
+        self.assertIsNone(error)
+        for stage, command in commands:
+            if not stage.startswith("install_"):
+                self.assertNotIn("--ci-physical-install", command, stage)
+
+    def test_typescript_gui_lane_never_gets_the_physical_install_flag(self):
+        commands, _, error, _ = self.run_typescript_install("gui")
+        self.assertEqual(error, "gui_stopped_by_test")
+        self.assertIn("gui", [stage for stage, _ in commands])
+        self.assertFalse([stage for stage, _ in commands if stage.startswith("install_")])
+        for stage, command in commands:
+            self.assertNotIn("--ci-physical-install", command, stage)
 
     def test_rust_convert_infers_local_instructions_from_archives(self):
         root, args = self.prepare("k1")

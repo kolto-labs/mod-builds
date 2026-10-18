@@ -9,7 +9,10 @@ and mode (`cli`, `gui`).
 Each lane:
 
 1. Checks out the ModSync source from `MODSYNC_RS_REPOSITORY` or
-   `MODSYNC_TS_REPOSITORY` using `MODSYNC_SOURCE_TOKEN`.
+   `MODSYNC_TS_REPOSITORY` using `MODSYNC_SOURCE_TOKEN`. Rust uses the repository
+   default branch; TypeScript uses `vars.MODSYNC_TS_REF` (workflow env
+   `MODSYNC_TS_REF`, default `feat/physical-install`), the unmerged ModSync.ts branch
+   that adds opt-in physical install.
 2. Restores `game-<game>-v1` (a miss fails the lane) and runs `game_cache.py
    unpack`, which verifies every file. See [steam.md](steam.md).
 3. Restores archives with `cache.py restore --archive-map`. This is best effort; a missing
@@ -94,9 +97,20 @@ TypeScript (`pnpm build`, then the built CLI; the guide's parent directory selec
 ```text
 node packages/cli/dist/main.js import-md full.md --output converted.toml --game kotor1
 node packages/cli/dist/main.js validate converted.toml --kotor GAME --mods ARCHIVES --all
-node packages/cli/dist/main.js install converted.toml --kotor GAME --mods ARCHIVES --all --phase base [--choice GUID=ANSWER ...]
-node packages/cli/dist/main.js install converted.toml --kotor GAME --mods ARCHIVES --all --phase widescreen [--choice GUID=ANSWER ...]
+node packages/cli/dist/main.js install converted.toml --kotor GAME --mods ARCHIVES --all --phase base [--choice GUID=ANSWER ...] --ci-physical-install
+node packages/cli/dist/main.js install converted.toml --kotor GAME --mods ARCHIVES --all --phase widescreen [--choice GUID=ANSWER ...] --ci-physical-install
 ```
+
+`--ci-physical-install` is passed to both TypeScript `install` commands (`cli` mode)
+and nowhere else. Without it (or `MODSYNC_CI_PHYSICAL_INSTALL=1`) ModSync.ts refuses
+any non-dry-run install. It exists only on the ModSync.ts `feat/physical-install`
+branch, which the TypeScript lanes check out by default; on the repository default
+branch the option is unknown and the install fails. With the flag, ModSync.ts uses a
+portable, advisory lockfile in place of native OS ownership, and still refuses
+`CreateDirectory` and canonical authored guides. The TypeScript `gui` mode runs
+`gui_typescript.py` instead of these commands and does not pass the flag. The lanes
+still need the human-authored `ci/<game>-typescript-review.json` and have no policy-skip
+mechanism.
 
 ## TypeScript review manifest (schema 1)
 
