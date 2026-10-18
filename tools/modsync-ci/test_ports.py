@@ -50,6 +50,15 @@ def document(*blocks):
     return "[Config]\nTargetGame = \"KOTOR2\"\n\n" + "\n".join(blocks)
 
 
+def reviewing(fake_run):
+    """Wrap a fake `ports.run` so the draft-review convert copies its input to its output."""
+    def wrapped(command, source, private, stage, report, env):
+        fake_run(command, source, private, stage, report, env)
+        if stage == ports.DRAFT_REVIEW_STAGE:
+            Path(command[3]).write_bytes(Path(command[2]).read_bytes())
+    return wrapped
+
+
 GUIDE_WITH_HELPER = """# Guide
 
 ## Optional Helper Section
@@ -316,7 +325,7 @@ class AlternativeCutsceneSkipTests(unittest.TestCase):
                 (private / "converted.toml").write_text(alternatives_document(), encoding="utf-8")
 
         report = {"commands": []}
-        with mock.patch.object(ports, "run", fake_run):
+        with mock.patch.object(ports, "run", reviewing(fake_run)):
             ports.execute(args, report)
         staged = dict(commands)
         for stage in ("validate", "install"):
@@ -594,7 +603,7 @@ class ExecuteCommandTests(unittest.TestCase):
                 (private / "converted.toml").write_text(converted_text, encoding="utf-8")
 
         report = {"commands": []}
-        with mock.patch.object(ports, "run", fake_run):
+        with mock.patch.object(ports, "run", reviewing(fake_run)):
             with self.assertRaises(ports.Blocked) as caught:
                 ports.execute(args, report)
         return commands, report, str(caught.exception)
@@ -668,7 +677,7 @@ class ExecuteCommandTests(unittest.TestCase):
 
         report = {"commands": []}
         error = None
-        with mock.patch.object(ports, "run", fake_run):
+        with mock.patch.object(ports, "run", reviewing(fake_run)):
             try:
                 ports.execute(args, report)
             except ports.Blocked as blocked:
@@ -733,7 +742,7 @@ class ExecuteCommandTests(unittest.TestCase):
 
         report = {"commands": []}
         error = None
-        with mock.patch.object(ports, "run", fake_run):
+        with mock.patch.object(ports, "run", reviewing(fake_run)):
             try:
                 ports.execute(args, report)
             except ports.Blocked as blocked:
@@ -858,6 +867,205 @@ def lane_entry(**override):
     return entry
 
 
+def draft_block(prefix, guid, required=True, gaps=0):
+    return "\n".join([
+        "[" + prefix + ".DraftReview]",
+        "RequiresReview = " + ("true" if required else "false"),
+        "[" + prefix + ".DraftReview.Result]",
+        'ComponentGuid = "' + guid + '"',
+        "DraftInstructionCount = 1",
+        "UnparsedGaps = [" + ", ".join(['"gap"'] * gaps) + "]",
+        "ConditionalDrafts = []",
+        "RejectedDrafts = 0",
+        "",
+    ])
+
+
+def drafted(name, guid, required=True, gaps=0, selected=True, widescreen=False):
+    extra = {"WidescreenOnly": "true"} if widescreen else {}
+    block = component(name, guid, **extra).replace(
+        "IsSelected = false", "IsSelected = " + ("true" if selected else "false"), 1)
+    return block + "\n" + draft_block("thisMod", guid, required, gaps)
+
+
+DRAFT_ONE = "60000000-0000-0000-0000-000000000001"
+DRAFT_TWO = "60000000-0000-0000-0000-000000000002"
+DRAFT_REPORT = (
+    "ports: noise before the report\n"
+    "{\n"
+    '  "cleared": [\n    "' + DRAFT_ONE + '"\n  ],\n'
+    '  "skipped": [\n    {\n      "guid": "' + DRAFT_TWO.upper() + '",\n'
+    '      "name": "Mod Two",\n      "reason": "Draft was not generated from resolved archive filenames"\n    }\n  ]\n'
+    "}\n")
+
+
+class VerifiedDraftReviewTests(unittest.TestCase):
+    prepare = ExecuteCommandTests.prepare
+
+    def read_converted(self, text):
+        path = Path(tempfile.mkdtemp()) / "converted.toml"
+        self.addCleanup(lambda: __import__("shutil").rmtree(path.parent))
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def test_report_is_parsed_from_the_merged_log(self):
+        log = self.read_converted(DRAFT_REPORT)
+        report = {}
+        ports.record_draft_review(log, report)
+        self.assertEqual(report["draft_review"], {"cleared": 1, "skipped": [
+            {"component_guid": DRAFT_TWO, "name": "Mod Two",
+             "reason": "Draft was not generated from resolved archive filenames"}]})
+
+    def test_unrelated_or_missing_logs_record_nothing(self):
+        for text in ("", "{\n  \"other\": 1\n}\n", "{\n  \"cleared\": [], \"skipped\": [1]\n}\n"):
+            report = {}
+            ports.record_draft_review(self.read_converted(text), report)
+            self.assertEqual(report, {})
+        ports.record_draft_review(Path("/nonexistent/review.log"), report := {})
+        self.assertEqual(report, {})
+
+    def test_pending_drafts_lists_every_unreviewed_selected_component(self):
+        converted = self.read_converted(document(
+            drafted("Mod One", DRAFT_ONE), drafted("Mod Two", DRAFT_TWO),
+            drafted("Done", "60000000-0000-0000-0000-000000000003", required=False),
+            component("Plain", "60000000-0000-0000-0000-000000000004")))
+        found = ports.pending_drafts(converted, set(), gui=False)
+        self.assertEqual([item["component_guid"] for item in found], [DRAFT_ONE, DRAFT_TWO])
+
+    def test_a_cleared_flag_with_leftover_gaps_still_counts_as_pending(self):
+        converted = self.read_converted(document(
+            drafted("Mod One", DRAFT_ONE, required=False, gaps=1)))
+        self.assertEqual(len(ports.pending_drafts(converted, set(), gui=False)), 1)
+
+    def test_prose_draft_warning_counts_as_pending(self):
+        converted = self.read_converted(document(
+            component("Mod One", DRAFT_ONE, InstallationWarning='"' + ports.REVIEW_FLAG + '"')
+            .replace("IsSelected = false", "IsSelected = true")))
+        self.assertEqual(len(ports.pending_drafts(converted, set(), gui=False)), 1)
+
+    def test_exempt_components_are_not_pending(self):
+        converted = self.read_converted(document(
+            drafted("Mod One", DRAFT_ONE), drafted("Mod Two", DRAFT_TWO)))
+        found = ports.pending_drafts(converted, {DRAFT_ONE}, gui=False)
+        self.assertEqual([item["component_guid"] for item in found], [DRAFT_TWO])
+
+    def test_unselected_components_are_ignored_by_the_cli_but_not_the_gui(self):
+        converted = self.read_converted(document(
+            drafted("Mod One", DRAFT_ONE), drafted("Mod Two", DRAFT_TWO, selected=False)))
+        self.assertEqual(len(ports.pending_drafts(converted, set(), gui=False)), 1)
+        self.assertEqual(len(ports.pending_drafts(converted, set(), gui=True)), 2)
+
+    def test_options_are_checked_with_their_owner_in_the_heading(self):
+        option_guid = "60000000-0000-0000-0000-0000000000a1"
+        text = document(component("Mod One", DRAFT_ONE).replace("IsSelected = false", "IsSelected = true")
+                        + "\n[[thisMod.Options]]\n"
+                        + 'Guid = "' + option_guid + '"\nName = "Opt"\nIsSelected = true\n'
+                        + draft_block("thisMod.Options", option_guid))
+        found = ports.pending_drafts(self.read_converted(text), set(), gui=False)
+        self.assertEqual(found, [{"component_guid": option_guid, "heading": "Mod One / Opt"}])
+        unselected = text.replace("IsSelected = true\n[thisMod.Options", "IsSelected = false\n[thisMod.Options")
+        self.assertEqual(ports.pending_drafts(self.read_converted(unselected), set(), gui=False), [])
+        self.assertEqual(len(ports.pending_drafts(self.read_converted(unselected), set(), gui=True)), 1)
+
+    def run_lane(self, converted, mode="cli", review_log=DRAFT_REPORT):
+        root, args = self.prepare("k1")
+        args.implementation = "rust"
+        args.mode = mode
+        commands = []
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append((stage, list(command)))
+            if stage == "convert":
+                (private / "converted.toml").write_text(converted, encoding="utf-8")
+            if stage == ports.DRAFT_REVIEW_STAGE:
+                (private / (stage + ".log")).write_text(review_log, encoding="utf-8")
+
+        report = {"commands": []}
+        error = None
+        with mock.patch.object(ports, "run", reviewing(fake_run)):
+            try:
+                ports.execute(args, report)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        return root, commands, report, error
+
+    def test_convert_runs_the_verified_review_on_the_converted_toml_with_the_archive_folder(self):
+        converted = document(component("Mod One", "60000000-0000-0000-0000-000000000011"),
+                             component("Mod Two", "60000000-0000-0000-0000-000000000012"))
+        root, commands, report, _ = self.run_lane(converted)
+        stages = [stage for stage, _ in commands]
+        self.assertEqual(stages[:3], ["build", "convert", ports.DRAFT_REVIEW_STAGE])
+        review = dict(commands)[ports.DRAFT_REVIEW_STAGE]
+        private = next((root / "work").glob("ports-*"))
+        self.assertEqual(review[1:], [
+            "convert", str(private / "converted.toml"), str(private / "converted-reviewed.toml"),
+            "--format", "toml", "--source-path", str((root / "archives").resolve()),
+            "--review-verified-drafts"])
+        self.assertEqual(report["draft_review"]["cleared"], 1)
+        self.assertEqual(report["converted_sha256"],
+                         hashlib.sha256((private / "converted.toml").read_bytes()).hexdigest())
+
+    def test_unreviewed_drafts_block_before_validate_and_list_every_guid(self):
+        converted = document(drafted("Mod One", DRAFT_ONE), drafted("Mod Two", DRAFT_TWO))
+        for mode in ("cli", "gui"):
+            with self.subTest(mode=mode):
+                _, commands, report, error = self.run_lane(converted, mode)
+                self.assertTrue(error.startswith("unreviewed_draft_instructions_remain: "))
+                self.assertIn(DRAFT_ONE, error)
+                self.assertIn(DRAFT_TWO, error)
+                self.assertIn("Mod One", error)
+                self.assertNotIn("validate", [stage for stage, _ in commands])
+                self.assertEqual([item["component_guid"] for item in report["draft_review"]["unreviewed"]],
+                                 [DRAFT_ONE, DRAFT_TWO])
+                self.assertEqual(report["draft_review"]["cleared"], 1)
+
+    def test_reviewed_components_let_the_lane_reach_validate(self):
+        converted = document(drafted("Mod One", DRAFT_ONE, required=False),
+                             drafted("Mod Two", DRAFT_TWO, required=False))
+        _, commands, report, error = self.run_lane(converted)
+        self.assertIsNone(error)
+        self.assertIn("validate", [stage for stage, _ in commands])
+        self.assertNotIn("unreviewed", report["draft_review"])
+
+    def test_a_failed_review_convert_blocks_and_keeps_the_report(self):
+        root, args = self.prepare("k1")
+        args.implementation = "rust"
+
+        def failing(command, source, private, stage, report, env):
+            if stage == "convert":
+                (private / "converted.toml").write_text(
+                    document(drafted("Mod One", DRAFT_ONE), drafted("Mod Two", DRAFT_TWO)), encoding="utf-8")
+            if stage == ports.DRAFT_REVIEW_STAGE:
+                (private / (stage + ".log")).write_text(DRAFT_REPORT, encoding="utf-8")
+                raise ports.Blocked(stage + "_failed")
+
+        report = {"commands": []}
+        with mock.patch.object(ports, "run", failing):
+            with self.assertRaises(ports.Blocked) as caught:
+                ports.execute(args, report)
+        self.assertEqual(str(caught.exception), "review_verified_drafts_failed")
+        self.assertEqual(report["draft_review"]["cleared"], 1)
+
+    def test_typescript_lanes_do_not_run_the_verified_review(self):
+        _, args = self.prepare("k2")
+        args.implementation = "typescript"
+        args.guide.write_text(GUIDE.replace("## CRITICAL: Platform Notes\n\n### Platform Fix A\n\n", ""),
+                              encoding="utf-8")
+        commands = []
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append(stage)
+            if stage == "convert":
+                (private / "converted.toml").write_text(document(
+                    component("Mod One", "20000000-0000-0000-0000-000000000001"),
+                    component("Mod Two", "20000000-0000-0000-0000-000000000002")), encoding="utf-8")
+
+        with mock.patch.object(ports, "run", fake_run):
+            with self.assertRaises(ports.Blocked):
+                ports.execute(args, {"commands": []})
+        self.assertNotIn(ports.DRAFT_REVIEW_STAGE, commands)
+
+
 class LaneSkipTableTests(unittest.TestCase):
     def setUp(self):
         self.directory = Path(tempfile.mkdtemp())
@@ -949,7 +1157,7 @@ class LaneSkipLaneTests(unittest.TestCase):
 
         report = {"commands": []}
         error = None
-        with mock.patch.object(ports, "run", fake_run):
+        with mock.patch.object(ports, "run", reviewing(fake_run)):
             try:
                 ports.execute(args, report)
             except ports.Blocked as blocked:

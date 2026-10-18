@@ -103,6 +103,91 @@ def record_convert_skips(log, report):
         "components": [item for item in skipped if item["cause"] != "already_had_instructions"]}
 
 
+REVIEW_FLAG = ("DRAFT INSTRUCTIONS: parsed from guide prose by the natural-language importer. "
+               "Review before installing - never auto-trusted.")
+DRAFT_REVIEW_STAGE = "review_verified_drafts"
+
+
+def record_draft_review(log, report):
+    """Keep the converter's {cleared, skipped} report (a JSON object on stderr, merged into the log)."""
+    try:
+        text = log.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return
+    decoder = json.JSONDecoder()
+    for start in (match.start() for match in re.finditer(r"^\{$", text, re.MULTILINE)):
+        try:
+            result, _ = decoder.raw_decode(text, start)
+        except ValueError:
+            continue
+        if (isinstance(result, dict) and isinstance(result.get("cleared"), list)
+                and isinstance(result.get("skipped"), list)
+                and all(isinstance(item, dict) and "guid" in item for item in result["skipped"])):
+            break
+    else:
+        return
+    report["draft_review"] = {
+        "cleared": len(result["cleared"]),
+        "skipped": [{"component_guid": str(item["guid"]).lower(),
+                     "name": item.get("name"), "reason": item.get("reason")}
+                    for item in result["skipped"]]}
+
+
+def draft_pending(component):
+    """True when this component or option still carries an unreviewed draft.
+
+    Mirrors the structural part of the Rust requires_review: a DraftReview that is
+    not RequiresReview=false, or one whose Result still lists gaps, conditions or
+    rejected drafts; with no DraftReview, the prose-draft InstallationWarning. The
+    reviewed-identity receipt itself is only checked by the Rust validate step.
+    """
+    if "DraftReview" in component:
+        review = component["DraftReview"]
+        if not isinstance(review, dict) or review.get("RequiresReview") is not False:
+            return True
+        result = review.get("Result")
+        return (not isinstance(result, dict)
+                or str(result.get("ComponentGuid", "")).lower() != str(component.get("Guid", "")).lower()
+                or bool(result.get("UnparsedGaps") or result.get("ConditionalDrafts")
+                        or result.get("RejectedDrafts")))
+    warning = component.get("InstallationWarning")
+    return isinstance(warning, str) and REVIEW_FLAG in warning
+
+
+def pending_drafts(converted, exempt_guids, gui):
+    """Selected components (and what they install) that still have an unreviewed draft.
+
+    exempt_guids are reviewed-policy skips and GUI widescreen exclusions: they are
+    never installed, so their drafts do not matter. The GUI lane installs every other
+    component and refuses any nested draft; the CLI lane installs components with
+    IsSelected = true (all, when none is selected, as the Rust loader does) and only
+    their selected options.
+    """
+    document = tomllib.loads(converted.read_text(encoding="utf-8"))
+    components = [component for component in document.get("thisMod", document.get("Components", []))
+                  if isinstance(component, dict)]
+    default_selected = not any(component.get("IsSelected") is True for component in components)
+    pending = []
+
+    def walk(component, owner):
+        heading = component.get("Heading", component.get("Name"))
+        if owner is not None:
+            heading = f"{owner} / {heading}"
+        if draft_pending(component):
+            pending.append({"component_guid": str(component.get("Guid", "")).lower(),
+                            "heading": heading})
+        for option in component.get("Options", []):
+            if isinstance(option, dict) and (gui or option.get("IsSelected") is True):
+                walk(option, heading)
+
+    for component in components:
+        if str(component.get("Guid", "")).lower() in exempt_guids:
+            continue
+        if gui or default_selected or component.get("IsSelected") is True:
+            walk(component, None)
+    return pending
+
+
 def reclassify_policy_skips(report, guids):
     """Move converter skips of reviewed-policy components out of their converter cause bucket."""
     skips = report.get("convert_skips")
@@ -120,6 +205,13 @@ def reclassify_policy_skips(report, guids):
 
 def print_diagnostics(report):
     """Put the skip causes and every uncovered step in the CI log so one read is enough."""
+    review = report.get("draft_review")
+    if review:
+        print(f"ports: verified-draft review cleared {review.get('cleared', 0)} component(s); "
+              f"left fenced: {len(review.get('skipped', []))}", file=sys.stderr)
+        for item in review.get("unreviewed", []):
+            print(f"ports: unreviewed draft still selected: {item['component_guid']} "
+                  f"({item['heading']})", file=sys.stderr)
     skips = report.get("convert_skips")
     if skips:
         causes = ", ".join(f"{cause}={count}" for cause, count in sorted(skips["by_cause"].items())
@@ -497,6 +589,16 @@ def execute(args, report):
                 source, private, "convert", report, env)
         finally:
             record_convert_skips(private / "convert.log", report)
+        reviewed = private / "converted-reviewed.toml"
+        try:
+            run(command + ["convert", str(converted), str(reviewed), "--format", "toml",
+                           "--source-path", str(archives), "--review-verified-drafts"],
+                source, private, DRAFT_REVIEW_STAGE, report, env)
+        finally:
+            record_draft_review(private / (DRAFT_REVIEW_STAGE + ".log"), report)
+        if not reviewed.is_file() or reviewed.is_symlink():
+            raise Blocked("review_verified_drafts_output_missing")
+        reviewed.replace(converted)
     else:
         if not (source / "packages/cli/src/main.ts").is_file():
             raise Blocked("typescript_source_entrypoint_missing")
@@ -537,6 +639,14 @@ def execute(args, report):
             "widescreen_phase": "not_covered_by_gui_lane" if has_widescreen else "none_in_input",
             "excluded_widescreen": excluded}
         deselect += [flag for item in excluded for flag in ("--deselect", item["component_guid"])]
+    if args.implementation == "rust":
+        report["stage"] = "draft_review"
+        pending = pending_drafts(
+            converted, policy_guids | {item["component_guid"] for item in excluded}, gui_rust)
+        if pending:
+            report.setdefault("draft_review", {})["unreviewed"] = pending
+            raise Blocked("unreviewed_draft_instructions_remain: " + "; ".join(
+                f"{item['component_guid']} ({item['heading']})" for item in pending))
     if args.implementation == "typescript":
         report["stage"] = "review"
         choices = review_manifest(args.review_manifest, guide, converted)

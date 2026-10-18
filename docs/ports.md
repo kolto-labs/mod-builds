@@ -48,12 +48,45 @@ backfilled.
 Rust (`cargo build --locked --bin modsync`, isolated target directory):
 
 ```text
-convert full.md converted.toml --format toml --parse-directions
+convert full.md converted.toml --format toml --parse-directions --auto-generate-local --source-path ARCHIVES [--archive-map MAP]
+convert converted.toml converted-reviewed.toml --format toml --source-path ARCHIVES --review-verified-drafts
 validate --input converted.toml --game-dir GAME --source-dir ARCHIVES [--deselect GUID ...]
 install --input converted.toml --game-dir GAME --source-dir ARCHIVES [--deselect GUID ...] --non-interactive --phase all
 ```
 
 `validate` takes the same `--deselect GUID` flags (see below).
+
+The second `convert` replaces `converted.toml` with `converted-reviewed.toml` before
+it is hashed. See [Verified draft review](#verified-draft-review).
+
+### Verified draft review
+
+`--review-verified-drafts` (ModSync.rs `aa7b355`) clears `DraftReview.RequiresReview`
+only for a draft that a fresh replay of its one hash-bound local archive reproduces
+exactly, and records a `Verification` receipt. Prose, method-bound, gapful, edited,
+bare-filename and multi-archive drafts stay fenced. `ports.py` never sets
+`RequiresReview` itself; this tool is the only automatic clearing.
+
+- **Report.** The lane report gets `draft_review`: `cleared` (a count) and `skipped`
+  (`component_guid`, `name`, `reason` of each draft left fenced, parsed from the
+  `{cleared, skipped}` JSON the converter prints on stderr into
+  `review_verified_drafts.log`). The parse is kept even when the step fails.
+- **Block before validate.** After coverage and the reviewed-policy/widescreen scope are
+  known, and before `validate`, the lane stops with `unreviewed_draft_instructions_remain:
+  <guid> (<heading>); ...` when any component it would install still has an unreviewed
+  draft. The reason and `draft_review.unreviewed` list every such component (an option
+  is listed as `Owner / Option` with its own GUID); stderr repeats them. Reviewed-policy
+  skips and, for the GUI lane, widescreen-only components excluded from it are never
+  checked.
+- **What "installed" means here.** The CLI lane checks components with `IsSelected =
+  true` (all when none is selected, as the Rust loader does) and their selected options.
+  The GUI lane installs every non-skipped, non-excluded component, so it checks all of
+  them and all nested options, like `gui_rust.py`.
+- **What counts as unreviewed.** `DraftReview` without `RequiresReview = false`, a
+  `Result` that is missing, names another component or still lists gaps, conditions or
+  rejected drafts, or (without `DraftReview`) the prose-draft `InstallationWarning`. The
+  reviewed-identity receipt is verified only by the Rust `validate`/`install`.
+- Rust lanes only; TypeScript lanes do not run it.
 
 TypeScript (`pnpm build`, then the built CLI; the guide's parent directory selects
 `kotor1` or `kotor2`):
@@ -214,6 +247,8 @@ component: `ComponentGuid`, `ComponentName`, `Success`, `InstructionsGenerated`,
 
 - `convert_skips`: `total`, `generated`, `by_cause` and `components` (guid, name, cause,
   converter `reason`; components that already had instructions are only counted).
+- `draft_review`: `cleared`, `skipped` and, when the lane stops on it, `unreviewed`
+  (see [Verified draft review](#verified-draft-review)).
 - `steps_without_instructions`, when `guide_steps_without_instructions` blocks the lane:
   one record per guide step lacking instructions with `heading`, `component_guid`,
   `urls` (the component's links, with any `#fragment` removed because a MEGA fragment is

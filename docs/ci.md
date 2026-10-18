@@ -130,6 +130,12 @@ a reviewed manifest that does not exist and cannot complete an install, and
   `ports.py` stops a Rust lane before install when a converted component has no
   `Instructions` (`guide_steps_without_instructions`); 69 K1 components were in
   that state when last measured.
+  It then runs `modsync convert --review-verified-drafts` on the converted TOML
+  (clears review only for drafts replay-verified against one local archive) and stops
+  before `validate` with `unreviewed_draft_instructions_remain`, listing every GUID,
+  if a component it would install still has an unreviewed draft; see
+  [ports.md](ports.md#verified-draft-review). Only `convert.log` is sealed and
+  uploaded; the `draft_review` summary is in the sealed `report.json`.
 - **GUI lanes** do not cover the separate widescreen phase. The Rust GUI lane runs
   one base phase over a defined subset: every converted component except the
   reviewed-policy skips and the widescreen-only components, which are
