@@ -6,10 +6,10 @@ attempt), restores and verifies each selected object, refreshes it with cache.py
 under a 3 GiB disk reserve, uploads the object and manifest, then evicts it.
 Only sanitized totals are printed: no URLs, remote paths, rclone output or secrets.
 
-Exit codes: 0 run completed (unresolved links are totals, not errors) or cache not
-configured; 1 infrastructure failure (backend unreachable,
-corrupt manifest, persistence failed); 2 usage error. A partly configured backend
-is reported as a warning and exits 0 so a configuration gap cannot fail the pipeline.
+The bucket is an optional accelerator next to the Actions cache and the websites, so it never
+fails the pipeline. Exit codes: 0 run completed (unresolved links are totals, not errors), cache
+not configured, backend unreachable, manifest corrupt or persistence failed (each reported as a
+warning; the summary says persistence_succeeded 0); 2 usage error.
 """
 import argparse
 import contextlib
@@ -332,9 +332,9 @@ def main(argv=None):
                 manifest["refresh_attempts"].pop(entry["id"], None)
             cache.atomic_json(manifest_path, manifest)
         except (subprocess.SubprocessError, ValueError, OSError) as error:
-            print(f"::error::Archive cache backend unreachable or manifest corrupt ({type(error).__name__}).",
-                  file=sys.stderr)
-            return 1
+            print(f"::warning::Archive cache backend unreachable or manifest corrupt ({type(error).__name__}); "
+                  "skipping the bucket refresh.", file=sys.stderr)
+            return 0
 
         if not args.candidate_id:
             attempts, entries_by_id = manifest["refresh_attempts"], manifest["entries"]
@@ -383,7 +383,10 @@ def main(argv=None):
         except (OSError, ValueError):
             final_manifest = {}
         publish(totals(entries, final_manifest, started, stop, ok, persisted, args.max_items))
-        return 0 if persisted else 1
+        if not persisted:
+            print("::warning::Archive cache bucket could not be written; the Actions cache and the websites "
+                  "still serve the archives.", file=sys.stderr)
+        return 0
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

@@ -277,6 +277,12 @@ class FetchWithToolTests(unittest.TestCase):
 POST_URL = "https://deadlystream.com/files/file/123-example-post/"
 
 
+def offline_except_policy_links(url, args, headers=None):
+    if "nexusmods.com" in url or "/files/file/2503" in url or url == POST_URL:
+        raise AssertionError("a link not cached by policy must never be requested")
+    raise ValueError("network request failed")
+
+
 class FakePage:
     def __init__(self, url, source):
         self.url = url
@@ -937,6 +943,30 @@ class MultiFileFetchTests(MultiFileFixture):
         self.assertTrue(cache.objects_match_selection(item_for(POST_URL), entry))
         self.assertEqual(len(list((self.root / "objects").iterdir())), 2)
 
+    def test_second_refresh_revalidates_each_file_instead_of_downloading_the_bundle(self):
+        seen = []
+
+        def route(url, args, headers=None):
+            if url == POST_URL:
+                return Reply(url, selection_page(*self.NAMES).encode(), "text/html; charset=utf-8")
+            name = self.NAMES[int(url.split("r=")[1].split("&")[0]) - 1000]
+            sent = (headers or {}).get("If-None-Match")
+            seen.append((name, sent))
+            reply = Reply(url, b"" if sent else self.payloads[name], disposition='attachment; filename="%s"' % name)
+            reply.headers["ETag"] = '"%s"' % name
+            if sent == '"%s"' % name:
+                reply.code = 304
+            return reply
+
+        item = item_for(POST_URL)
+        with mock.patch.object(cache, "request", side_effect=route):
+            first = cache.refresh_one(item, {}, self.root, args_for())
+            second = cache.refresh_one(item, first, self.root, args_for())
+        self.assertEqual(seen, [(name, None) for name in self.NAMES] + [(name, '"%s"' % name) for name in self.NAMES])
+        self.assertEqual([each["sha256"] for each in second["objects"]], [each["sha256"] for each in first["objects"]])
+        self.assertEqual(second["evidence"], "conditional-304")
+        self.assertTrue(cache.local_valid(self.root, second))
+
     def test_local_valid_requires_every_object(self):
         entry = self.bundle()
         cache.object_path(self.root, entry["objects"][1]).unlink()
@@ -1356,7 +1386,7 @@ class UncachedPolicyTests(MultiFileFixture):
     def restore_allowing(self, *sections):
         extra = [value for section in sections for value in ("--allow-uncached-by-policy", section)]
         report_path = self.base / "report.json"
-        with mock.patch.object(cache, "request", side_effect=AssertionError("network used")):
+        with mock.patch.object(cache, "request", side_effect=offline_except_policy_links):
             code, report = self.run_main("restore", "--destination", str(self.destination), "--retries", "0",
                                          "--report", str(report_path), *extra)
         self.assertEqual(json.loads(report_path.read_text()), report)
@@ -1690,7 +1720,7 @@ class ShippedNexusPolicyTests(unittest.TestCase):
                 (root / "objects").mkdir(parents=True)
                 extra = [value for each in allowances for value in ("--allow-uncached-by-policy", each)]
                 output = io.StringIO()
-                with mock.patch.object(cache, "request", side_effect=AssertionError("network used")), \
+                with mock.patch.object(cache, "request", side_effect=offline_except_policy_links), \
                         contextlib.redirect_stdout(output):
                     code = cache.main(["restore", "--guide", str(guide), "--cache-dir", str(root),
                                        "--destination", str(Path(directory) / "mods"), "--retries", "0", *extra])

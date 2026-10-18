@@ -44,6 +44,7 @@ PIN_EXTENSIONS = ("zip", "7z", "rar", LOOSE)
 SHA256 = re.compile(r"[a-f0-9]{64}")
 UNCACHED = "uncached-by-policy"
 UNCACHED_SKIPPED = "uncached-skipped"
+OVER_LIMIT = "over-cache-limit"
 MAX_LINK_BYTES = 20 * 1024 ** 3
 NEXUS_REASON = "nexus requires NEXUS_API_KEY (no headless adapter; CAPTCHA is never bypassed); blocked-pending-user-action"
 
@@ -862,7 +863,8 @@ def pin_entry(identity, value):
             return None
     return {"url": value["url"], "provider": value["provider"], "provenance": value["provenance"],
             "objects": [{key: each[key] for key in ("archive_name", "sha256", "size", "extension")}
-                        for each in objects]}
+                        for each in objects],
+            **({"p2p": value["p2p"]} if isinstance(value.get("p2p"), dict) else {})}
 
 
 def load_pins(path=None):
@@ -905,7 +907,8 @@ def bundle(objects):
     return {"objects": objects, "size": sum(each["size"] for each in objects),
             "checked_at": min(each["checked_at"] for each in objects),
             "status": "fresh" if fresh else "verified",
-            "evidence": "download-200" if fresh else "download-without-upstream-metadata",
+            "evidence": ("conditional-304" if all(each.get("evidence") == "conditional-304" for each in objects)
+                         else "download-200" if fresh else "download-without-upstream-metadata"),
             "metadata_unknown": any(each.get("metadata_unknown", True) for each in objects)}
 
 
@@ -1011,10 +1014,11 @@ def announced_size(headers):
 
 
 def fetch_item(item, old, root, args, endpoint=None, depth=0):
+    previous_bundle = old
     old = {} if "objects" in old else old
     endpoint = endpoint or resolve(item, args)
     if isinstance(endpoint, list):
-        return fetch_many(item, old, root, args, endpoint, depth + 1)
+        return fetch_many(item, previous_bundle, root, args, endpoint, depth + 1)
     if item["provider"] in TOOL_PROVIDERS:
         return fetch_with_tool(item, root, args)
     endpoint_key = endpoint_id(endpoint)
@@ -1045,7 +1049,7 @@ def fetch_item(item, old, root, args, endpoint=None, depth=0):
             rows = page_rows(response, item)
             if len(rows) > 1 or multi_selectors(item):
                 response.close()
-                return fetch_many(item, old, root, args, rows, depth + 1)
+                return fetch_many(item, previous_bundle, root, args, rows, depth + 1)
             attachment = rows[0]["url"]
             if endpoint_id(attachment) == endpoint_key:
                 raise ValueError("download endpoint did not resolve to an attachment; provider adapter required")
@@ -1402,16 +1406,178 @@ def restore_object(item, old, root, args, restored_names, taken, created, rename
     return filename
 
 
-def rclone(args, direction, root):
+def warn(message):
+    print("::warning::" + message, file=sys.stderr)
+
+
+def remote_copy(args, source, destination):
+    """Copy one remote file. False when it is absent; an unreachable remote is warned about once, then skipped."""
     if not args.remote:
-        return
-    command = ["rclone", "copy", args.remote if direction == "pull" else str(root),
-               str(root) if direction == "pull" else args.remote,
-               "--exclude", "**/.download-*", "--include", "/manifest.json",
-               "--include", "/objects/**", "--retries", "2", "--contimeout", "20s",
-               "--timeout", "60s"]
-    subprocess.run(command, check=True, timeout=args.backend_timeout,
-                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return False
+    command = ["rclone", "copyto", source, str(destination), "--retries", "1",
+               "--contimeout", "20s", "--timeout", "60s"]
+    try:
+        subprocess.run(command, check=True, timeout=args.backend_timeout, stdin=subprocess.DEVNULL,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return Path(destination).is_file()
+    except subprocess.CalledProcessError as error:
+        if error.returncode in (3, 4):
+            return False
+    except (subprocess.SubprocessError, OSError):
+        pass
+    warn("archive remote unreachable; continuing without it")
+    args.remote = None
+    return False
+
+
+def pull_manifest(args, root, manifest):
+    """Merge newer entries from the optional remote manifest (it holds the operator-seeded pins)."""
+    temporary = root / ".remote-manifest.json"
+    try:
+        if not remote_copy(args, args.remote + "/manifest.json", temporary):
+            return
+        remote = json.loads(temporary.read_text(encoding="utf-8"))
+        entries = remote["entries"] if remote.get("schema") == 1 else {}
+        for key, entry in entries.items():
+            have = manifest["entries"].get(key)
+            if isinstance(entry, dict) and (not isinstance(have, dict)
+                                            or entry.get("checked_at", 0) > have.get("checked_at", 0)):
+                manifest["entries"][key] = entry
+    except (ValueError, TypeError, KeyError, AttributeError, OSError):
+        warn("remote manifest unreadable; ignoring it")
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def try_p2p(item, dest):
+    """P2P hook: fill dest with the archive whose SHA-256 is item["sha256"] from the swarm.
+
+    False when there is no p2p_fetch helper or the item carries no magnet (item["p2p"]).
+    The caller re-verifies whatever lands in dest.
+    """
+    helper = Path(__file__).with_name("p2p_fetch.py")
+    if not helper.is_file() or not isinstance(item.get("p2p"), dict):
+        return False
+    try:
+        spec = importlib.util.spec_from_file_location("p2p_fetch", helper)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return bool(module.fetch({"sha256": item.get("sha256"), "p2p": item["p2p"]}, Path(dest)))
+    except Exception:
+        warn("p2p helper failed; continuing without it")
+        return False
+
+
+def verified_object(item, stored, root, args):
+    path = object_path(root, stored)
+    try:
+        if object_valid(root, stored):
+            validate(path, args.integrity_timeout, loose=entry_loose(item, stored))
+            return True
+    except (ValueError, OSError, subprocess.SubprocessError, zipfile.BadZipFile):
+        pass
+    path.unlink(missing_ok=True)
+    return False
+
+
+def recover_object(item, stored, root, args, pins):
+    """Fetch one object the manifest knows by hash: the optional remote, then P2P."""
+    path = object_path(root, stored)
+    if args.remote and stored["size"] <= args.max_bytes and remote_copy(
+            args, args.remote + "/objects/" + path.name, path) and verified_object(item, stored, root, args):
+        return True
+    block = item.get("p2p") or pins.get(item["id"], {}).get("p2p")
+    peer = {**item, "sha256": stored["sha256"], "size": stored["size"], "p2p": block}
+    return try_p2p(peer, path) and verified_object(item, stored, root, args)
+
+
+def recover_objects(item, old, root, args, pins):
+    objects = entry_objects(old)
+    if not objects:
+        return False
+    (root / "objects").mkdir(parents=True, exist_ok=True)
+    try:
+        return all(object_valid(root, stored) or recover_object(item, stored, root, args, pins)
+                   for stored in objects)
+    except (ValueError, KeyError, TypeError):
+        return False
+
+
+def pin_as_entry(pin):
+    """A reviewed pin knows the hashes, so a cold cache can still ask the remote or the swarm for them."""
+    objects = [{**each, "status": "pinned", "evidence": "operator-seed", "metadata_unknown": True,
+                "checked_at": 0} for each in pin["objects"]]
+    return {"objects": objects, "size": sum(each["size"] for each in objects), "checked_at": 0,
+            "status": "pinned", "evidence": "operator-seed", "metadata_unknown": True}
+
+
+def has_validators(entry):
+    return any(each.get("etag") or each.get("last_modified") for each in entry_objects(entry))
+
+
+def upstream_current(entry, max_age_days):
+    checked = entry.get("status") == "fresh" or (
+        entry.get("status") == "verified" and entry.get("evidence") == "download-without-upstream-metadata")
+    return checked and 0 <= time.time() - entry.get("checked_at", 0) < max_age_days * 86400
+
+
+def download(item, old, root, args):
+    result = refresh_one(item, old, root, args)
+    if result.get("status") not in ("fresh", "verified") or not local_valid(root, result):
+        raise ValueError("archive refresh did not produce a verified object")
+    return result
+
+
+def acquire(item, old, root, args, pins):
+    """Return (entry, source): a verified local copy of one archive, downloading only what changed.
+
+    Valid local object: reused when pinned, or when it has no validators and was checked inside
+    --max-age-days; otherwise one conditional request (304 reuses it). A missing, corrupt or changed
+    object comes from the optional remote, then P2P (both only for a hash the manifest knows), then
+    the website. When restoring and the website cannot be reached, the last valid local copy is used.
+    """
+    if not (local_valid(root, old) and objects_match_selection(item, old)):
+        if recover_objects(item, old, root, args, pins) and objects_match_selection(item, old):
+            return old, "recovered"
+        return download(item, old, root, args), "website"
+    if is_pinned(item, old, pins) or (
+            not args.force and not has_validators(old) and upstream_current(old, args.max_age_days)):
+        return old, "local"
+    try:
+        result = download(item, old, root, args)
+    except (ValueError, OSError, HTTPException, subprocess.SubprocessError, zipfile.BadZipFile):
+        if args.force or args.command != "restore":
+            raise
+        warn("upstream could not be checked for " + item["id"][:8] + "; using the last cached copy")
+        return old, "stale-local"
+    return result, "revalidated" if result.get("evidence") == "conditional-304" else "website"
+
+
+def kept_objects(manifest, limit):
+    """SHA-256s that fit in limit bytes: pinned first, then smallest. .bik is never kept."""
+    sizes, pinned = {}, set()
+    for entry in manifest["entries"].values():
+        for stored in entry_objects(entry):
+            names = (stored.get("archive_name"), stored.get("listed_name"))
+            if (isinstance(stored.get("sha256"), str) and SHA256.fullmatch(stored["sha256"])
+                    and isinstance(stored.get("size"), int)
+                    and not any(isinstance(name, str) and name.lower().endswith(".bik") for name in names)):
+                sizes[stored["sha256"]] = stored["size"]
+                if entry.get("status") == "pinned":
+                    pinned.add(stored["sha256"])
+    keep, total = set(), 0
+    for sha, size in sorted(sizes.items(), key=lambda pair: (pair[0] not in pinned, pair[1])):
+        if total + size <= limit:
+            keep.add(sha)
+            total += size
+    return keep
+
+
+def prune(root, manifest, limit):
+    keep = kept_objects(manifest, limit)
+    for path in (root / "objects").iterdir():
+        if path.is_file() and SHA256.fullmatch(path.name) and path.name not in keep:
+            path.unlink()
 
 
 def main(argv=None):
@@ -1433,7 +1599,12 @@ def main(argv=None):
     parser.add_argument("--archive-map", type=Path,
                         help="restore only: write {guide link URL: restored filename(s)} for the installer's "
                              "--archive-map; restored links only")
-    parser.add_argument("--remote", help="optional rclone remote:path; trusted operator input only")
+    parser.add_argument("--remote", help="optional read-only rclone remote:path: an extra source for objects the "
+                                         "manifest knows by hash; unreachable means skipped; trusted operator input only")
+    parser.add_argument("--cache-limit-bytes", type=int,
+                        help="refresh only: keep only the objects in --cache-dir that fit in this many bytes "
+                             "(pinned first, then smallest) and skip links whose objects do not; sized for the "
+                             "10 GB Actions cache. Lanes fetch what is not kept")
     parser.add_argument("--force", action="store_true", help="refresh even inside freshness interval")
     parser.add_argument("--max-age-days", type=float, default=14)
     parser.add_argument("--timeout", type=float, default=30, help="socket timeout seconds")
@@ -1524,20 +1695,23 @@ def main(argv=None):
     else:
         root = args.cache_dir.resolve()
         (root / "objects").mkdir(parents=True, exist_ok=True)
-        rclone(args, "pull", root)
         manifest_path = root / "manifest.json"
         manifest = json.loads(manifest_path.read_text()) if manifest_path.exists() else {"schema": 1, "entries": {}}
         if manifest.get("schema") != 1 or not isinstance(manifest.get("entries"), dict):
             raise ValueError("unsupported manifest schema")
+        if args.remote:
+            pull_manifest(args, root, manifest)
         restored_names = {}
-        repaired = False
         try:
             pins = load_pins()
         except (ValueError, OSError):
             pins = {}
         losers = sibling_name_losers(items, manifest["entries"], pins) if args.command == "restore" else {}
+        limit = args.cache_limit_bytes if args.command == "refresh" else None
+        keep = kept_objects(manifest, limit) if limit is not None else None
         for item in items:
-            old = manifest["entries"].get(item["id"], {})
+            old = manifest["entries"].get(item["id"]) or (
+                pin_as_entry(pins[item["id"]]) if item["id"] in pins else {})
             entry = {"id": item["id"], "url": clean_url(item["url"]), "provider": item["provider"]}
             policy = uncached_reason(item)
             if policy:
@@ -1556,29 +1730,21 @@ def main(argv=None):
                     atomic_json(manifest_path, manifest)
                 continue
             try:
-                valid = local_valid(root, old)
-                age = time.time() - old.get("checked_at", 0)
-                upstream_checked = old.get("status") == "fresh" or (
-                    old.get("status") == "verified" and
-                    old.get("evidence") == "download-without-upstream-metadata")
-                pinned = valid and is_pinned(item, old, pins)
-                fresh = pinned or (valid and upstream_checked and 0 <= age < args.max_age_days * 86400
-                                   and objects_match_selection(item, old))
-                if args.command == "refresh":
-                    cached = old if pinned or (fresh and not args.force) else refresh_one(item, old, root, args)
-                    manifest["entries"][item["id"]] = cached
-                    entry.update(cached)
+                if keep is not None and entry_objects(old) and not all(
+                        each.get("sha256") in keep for each in entry_objects(old)):
+                    entry.update(status=OVER_LIMIT, reason="does not fit --cache-limit-bytes; fetched by the lanes")
+                    report["entries"].append(entry)
+                    continue
+                before = manifest["entries"].get(item["id"])
+                old, source = acquire(item, old, root, args, pins)
+                entry["source"] = source
+                pinned = is_pinned(item, old, pins)
+                if old != before:
+                    manifest["entries"][item["id"]] = old
                     atomic_json(manifest_path, manifest)
+                if args.command == "refresh":
+                    entry.update(old)
                 else:
-                    if not fresh:
-                        if not entry_objects(old):
-                            raise ValueError("cache missing; archive refresh job must populate it")
-                        old = refresh_one(item, old, root, args)
-                        manifest["entries"][item["id"]] = old
-                        atomic_json(manifest_path, manifest)
-                        repaired = True
-                        if old.get("status") not in ("fresh", "verified") or not local_valid(root, old):
-                            raise ValueError("archive refresh did not produce a verified object")
                     taken, created, restored = set(), [], []
                     try:
                         for each in entry_objects(old):
@@ -1597,19 +1763,17 @@ def main(argv=None):
                         entry["files"] = restored
                     else:
                         entry.update(sha256=restored[0]["sha256"], file=restored[0]["file"])
+                if limit is not None:
+                    prune(root, manifest, limit)
             except (ValueError, OSError, HTTPException, subprocess.SubprocessError, zipfile.BadZipFile) as error:
                 entry.update(status="unresolved", reason=safe_reason(error))
                 if args.command == "refresh" and old and not is_pinned(item, old, pins):
                     manifest["entries"][item["id"]] = {**old, "status": "stale-unknown"}
                     atomic_json(manifest_path, manifest)
             report["entries"].append(entry)
-        if args.command == "refresh":
-            rclone(args, "push", root)
-        elif repaired:
-            rclone(args, "push", root)
     if args.command != "import-existing":
         accepted = ("fresh", "verified", "restored", "pinned") + (
-            (UNCACHED,) if args.command == "refresh" else (UNCACHED_SKIPPED,) if args.command == "restore" else ())
+            (UNCACHED, OVER_LIMIT) if args.command == "refresh" else (UNCACHED_SKIPPED,) if args.command == "restore" else ())
         report["ok"] = all(entry.get("status") in accepted
                            for entry in report["entries"]) if args.command != "discover" else True
     if args.report:

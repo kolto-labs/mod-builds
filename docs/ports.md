@@ -90,6 +90,32 @@ bare-filename and multi-archive drafts stay fenced. `ports.py` never sets
   rejected drafts, or (without `DraftReview`) the prose-draft `InstallationWarning`. The
   reviewed-identity receipt is verified only by the Rust `validate`/`install`.
 - Rust lanes only; TypeScript lanes do not run it.
+- **Why it clears nothing on the real guides today (measured, not assumed).** The verifier
+  accepts only a draft whose `DraftReview` has `Generator = "resolved-filenames"` and a
+  `Derivation`, and which has no `MethodContext`, no gaps and no prose-draft warning.
+  `--auto-generate-local` (what the lane runs) records neither `Generator` nor
+  `Derivation`; only `convert --resolved-archives <json>` or `--auto` does, and clap makes
+  `--resolved-archives` conflict with `--auto-generate-local`. Replacing the local pass with a
+  `--resolved-archives` pass does not help either: every component of `k1/full.md` (197) and
+  `k2/full.md` (151) has an `InstallationMethod`, so `--parse-directions` gives each one a
+  `DraftReview.MethodContext` and a method gap, and the verifier refuses a `MethodContext`
+  ("Method-bound drafts are not verifiable by archive replay"). `resolved::generate` binds
+  a method-only loose-file component but keeps that `MethodContext`. Run against ModSync.rs
+  `aa7b355` with the real k2 guide and synthetic one-file archives for the 139 uniquely
+  mapped components, the pipelines tried all cleared 0: today's (`--parse-directions --auto-generate-local`), a separate
+  `--resolved-archives` pass on the instruction-free components (0 of 98 bound, the guide
+  preamble is not read back from a TOML input), and `--parse-directions --resolved-archives`
+  in one run (40 bound with `Generator` and `Derivation`, all refused as method-bound).
+  On a small synthetic guide without `Installation Method` lines, `--parse-directions`
+  followed by `--resolved-archives` for the instruction-free components did clear them, and
+  the component with a prose step stayed fenced, so the verifier itself works as designed.
+  `ports.py` therefore keeps the single `--auto-generate-local` convert and does not
+  reorder passes; a reordering would change nothing on K1/K2 and would drop the filename
+  matching fallback for unmapped links.
+  Clearing the real guides needs a Rust change: the verifier must accept the
+  `MethodContext` that `bind_loose_method` itself wrote (`ArchiveBinding = "Bound"` with a
+  matching `ArchiveMethodBinding`/`Derivation`), and its replay must rebuild a
+  method-bound component through `bind_loose_method`.
 
 TypeScript (`pnpm build`, then the built CLI; the guide's parent directory selects
 `kotor1` or `kotor2`):

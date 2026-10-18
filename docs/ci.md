@@ -1,9 +1,11 @@
 # CI
 
 Game acquisition, the archive cache and every install lane run from one workflow,
-`.github/workflows/ci.yml`. The game cache is refilled from Steam on a miss. The
-archive cache is not refilled by install lanes: a lane fails when a job cannot get
-the game, when a required archive is not in the cache, or when an install fails.
+`.github/workflows/ci.yml`. The game cache is refilled from Steam on a miss. Mod
+archives come from a chain of sources (see [Mod archive sources](#mod-archive-sources));
+every cache in it is only an accelerator. A lane fails when a job cannot get the
+game, when a required archive cannot be obtained from any source, or when an
+install fails.
 
 ## Triggers
 
@@ -34,31 +36,68 @@ movies, seals it and saves it. If there is no complete game at the end, the job
 fails. Runs k1, then k2, on one Steam account. The Monday/Thursday schedule keeps
 both game caches in use; see [steam.md](steam.md).
 
-**`mods`** — Runs `refresh_archives.py --max-items 500` to download new or stale
-mod archives into the S3-compatible (Cloudflare R2) cache, with a 35-minute limit.
-It installs `7zip` (with `7zip-rar`), `megatools`, `libarchive-tools` (`bsdtar`),
+**`mods`** — Restores the latest mod-archive Actions cache (`mod-archives-<run_id>`,
+falling back to the newest `mod-archives-*`), runs `cache.py refresh` over both
+guides, and saves the result under `mod-archives-<run_id>` with `if: always()`, so a
+cancelled or timed-out run keeps its partial progress. `refresh` revalidates every
+archive and fetches only new or changed ones (see below), then keeps at most 3 GiB
+of objects (`--cache-limit-bytes`; pinned first, then smallest; `.bik` never).
+Archives that do not fit stay in the manifest and are fetched by the lanes. Before
+that, an optional step runs `refresh_archives.py --max-items 500`, which keeps the
+R2 bucket current when its write secrets exist and otherwise skips itself. The job
+installs `7zip` (with `7zip-rar`), `megatools`, `libarchive-tools` (`bsdtar`),
 `unrar` when available, and `gdown`, so `cache.py` can fetch MEGA and Google Drive
-links and check RAR/7z archives. It is the only job that adds anything to the
-cache, and the only one given the write credentials. It is an accelerator and
-`continue-on-error` is set, so a failure never blocks an install. See
-[cache.md](cache.md).
+links and check RAR/7z archives. It is the only job that saves the cache or gets the
+R2 write credentials. It is an accelerator and `continue-on-error` is set (also on
+both refresh steps), so a failure never blocks an install. See [cache.md](cache.md).
 
 **`install`** — Starts with the lane checks below, then checks out the ModSync
 source for the implementation (the repository named by `MODSYNC_RS_REPOSITORY` or
 `MODSYNC_TS_REPOSITORY`, read with `MODSYNC_SOURCE_TOKEN`; empty values fail the
 job). It restores the game cache (a miss fails the job) and unpacks it, restores
-the archives for `content/<game>/full.md` from the R2 cache, and runs `ports.py` to
-install the full guide. `gui` lanes run under Xvfb. See [ports.md](ports.md).
+the `mod-archives-<run_id>` Actions cache that `mods` saved in the same run (a miss
+is not an error), restores the archives for `content/<game>/full.md` from the chain
+below, and runs `ports.py` to install the full guide. `gui` lanes run under Xvfb.
+See [ports.md](ports.md).
 
-Archive restore is fail-closed and read-only for the cache: if any link of the
-guide cannot be restored and verified, the restore step exits non-zero and the
-lane stops before `ports.py`. The install job's restore also writes
+### Mod archive sources
+
+`cache.py restore` and `cache.py refresh` get each archive from the first source
+that works. Nothing is downloaded that is unchanged.
+
+1. **Local copy** (the restored Actions cache). A copy whose size and SHA-256 match
+   the manifest and that passes the archive check is revalidated cheaply: one
+   conditional request with the stored `ETag` / `Last-Modified`, and `304` reuses
+   it. A seed-pinned copy is never revalidated. With no validators (MEGA, Google
+   Drive, some hosts) it is reused if checked within `--max-age-days` (14); older
+   than that it is fetched again. A post that yields several files revalidates
+   each file with its own validators.
+2. **R2 bucket**, for a missing or corrupt copy whose hash the manifest (or a seed
+   pin) knows, when its secrets exist (`--remote`). The bucket manifest is merged
+   (the newer `checked_at` wins, so seeded pins survive) and only the missing
+   objects are pulled one by one, never the whole bucket. An unreachable bucket is
+   a warning and is skipped for the rest of the run. Lanes never write to it.
+3. **P2P**, same condition: `try_p2p(item, dest)` in `cache.py` runs
+   `p2p_fetch.fetch` when `tools/modsync-ci/p2p_fetch.py` exists and the seed pin
+   carries a `p2p` block with a magnet; otherwise it returns `False`. The result
+   is re-hashed and archive-checked before use. A file that changed upstream has
+   an unknown new hash, so it cannot come from here; it comes from the website.
+4. **The website** (DeadlyStream, MEGA, Google Drive, direct links). A link the
+   cache has never held is fetched here too. Nexus and GameFront need a pin: they
+   have no headless adapter.
+5. **The last cached copy**, when a copy exists but the website cannot be reached or
+   rejects the request (`restore` only; `refresh` reports it as unresolved). A
+   warning names the link by id prefix.
+
+A step with no source left fails: the restore exits non-zero and the lane stops
+before `ports.py`. Each report entry has a `source` (`local`, `revalidated`,
+`recovered`, `website`, `stale-local`). `.bik` is never cached. The install job's
+restore also writes
 `$RUNNER_TEMP/archive-map.json` (`cache.py restore --archive-map`): a flat
 `{guide link URL: filename | [filenames]}` object, URLs without query or fragment,
 filenames relative to the archives directory, restored links only. `ports.py
 --archive-map` passes it to the Rust `modsync convert --archive-map`; the
-TypeScript lanes ignore it. The install lanes never acquire a link the cache has
-not already recorded; only `mods` does. A guide link that is uncached by policy
+TypeScript lanes ignore it. A guide link that is uncached by policy
 (Nexus Mods, GameFront and the K2 cutscene post, reported as `uncached-by-policy`;
 see [cache.md](cache.md#known-gaps)) stops restore unless the lane passes
 `--allow-uncached-by-policy` for it; the Rust lanes do so for the reviewed steps
@@ -190,7 +229,7 @@ and the `typescript` lanes make no P2P claim.
 patcher under Wine, from a human-reviewed plan at `ci/<game>-manual-plan.json`.
 The job fails at its first step if the plan is missing; it never passes without
 one. It restores the game and archives the same way as `install`, with the same
-fail-closed restore. See [manual-lane.md](manual-lane.md).
+same restore. See [manual-lane.md](manual-lane.md).
 
 ## Secrets and variables
 
@@ -203,15 +242,28 @@ Names only.
 | `STEAM_GUARD_CODES` | secret, optional | Single-use Steam backup codes, tried after the other sign-ins fail |
 | `CACHE_ENCRYPTION_KEY` | secret | Seals and unseals the game cache (not the archive bucket) |
 | `DIAGNOSTICS_ENCRYPTION_KEY` | secret | Seals the `install` lane report and convert log before upload ([ports.md](ports.md#diagnosing-a-coverage-failure)) |
-| `MOD_CACHE_S3_ACCESS_KEY_ID`, `MOD_CACHE_S3_SECRET_ACCESS_KEY` | secret | R2 read/write, `mods` job only |
-| `MOD_CACHE_S3_READ_ACCESS_KEY_ID`, `MOD_CACHE_S3_READ_SECRET_ACCESS_KEY` | secret | R2 read only, `install` and `manual` |
-| `MOD_CACHE_S3_ENDPOINT` | secret | S3-compatible (R2) endpoint |
-| `MOD_CACHE_BUCKET` | variable | R2 bucket |
+| `MOD_CACHE_S3_ACCESS_KEY_ID`, `MOD_CACHE_S3_SECRET_ACCESS_KEY` | secret, optional | R2 read/write, `mods` job only |
+| `MOD_CACHE_S3_READ_ACCESS_KEY_ID`, `MOD_CACHE_S3_READ_SECRET_ACCESS_KEY` | secret, optional | R2 read only, `install` and `manual` |
+| `MOD_CACHE_S3_ENDPOINT` | secret, optional | S3-compatible (R2) endpoint |
+| `MOD_CACHE_BUCKET` | variable, optional | R2 bucket |
 | `MODSYNC_SOURCE_TOKEN` | secret | Read access to the ModSync source repositories and their private Cargo git dependencies |
 | `MODSYNC_RS_REPOSITORY`, `MODSYNC_TS_REPOSITORY` | variable | Repositories to build for `rust` and `typescript` |
 | `MODSYNC_TS_REF` | variable (optional) | ModSync.ts ref the `typescript` lanes check out; default `feat/physical-install` |
 
-Each secret is only exposed to the steps that use it.
+Each secret is only exposed to the steps that use it. Without the R2 values the bucket
+is skipped and the Actions cache, P2P and the websites still supply every archive.
+
+## Actions cache size and eviction
+
+The repository's Actions cache is limited to 10 GB and GitHub evicts the least
+recently used entries first (and any entry not used for 7 days). The mod archives
+are tens of GB, so the cache holds only a subset: `--cache-limit-bytes` in `ci.yml`
+(3 GiB) keeps pinned objects first, then the smallest, and never `.bik`; `mods` also
+skips a link whose objects do not fit. The lanes fetch the rest themselves, from the
+bucket, P2P or the website. Each run saves a new `mod-archives-<run_id>` entry, so
+older ones are evicted before the game caches (`game-<game>-v1`), which every run
+reads. If the game caches are ever evicted, the next `game` job refills them from
+Steam. Change the limit in `ci.yml` if the game caches grow.
 
 ## Running it by hand
 

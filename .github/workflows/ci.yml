@@ -2,7 +2,8 @@ name: CI
 
 # One workflow for game acquisition, the mod archive cache and every install lane.
 # Caches only make runs faster. A missing cache is refilled; the run fails only
-# when a job cannot actually get the game or finish its install.
+# when a job cannot actually get the game, cannot get a required mod archive from
+# any source (cache, P2P, the optional R2 bucket, the website) or finish its install.
 on:
   push:
     branches: [dev]
@@ -116,17 +117,28 @@ jobs:
       group: mod-cache-writer
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+      - name: Restore mod archive cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/mod-cache
+          key: mod-archives-${{ github.run_id }}
+          restore-keys: mod-archives-
       - name: Install archive tools
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq 7zip 7zip-rar megatools libarchive-tools >/dev/null && { sudo apt-get install -y -qq unrar >/dev/null 2>&1 || echo "unrar unavailable; falling back to 7z/bsdtar"; }
           python -m pip install --quiet gdown
           python3 tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone"
-      - name: Download new or changed mod archives into the cache
+      # Optional extra: keeps the R2 bucket current when its secrets exist. Never fails the run.
+      - name: Refresh the R2 bucket (optional)
+        continue-on-error: true
+        timeout-minutes: 40
         env:
           RCLONE_CONFIG_MODCACHE_TYPE: s3
           RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
@@ -137,6 +149,36 @@ jobs:
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: python tools/modsync-ci/refresh_archives.py --max-items 500
+      # Revalidates every archive (conditional request), downloads only new or changed ones
+      # (P2P, then the optional bucket, then the website) and keeps what fits the 10 GB repository cache.
+      - name: Refresh the mod archive cache
+        continue-on-error: true
+        timeout-minutes: 60
+        env:
+          RCLONE_CONFIG_MODCACHE_TYPE: s3
+          RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
+          RCLONE_CONFIG_MODCACHE_REGION: auto
+          RCLONE_CONFIG_MODCACHE_NO_CHECK_BUCKET: 'true'
+          RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
+          MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
+        run: |
+          remote=()
+          if [[ -n "$RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID" && -n "$MOD_CACHE_BUCKET" ]]; then
+            remote=(--remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives")
+          fi
+          status=0
+          python tools/modsync-ci/cache.py refresh --cache-dir "$RUNNER_TEMP/mod-cache" \
+            --cache-limit-bytes 3221225472 "${remote[@]}" > "$RUNNER_TEMP/refresh-report.json" || status=$?
+          python -c 'import collections,json,sys; print(dict(collections.Counter(e.get("status") for e in json.load(open(sys.argv[1]))["entries"])))' "$RUNNER_TEMP/refresh-report.json" || true
+          exit "$status"
+      - name: Save mod archive cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/mod-cache
+          key: mod-archives-${{ github.run_id }}
 
   # Manual only: copies hand-downloaded archives from the private STAGING rclone remote into the
   # R2 cache, one file at a time, after verifying each against its reviewed pin (seed_pins.json).
@@ -358,6 +400,12 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq 7zip 7zip-rar megatools libarchive-tools >/dev/null && { sudo apt-get install -y -qq unrar >/dev/null 2>&1 || echo "unrar unavailable; falling back to 7z/bsdtar"; }
           python -m pip install --quiet gdown
+      - name: Restore mod archive cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/mod-cache
+          key: mod-archives-${{ github.run_id }}
+          restore-keys: mod-archives-
       - name: Restore required mod archives
         env:
           RCLONE_CONFIG_MODCACHE_TYPE: s3
@@ -369,7 +417,6 @@ jobs:
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
-          set +e
           # Reviewed policy skips (docs/ci.md). Rust lanes only: ports.py deselects
           # the skipped component; the TypeScript lanes have no deselect mechanism.
           policy=()
@@ -381,21 +428,14 @@ jobs:
               policy+=(--allow-uncached-by-policy "Enhanced Widescreen Support Mods::K2 Cutscenes Rescaled")
             fi
           fi
+          remote=()
+          if [[ -n "$RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID" && -n "$MOD_CACHE_BUCKET" ]]; then
+            remote=(--remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives")
+          fi
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
             --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
             --archive-map "$RUNNER_TEMP/archive-map.json" --report "$RUNNER_TEMP/restore-report.json" \
-            "${policy[@]}" \
-            --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
-          remote_status=$?
-          if [[ "$remote_status" -ne 0 ]]; then
-            echo "::warning::R2 restore or repair persistence failed; retrying from the local verified cache."
-            python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
-              --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
-              --archive-map "$RUNNER_TEMP/archive-map.json" --report "$RUNNER_TEMP/restore-report.json" \
-              "${policy[@]}"
-            local_status=$?
-            if [[ "$local_status" -ne 0 ]]; then exit "$local_status"; fi
-          fi
+            "${policy[@]}" "${remote[@]}"
 
       - name: Install the full guide
         env:
@@ -486,6 +526,12 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq 7zip 7zip-rar megatools libarchive-tools >/dev/null && { sudo apt-get install -y -qq unrar >/dev/null 2>&1 || echo "unrar unavailable; falling back to 7z/bsdtar"; }
           python -m pip install --quiet gdown
+      - name: Restore mod archive cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/mod-cache
+          key: mod-archives-${{ github.run_id }}
+          restore-keys: mod-archives-
       - name: Restore required mod archives
         env:
           RCLONE_CONFIG_MODCACHE_TYPE: s3
@@ -497,18 +543,13 @@ jobs:
           RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
           MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
         run: |
-          set +e
+          remote=()
+          if [[ -n "$RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID" && -n "$MOD_CACHE_BUCKET" ]]; then
+            remote=(--remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives")
+          fi
           python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
             --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives" \
-            --remote "MODCACHE:$MOD_CACHE_BUCKET/modsync-archives"
-          remote_status=$?
-          if [[ "$remote_status" -ne 0 ]]; then
-            echo "::warning::R2 restore or repair persistence failed; retrying from the local verified cache."
-            python tools/modsync-ci/cache.py restore --guide "content/$GAME/full.md" \
-              --cache-dir "$RUNNER_TEMP/mod-cache" --destination "$RUNNER_TEMP/archives"
-            local_status=$?
-            if [[ "$local_status" -ne 0 ]]; then exit "$local_status"; fi
-          fi
+            "${remote[@]}"
       - name: Install the full guide manually with the original patchers
         run: |
           xvfb-run -a python tools/modsync-ci/manual.py --plan "$PLAN" \

@@ -221,6 +221,15 @@ class PinnedRestoreAndRefreshTests(PinFixture):
         with mock.patch.object(cache, "refresh_one", side_effect=ValueError(cache.NEXUS_REASON)) as refresh:
             (code, report), _ = self.restore(item)
         refresh.assert_called_once()
+        self.assertEqual((code, report["entries"][0]["status"]), (0, "restored"))
+
+    def test_stale_non_pinned_entry_with_a_missing_object_is_unresolved(self):
+        item = item_for(NEXUS_URL)
+        self.write_manifest(item, self.stored_entry(status="verified", evidence="download-without-upstream-metadata",
+                                                    checked_at=cache.time.time() - 30 * DAY, store=False))
+        with mock.patch.object(cache, "refresh_one", side_effect=ValueError(cache.NEXUS_REASON)) as refresh:
+            (code, report), _ = self.restore(item)
+        refresh.assert_called_once()
         self.assertEqual((code, report["entries"][0]["status"]), (1, "unresolved"))
 
     def test_pinned_status_without_a_matching_pin_gets_old_behavior(self):
@@ -232,7 +241,7 @@ class PinnedRestoreAndRefreshTests(PinFixture):
             with mock.patch.object(cache, "refresh_one", side_effect=ValueError(cache.NEXUS_REASON)) as refresh:
                 (code, report), _ = self.restore(item)
             refresh.assert_called_once()
-            self.assertEqual(report["entries"][0]["status"], "unresolved")
+            self.assertEqual(report["entries"][0]["status"], "restored")
 
     def test_pinned_entry_for_unsupported_provider_gets_old_behavior(self):
         item = self.write_pins(url=DEADLY_URL, provider="deadlystream")
@@ -240,7 +249,7 @@ class PinnedRestoreAndRefreshTests(PinFixture):
         with mock.patch.object(cache, "refresh_one", side_effect=ValueError("HTTP 500")) as refresh:
             (_, report), _ = self.restore(item)
         refresh.assert_called_once()
-        self.assertEqual(report["entries"][0]["status"], "unresolved")
+        self.assertEqual(report["entries"][0]["status"], "restored")
 
     def test_refresh_keeps_pinned_entry_without_fetching(self):
         item = self.write_pins()
