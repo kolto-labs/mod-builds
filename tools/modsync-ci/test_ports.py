@@ -9,6 +9,7 @@ import tomllib
 import unittest
 from unittest import mock
 
+import deselect_unreviewed
 import ports
 
 GUIDE = """# Guide
@@ -1402,18 +1403,37 @@ class LaneSkipTableTests(unittest.TestCase):
         self.directory = Path(tempfile.mkdtemp())
         self.addCleanup(lambda: __import__("shutil").rmtree(self.directory))
 
-    def test_shipped_table_skips_exactly_the_4gb_patcher_in_both_games(self):
+    def shipped(self, game):
+        return ports.load_lane_skips(game, SHIPPED_LANE_SKIPS)
+
+    def test_shipped_table_keeps_the_hand_authored_4gb_patcher_in_both_games(self):
         for game in ("k1", "k2"):
-            skips = ports.load_lane_skips(game, SHIPPED_LANE_SKIPS)
-            self.assertEqual([(skip["section"], skip["heading"]) for skip in skips], [FOUR_GB], game)
-            self.assertTrue(skips[0]["reason"].strip())
-            self.assertEqual(skips[0]["urls"], [])
+            hand_authored = [skip for skip in self.shipped(game) if "kind" not in skip]
+            self.assertEqual([(skip["section"], skip["heading"]) for skip in hand_authored], [FOUR_GB], game)
+            self.assertIn(REJECTION, hand_authored[0]["reason"])
+            self.assertEqual(hand_authored[0]["urls"], [])
         self.assertEqual(ports.load_lane_skips("k3", SHIPPED_LANE_SKIPS), [])
 
-    def test_shipped_reasons_are_reviewed_text_not_placeholders(self):
+    def test_shipped_pending_review_entries_are_pinned_visible_and_unique(self):
+        counts = {"k1": (150, 0), "k2": (118, 1)}
+        for game, (drafts, dependents) in counts.items():
+            pinned = [skip for skip in self.shipped(game) if "kind" in skip]
+            with self.subTest(game=game):
+                self.assertEqual(sum(skip["kind"] == "unreviewed_draft" for skip in pinned), drafts)
+                self.assertEqual(sum(skip["kind"] == "dependent_of_deselected" for skip in pinned), dependents)
+                self.assertEqual(len({skip["guid"] for skip in pinned}), len(pinned))
+                self.assertEqual(len({(skip["section"], skip["heading"]) for skip in pinned}), len(pinned))
+                for skip in pinned:
+                    self.assertIn("deselected pending human review, delegated by owner 2026-10-18",
+                                  skip["reason"])
+
+    def test_shipped_reasons_are_the_generated_reviewed_text(self):
         for game in ("k1", "k2"):
-            reason = ports.load_lane_skips(game, SHIPPED_LANE_SKIPS)[0]["reason"]
-            self.assertIn(REJECTION, reason)
+            for skip in self.shipped(game):
+                if skip.get("kind") == "unreviewed_draft":
+                    self.assertEqual(skip["reason"], deselect_unreviewed.DRAFT_REASON)
+                elif skip.get("kind") == "dependent_of_deselected":
+                    self.assertTrue(skip["reason"].startswith("depends on "), skip["reason"])
 
     def test_missing_file_or_table_skips_nothing(self):
         self.assertEqual(ports.load_lane_skips("k1", self.directory / "absent.json"), [])
@@ -1459,14 +1479,16 @@ class LaneSkipTableTests(unittest.TestCase):
 class LaneSkipLaneTests(unittest.TestCase):
     prepare = ExecuteCommandTests.prepare
 
-    def run_lane(self, mode="cli", implementation="rust", converted=None, table="shipped",
+    def run_lane(self, mode="cli", implementation="rust", converted=None, table="four_gb",
                  game="k1", restore=False, log=True):
         root, args = self.prepare(game)
         args.guide.write_text(GUIDE_4GB, encoding="utf-8")
         args.implementation = implementation
         args.mode = mode
         if table is not None:
-            path = SHIPPED_LANE_SKIPS if table == "shipped" else lane_skips_file(root, table)
+            if table == "four_gb":
+                table = {game: [lane_entry(reason=REJECTION)] for game in ("k1", "k2")}
+            path = lane_skips_file(root, table)
             patch = mock.patch.object(ports, "LANE_SKIPS_PATH", path)
             patch.start()
             self.addCleanup(patch.stop)
@@ -1583,13 +1605,205 @@ class LaneSkipLaneTests(unittest.TestCase):
         self.assertNotIn("validate", dict(commands))
 
 
+GUIDE_PENDING = """# Guide
+
+## Mod List
+
+### Mod One
+
+### Mod Two
+
+### Mod Three
+
+## Enhanced Widescreen Support Mods
+
+### Wide One
+"""
+
+PENDING_ONE = "80000000-0000-0000-0000-000000000001"
+PENDING_TWO = "80000000-0000-0000-0000-000000000002"
+PENDING_THREE = "80000000-0000-0000-0000-000000000003"
+PENDING_WIDE = "80000000-0000-0000-0000-000000000004"
+
+
+def pending_entry(heading, guid, kind="unreviewed_draft", section="Mod List"):
+    return {"section": section, "heading": heading, "guid": guid, "kind": kind,
+            "reason": "unreviewed draft: deselected pending human review, delegated by owner 2026-10-18"}
+
+
+class PendingReviewSkipLaneTests(unittest.TestCase):
+    prepare = ExecuteCommandTests.prepare
+
+    def blocks(self, three_depends_on_two=False, three_draft=True):
+        three = drafted("Mod Three", PENDING_THREE) if three_draft else component("Mod Three", PENDING_THREE)
+        if three_depends_on_two:
+            three = three.replace("IsSelected = true", 'IsSelected = true\nDependencies = ["' + PENDING_TWO + '"]', 1)
+        return document(
+            drafted("Mod One", PENDING_ONE, required=False),
+            drafted("Mod Two", PENDING_TWO),
+            three,
+            drafted("Wide One", PENDING_WIDE, widescreen=True))
+
+    def run_lane(self, table, mode="cli", converted=None):
+        root, args = self.prepare("k1")
+        args.guide.write_text(GUIDE_PENDING, encoding="utf-8")
+        args.implementation = "rust"
+        args.mode = mode
+        path = lane_skips_file(root, table)
+        patch = mock.patch.object(ports, "LANE_SKIPS_PATH", path)
+        patch.start()
+        self.addCleanup(patch.stop)
+        commands = []
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append((stage, list(command)))
+            if stage == "convert":
+                (private / "converted.toml").write_text(converted or self.blocks(), encoding="utf-8")
+            if stage == ports.DRAFT_REVIEW_STAGE:
+                (private / (stage + ".log")).write_text(
+                    json.dumps({"cleared": [PENDING_ONE], "skipped": []}, indent=2) + "\n", encoding="utf-8")
+
+        report = {"commands": []}
+        error = None
+        with mock.patch.object(ports, "run", reviewing(fake_run)):
+            try:
+                ports.execute(args, report)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        return commands, report, error
+
+    def deselected(self, command):
+        return [value for flag, value in zip(command, command[1:]) if flag == "--deselect"]
+
+    def all_pending(self):
+        return {"k1": [pending_entry("Mod Two", PENDING_TWO), pending_entry("Mod Three", PENDING_THREE),
+                       pending_entry("Wide One", PENDING_WIDE, section="Enhanced Widescreen Support Mods")]}
+
+    def test_listed_unreviewed_drafts_pass_the_gate_and_are_deselected_for_validate_and_install(self):
+        commands, report, error = self.run_lane(self.all_pending())
+        self.assertIsNone(error)
+        staged = dict(commands)
+        expected = [PENDING_TWO, PENDING_THREE, PENDING_WIDE]
+        for stage in ("validate", "install"):
+            self.assertEqual(self.deselected(staged[stage]), expected)
+        self.assertNotIn("unreviewed", report["draft_review"])
+        self.assertEqual(report["draft_review"]["cleared"], 1)
+
+    def test_a_new_unreviewed_draft_that_is_not_listed_still_blocks(self):
+        table = self.all_pending()
+        table["k1"] = [entry for entry in table["k1"] if entry["guid"] != PENDING_THREE]
+        commands, report, error = self.run_lane(table)
+        self.assertTrue(error.startswith("unreviewed_draft_instructions_remain: "))
+        self.assertIn(PENDING_THREE, error)
+        self.assertNotIn(PENDING_TWO, error)
+        self.assertNotIn("validate", [stage for stage, _ in commands])
+        self.assertEqual([item["component_guid"] for item in report["draft_review"]["unreviewed"]],
+                         [PENDING_THREE])
+
+    def test_the_report_and_the_log_list_the_count_and_names_of_deselected_components(self):
+        _, report, error = self.run_lane(self.all_pending())
+        self.assertIsNone(error)
+        pending = report["deselected_pending_review"]
+        self.assertEqual(pending["count"], 3)
+        self.assertEqual(pending["by_kind"], {"unreviewed_draft": 3, "dependent_of_deselected": 0})
+        self.assertEqual([(item["heading"], item["component_guid"]) for item in pending["components"]],
+                         [("Mod Two", PENDING_TWO), ("Mod Three", PENDING_THREE), ("Wide One", PENDING_WIDE)])
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            ports.print_diagnostics(report)
+        text = log.getvalue()
+        self.assertIn("3 component(s) DESELECTED pending human review", text)
+        for name, guid in (("Mod Two", PENDING_TWO), ("Mod Three", PENDING_THREE), ("Wide One", PENDING_WIDE)):
+            self.assertIn("deselected pending review: " + name + " [" + guid + "]", text)
+
+    def test_hand_authored_skips_are_not_counted_as_pending_review(self):
+        report = {}
+        ports.coverage(*self.coverage_inputs(), report, "rust", [
+            {"section": "Mod List", "heading": "Mod Two", "reason": "reviewed", "urls": [],
+             "source": "lane_skips"}])
+        self.assertNotIn("deselected_pending_review", report)
+
+    def coverage_inputs(self):
+        directory = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, directory)
+        guide = directory / "full.md"
+        guide.write_text(GUIDE_PENDING, encoding="utf-8")
+        converted = directory / "converted.toml"
+        converted.write_text(document(
+            component("Mod One", PENDING_ONE), component("Mod Two", PENDING_TWO),
+            component("Mod Three", PENDING_THREE), component("Wide One", PENDING_WIDE)), encoding="utf-8")
+        return guide, converted
+
+    def test_a_dependent_that_is_not_deselected_blocks(self):
+        table = {"k1": [pending_entry("Mod Two", PENDING_TWO)]}
+        _, _, error = self.run_lane(table, converted=self.blocks(three_depends_on_two=True))
+        self.assertEqual(error, "policy_skipped_component_has_dependents")
+
+    def test_a_dependent_that_is_deselected_with_it_passes_and_is_reported_by_kind(self):
+        table = {"k1": [pending_entry("Mod Two", PENDING_TWO),
+                        pending_entry("Mod Three", PENDING_THREE, kind="dependent_of_deselected"),
+                        pending_entry("Wide One", PENDING_WIDE,
+                                      section="Enhanced Widescreen Support Mods")]}
+        commands, report, error = self.run_lane(table, converted=self.blocks(three_depends_on_two=True))
+        self.assertIsNone(error)
+        self.assertEqual(report["deselected_pending_review"]["by_kind"],
+                         {"unreviewed_draft": 2, "dependent_of_deselected": 1})
+        self.assertEqual(self.deselected(dict(commands)["install"]), [PENDING_TWO, PENDING_THREE, PENDING_WIDE])
+
+    def test_a_pinned_guid_that_differs_from_the_converted_component_blocks(self):
+        table = self.all_pending()
+        table["k1"][0] = pending_entry("Mod Two", "80000000-0000-0000-0000-0000000000ff")
+        commands, _, error = self.run_lane(table)
+        self.assertEqual(error, "policy_skipped_guid_mismatch")
+        self.assertNotIn("validate", dict(commands))
+
+    def test_gui_lane_reports_a_skipped_widescreen_draft_as_skipped_not_excluded(self):
+        commands, report, error = self.run_lane(self.all_pending(), mode="gui")
+        self.assertEqual(error, "gui_completion_report_missing")
+        self.assertEqual(report["gui_not_covered"]["excluded_widescreen"], [])
+        driver = dict(commands)["gui"]
+        self.assertEqual(self.deselected(driver), [PENDING_TWO, PENDING_THREE, PENDING_WIDE])
+
+    def test_gui_lane_without_the_widescreen_entry_excludes_it_and_still_passes_the_gate(self):
+        table = self.all_pending()
+        table["k1"] = table["k1"][:2]
+        _, report, error = self.run_lane(table, mode="gui")
+        self.assertEqual(error, "gui_completion_report_missing")
+        self.assertEqual([item["component_guid"] for item in report["gui_not_covered"]["excluded_widescreen"]],
+                         [PENDING_WIDE])
+
+    def test_malformed_pins_block_the_table(self):
+        good = pending_entry("Mod Two", PENDING_TWO)
+        for entry in (
+            {key: value for key, value in good.items() if key != "kind"},
+            {key: value for key, value in good.items() if key != "guid"},
+            {**good, "kind": "approved"},
+            {**good, "guid": "80000000-0000-0000-0000-0000000000AB"},
+            {**good, "guid": "not-a-guid"},
+            {**good, "guid": 7},
+        ):
+            with self.subTest(entry=entry):
+                path = lane_skips_file(Path(tempfile.mkdtemp()), {"k1": [entry]})
+                self.addCleanup(__import__("shutil").rmtree, path.parent)
+                with self.assertRaisesRegex(ports.Blocked, "lane_skips_invalid"):
+                    ports.load_lane_skips("k1", path)
+
+    def test_two_entries_pinning_one_guid_block_the_table(self):
+        path = lane_skips_file(Path(tempfile.mkdtemp()), {"k1": [
+            pending_entry("Mod Two", PENDING_TWO), pending_entry("Mod Three", PENDING_TWO)]})
+        self.addCleanup(__import__("shutil").rmtree, path.parent)
+        with self.assertRaisesRegex(ports.Blocked, "lane_skips_duplicate"):
+            ports.load_lane_skips("k1", path)
+
+
 class RealGuideFourGbSkipTests(unittest.TestCase):
     ROOT = Path(ports.__file__).resolve().parents[2] / "content"
 
-    def converted_from_guide(self, directory, guide):
+    def converted_from_guide(self, directory, guide, pinned=()):
         section = None
         blocks = []
         self.guid = None
+        pins = {(skip["section"], skip["heading"]): skip["guid"] for skip in pinned}
         for line in guide.read_text(encoding="utf-8").splitlines():
             if line.startswith("## "):
                 section = line[3:].strip()
@@ -1597,7 +1811,7 @@ class RealGuideFourGbSkipTests(unittest.TestCase):
                     "Mod List", "Optional Widescreen & Extended Widescreen Support Mods",
                     "Enhanced Widescreen Support Mods"):
                 heading = line[4:].strip()
-                guid = "70000000-0000-0000-0000-%012d" % len(blocks)
+                guid = pins.get((section, heading), "70000000-0000-0000-0000-%012d" % len(blocks))
                 if (section, heading) == FOUR_GB:
                     self.guid = guid
                     blocks.append("\n".join(["[[thisMod]]", 'Guid = "' + guid + '"',
@@ -1608,7 +1822,7 @@ class RealGuideFourGbSkipTests(unittest.TestCase):
         path.write_text(document(*blocks), encoding="utf-8")
         return path
 
-    def test_the_4gb_patcher_is_the_only_exempt_step_in_both_real_guides(self):
+    def test_the_4gb_patcher_is_the_only_hand_authored_exempt_step_in_both_real_guides(self):
         for game in ("k1", "k2"):
             with self.subTest(game=game):
                 directory = Path(tempfile.mkdtemp())
@@ -1617,12 +1831,31 @@ class RealGuideFourGbSkipTests(unittest.TestCase):
                 converted = self.converted_from_guide(directory, guide)
                 with self.assertRaisesRegex(ports.Blocked, "guide_steps_without_instructions"):
                     ports.coverage(guide, converted, {}, "rust", [])
-                skips = ports.load_lane_skips(guide.parent.name, SHIPPED_LANE_SKIPS)
+                skips = [skip for skip in ports.load_lane_skips(guide.parent.name, SHIPPED_LANE_SKIPS)
+                         if "guid" not in skip]
                 report = {}
                 self.assertTrue(ports.coverage(guide, converted, report, "rust", skips))
                 record, = report["skipped_by_reviewed_policy"]
                 self.assertEqual((record["section"], record["heading"], record["component_guid"]),
                                  (*FOUR_GB, self.guid))
+
+    def test_every_shipped_skip_resolves_to_one_counted_step_with_its_pinned_guid(self):
+        expected = {"k1": 151, "k2": 120}
+        for game in ("k1", "k2"):
+            with self.subTest(game=game):
+                directory = Path(tempfile.mkdtemp())
+                self.addCleanup(__import__("shutil").rmtree, directory)
+                guide = self.ROOT / game / "full.md"
+                skips = ports.load_lane_skips(game, SHIPPED_LANE_SKIPS)
+                converted = self.converted_from_guide(
+                    directory, guide, [skip for skip in skips if "guid" in skip])
+                report = {}
+                self.assertTrue(ports.coverage(guide, converted, report, "rust", skips))
+                self.assertEqual(len(report["skipped_by_reviewed_policy"]), expected[game])
+                self.assertTrue(all(record["component_guid"] for record in report["skipped_by_reviewed_policy"]))
+                pending = report["deselected_pending_review"]
+                self.assertEqual(pending["count"], expected[game] - 1)
+                self.assertEqual(pending["count"], len(pending["components"]))
 
 
 if __name__ == "__main__":

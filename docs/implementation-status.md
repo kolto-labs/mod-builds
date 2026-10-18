@@ -88,6 +88,16 @@ install and manual lane, because no source can supply the archive.
 - Generated draft instructions need a human review with notes. `gui_rust.py`
   cannot authorize one and stops (a deselected draft component is not installed and
   does not stop it).
+- Until that review happens, the components whose drafts the verified-draft review leaves
+  unreviewed are deselected from the Rust install lanes as visible, committed reviewed
+  policy skips (owner decision 2026-10-18; CI run 39136954201): k1 150, k2 118 plus the
+  dependent `Extended Korriban Arrival`. This is omission, not approval: the drafts stay
+  unreviewed, the lane report lists them under `deselected_pending_review` and the CI
+  log prints the count and names, and a new unreviewed draft still blocks. The rest of
+  each guide (k1 46 of 197 components, k2 30 of 151, after the `4GB Patcher` and
+  `K2 Cutscenes Rescaled` skips) is what these lanes now install, so a green Rust install lane is a
+  partial-guide result, not guide parity. Not yet confirmed against the CI-built Rust
+  binary; see [ports.md](ports.md#components-deselected-pending-human-review).
 - Archive file names containing `[ ] * ? { }` were reported to abort
   `--auto-generate-local`. That behavior is in ModSync.rs; it was not re-checked
   for this update.

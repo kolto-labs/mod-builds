@@ -229,6 +229,1056 @@
         "section": "Mod List",
         "heading": "4GB Patcher",
         "reason": "the pinned 4gb_patch.zip ships only the vendor's Windows patcher .exe, so the Rust converter rejects it ('No supported game files or patcher data found in mapped archive') and no instructions can be generated; the guide says to apply it only after all widescreen content and never on the Steam executable unless the widescreen .exe was applied, so the lane skips it explicitly instead of installing it out of guide order"
+      },
+      {
+        "section": "Mod List",
+        "heading": "KOTOR Dialogue Fixes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a3670a2f-f382-86e0-9696-020080fb3a43",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Character Startup Changes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "bdab3140-1e9e-8600-b95b-bee90658d9ef",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Thematic KOTOR Companions",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "b5d29c88-4537-86a7-8412-60c659f6ef68",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "JC's Minor Fixes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f01daefc-b4f6-8294-bfa1-2a95b564a1f2",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ajunta Pall Appearance",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "b19b97d7-f2da-8975-a14d-6b6d969193e4",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "KOTOR Community Patch",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "6fb1971d-5775-85e5-9e77-ecc68a896e84",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ported VO Replacements",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "5dfc02b7-d58f-8769-87f4-25a1dadd4991",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Korriban",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "24049fa2-3ecd-8ce4-a606-c7a752dd039f",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Kashyyyk",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a5859114-2906-8194-90cb-309473035a20",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Tatooine",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "7a829bc5-092c-81b2-b820-32e4091c5d9d",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Dantooine",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ddb667e4-a9ec-8b4b-b6e2-fea6a9c5b0c9",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Endar Spire +",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e951f477-8d1d-8b06-8bb8-184dbf30d3a4",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Manaan",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a00afb1f-586a-8ebe-babb-dd880e581a37",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Taris",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "814f2520-ec2d-8f77-8e9e-5eb576616203",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Character Overhaul",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "7e99b1de-b8a1-8ee4-9318-bbacaa52311f",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Unknown World",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "886d1851-90c8-843b-b0f5-30bb6e7863f9",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Korriban Sith Art",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "17918daa-225f-856b-a728-7411dbec081d",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Duncan on Manaan",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "8a8c0a83-cbd4-8f0b-bdcb-3344f2d9b5e6",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Consistent Conditioning",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "74ab9a39-cdaf-8d68-9110-fe34fadc51c5",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Pazaak Cards",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "fe1732b9-c5eb-8c01-8273-eace98311429",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD PC Portraits",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "b90ee25b-2fc9-88db-9d17-5a5ef47ee01c",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "PFHB02 Eye Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ff01b520-6a91-83ce-a6fe-e2ffa73eec55",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Gizka",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "95fe4c20-2b89-8010-aa5b-91b3b0cb37cd",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Sand People",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f9228db0-ce83-81b2-918e-8cb3a7811e0f",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Better Twi'lek Heads",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "0c2079ec-5d23-8e69-8106-cbed77b3a58d",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Twi'lek Females",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a01f0922-d858-8a22-abdd-2e58d6f24e60",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Thigh-High Boots for Twi'lek",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "b4bb7dc6-8cfb-8015-b439-5b74895ea4ed",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Calo Nord Recolor",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f502ec4c-d91d-8e6e-8261-fad6308c68d1",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Darth Malak",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "10ebc352-0574-858f-b2d3-b52d7fb66014",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "CineMalak",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "31175a55-b556-8430-9bff-a78d3744eef2",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Detran's Darth Revan",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "6a3112ab-1f95-843e-83cb-be42a52ae387",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD UI Elements",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "da5f96df-9941-89e5-bc38-7318be1456ec",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD NPC Portraits",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "582504b9-e6ef-876e-a0fe-5389cb80f2cc",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Male NPC Clothing",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f966fc1f-6b47-88fc-9050-07b1371eb56a",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Juhani Appearance Overhaul",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "95519736-cb6c-86e2-bb7a-3cd980fa9c05",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Juhani Cathar Head",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4188c324-caeb-8ff6-9512-93e481d8b0ae",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Korriban: Back in Black",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "8e70428e-2dab-8972-bf4c-6900d4ed8c26",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Cloaked Jedi Robes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "02034096-4a59-8fbc-b2a0-beb89cbf2067",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "JC's Jedi Tailor",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "d2f4b632-2636-809e-a924-bcd8912b7a21",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Cloaks with Shadows",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "7deb6488-652d-820e-aee9-00bef11230fe",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Qel-Droma Reskin",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "aa4ebbd9-a7a6-8af1-92d2-57d7b9530fb5",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Quanon's HK-47",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4ce833d5-4085-8cc2-9e4f-3460b1fbbfe7",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Kiosk",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "477d7c00-26ef-87be-adaf-ded4e3ea6f85",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "K2 Swoops to K1",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "634e72d7-59ff-8a55-acd2-d5ac6885b0be",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Stun Batons",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "760fc170-0060-8e41-a18c-49054984d946",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Unique Sith Governor",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "42a811e7-1116-8b6b-a738-4135582aa3e3",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Ithorians",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "90157c32-3ad5-8d28-aa65-cd7cecd20af2",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Kebla Yurt HD",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "5b246909-2689-8a21-ad46-02cb4b502403",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Astromech Droids",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "14b983cd-939a-8564-bf0f-c72100aae46f",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Davik's Trophies",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "2cb4a7df-dca8-8110-9652-6973aef53eba",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Carth Onasi",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "418f223c-cf27-85c6-916a-eeaa474c25ca",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Canderous Ordo",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "2fda8a49-32df-8d2e-8abe-f13861634749",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Quanon's Canderous",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "09d8f8bb-d321-8c23-adfb-47f5a13765ca",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Fen's Jolee",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ad575e9f-f3c0-8a4f-9459-d2f09e274686",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Zaalbar HD",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "928892c4-d210-8d5b-bcd5-a27d98fdca6e",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Sith Uniform Reformation Revised",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ed488679-bc04-892d-973b-107511862024",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Stylized Portraits",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "dbbb57bc-b715-8f2b-bdb6-1b10534002b4",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Star Map Revamp",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "0bc5ef83-c454-8e61-b704-01ab2869bd00",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Background Improvements",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "d47702e4-fdbb-81f4-8e75-124758c52d1c",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Kebla Yurt Renovation",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "7bdac77a-e2fc-8bba-aaac-2cd1454e531f",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Hi-Res Ebon Hawk",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "7f0e5b49-2167-87de-9884-1ae2a798a297",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ebon Hawk Repairs",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ab47cdb0-2c31-84c4-a81b-3a0cb8ca6c96",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HQ Cockpit Skyboxes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f349d403-6355-8f99-ad7a-de1128210258",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Yavin Station Hangar",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "07416fb0-1f9b-88ba-952f-4029575ad036",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ebon Hawk Cockpit Upgrade I",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "7469e4e6-1be6-8085-b1c9-3b5f60aff0b4",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ebon Hawk Cockpit Upgrade II",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "519b915f-ea5e-837f-952e-06594adb93fe",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Taris Reskin",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ffe1ae21-9c1b-88e0-a6a9-ca2f60aca30b",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HQ Skyboxes II",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f396178b-0707-8bb4-9deb-8e1d0bfae9e3",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ebon Hawk Transparent Cockpit Windows",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "be6c7d76-9699-88cd-b7e3-1d23fe54ba09",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Revamped FX",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a47d9415-c747-818b-bcce-72825f17ec11",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Terminal Texture",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ae9cffcf-daae-8012-96e6-0d1c92620ba9",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Animated Swoop Monitors",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "450ab98a-f3d0-815b-a423-b6f5d2027f55",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Reflective Lightsaber Blades",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e0c60688-88dd-84fe-a2b5-2f47bc956ab5",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Blaster Visual Effects",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "21938f6e-c3ae-8c74-bab6-c3d206f4adf8",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Kill The Czerka Guard",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4a1280f0-1856-8ca2-b5c4-6339faf8e948",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Korriban Workbench",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "d5403e9f-1936-8a89-934b-05693c57603c",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Senni Vek Mod",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "1684fafe-9547-8a4e-b743-c9fb94064f76",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Male Twi'lek Diversity",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ad424e39-4564-8342-bb3e-fdc491b0fcf0",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ixgil the Bith",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "aec010ca-ba40-80f6-948b-5e9f35939e86",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Hidden Bek Control Room",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "5dc9bda7-73d0-8cd5-b80a-695428d1237f",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Swoop Bike Upgrades",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "581433cd-4c71-848a-92f3-03064c7eae94",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Jedi Choice Dialogue Enhancement",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "92abfa89-260b-827e-9dda-5be6ccbeb83a",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Juhani Restoration",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "eb902642-633b-85b0-8029-eed36bffb70f",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Vision Enhancement",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e3dca703-1956-8a13-bcbb-5f58649626c9",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Rebalanced Grenades",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a328a55e-16b6-8e09-bf05-7f4b1d20ecb6",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Grenades & Mines",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "fbded2da-8b40-835d-93f0-50b099f35476",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Tutorial Remover",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "14d77038-49c0-882b-83a1-0a424efa0f60",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Leviathan Prison Break",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "b9f55e61-5ec6-8934-9fca-a5a4e1f8f7a7",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ain't No Air in Space",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "367fef86-46a5-86a5-9ec3-3922ec041779",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Party Conversations on the Ebon Hawk",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "30862622-1a16-8e74-9b33-6a93525e5832",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Dark Sacrifice",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "3659ab3f-2857-8630-ae48-64bbba1fad15",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Saber Throw Knockdown",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4c455e1c-4525-81a9-a443-42b44b79b2b4",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Sunry Enhancement",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e6488994-327d-825c-baed-6f869dad8ac2",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Davik Slave Change",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ac01b5c6-98d6-8ffe-a19a-7628f0386da6",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Taris Rapid Transit",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f49f2fc1-9c7c-81f5-aaa5-1be2067fe595",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Manaan Rapid Transit",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "3f6541d7-9d72-82f9-bf90-a46ca30f4bc0",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Security Spikes for K1",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a794138a-de5d-8dfe-8c8c-9eb47d474997",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HQ Blasters",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "97c5f09c-0521-82df-beec-0896382e83f9",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Crashed Republic Cruiser",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e6aa5f96-b229-86c6-bdc5-dc4e2ca22f5b",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Trandoshans Rescaled",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "962f4c2c-380b-8bd0-b3fa-23c8878ee5d0",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Custom Selkath Animation",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ad945f81-8f8d-83b1-83b2-53fad8ee320b",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Bastila Has TSL Battle Meditation",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "16e96f81-56a6-88bf-8e3e-f8c99e1b3008",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Sneak Attack Restoration",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "34f2e5ed-26e2-8157-baf5-a027f43e8405",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Sentinel Sneak Attack",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "74d64df6-aaff-8553-b43d-afdb25ab7a84",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Thematic The One",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "0917559d-309e-8098-9783-b61f524fe439",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Sherruk with Lightsabers",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "83226d49-f919-82a5-923e-c1d00f727c40",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Improved Cantina Sitters",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "2f0c7dc9-839c-8e1d-9dab-587cb969815d",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Bastila's Dark Bodysuit",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "475f5795-08ae-8ebc-9825-4c427f38fae6",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Dueling Arena Adjustment",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "aa560f62-b6d3-84d2-b744-524261dde1aa",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Bendak Non-Darkside Option",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "c5528694-bee0-87dc-a15a-5ede9f0f4253",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Kashyyyk Forcefield Rework",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "664758c3-09a8-8b64-9cb4-52d512887bf1",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Swoop Platform Repair",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "865b0833-e5a3-8cc7-8d5c-f9cbb26108bb",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Engine Lab Bench",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e97b029f-74f0-8e45-bd77-cd301349992b",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Missing Lamps Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "8e4017c2-0188-8749-be3a-aa8f27453d05",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Czerka Business Attire",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "7696c38c-9a45-8510-bda2-328f29eab2c1",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Sith Texture Restoration",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e2c457a0-c5c2-8200-af67-82286104a1c1",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Diversified Republic Soldiers",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "c05eae07-efa3-8d0d-aed4-956d55f5e271",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Diversified Jedi Captives",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "fd35a3d7-fa6d-89e8-ac6e-22f36a13e2bd",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Juhani Romance Enhancement",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "22bd845b-0d9f-8dad-a55b-5a122a020969",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Dodonna's Transmission",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e0130a70-2fd1-89d5-a9a1-b467e67dcaa6",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Endgame Hologram Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "0443f90d-6b4e-8662-84a6-0b6eb9759ce6",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Twisted Rancor Trio Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "3ff288a4-27ca-890b-8c84-3ca1eecd2a72",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Rakatan Hologram Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f61e46b4-3ced-8696-b4c1-650c9493ad48",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ending Enhancement",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a84c6034-355c-8023-b6a4-75255b7c1b16",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Elder Droid Unique VO",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "2fa45222-ae0c-8e49-a990-814e14f4260a",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ajunta Pall's Swords",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "3f5cb051-3598-8fb9-abb0-b50ac47d269d",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ajunta Pall's Blade",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4ea1565f-4e30-8d73-9bda-64f421cf0fc0",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "JC's Mandalorian Armor",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "31f46bde-5f3c-8e4a-b111-54048ed054fb",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Multifire & Autofire",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "34491bab-d2bf-8dfb-af04-20d5ec42c77a",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Blaster Adjustment",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ca59de10-e031-88ac-8c89-115d9cb23b8d",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HQ Gaffi Stick",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "42af7d19-3bc8-8f7f-b6ef-933aa8b725c3",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Quarterstaffs",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "63d3c66f-a4c4-880f-8228-02e1c1d9625a",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Logical Datapads",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a756653a-e346-84e9-b73a-235751c50599",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Minor Music Tweaks",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "00a148d2-6ee2-8212-9607-1bdce9efee1e",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Repair Affects Stun Droid",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "0046da60-4d8d-81fb-bd4d-fe39bf99bcc0",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Alignment Affects Force Powers",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "b236f2f3-efe2-84f1-848e-b00bca9109de",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Galaxy Map Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "7c11497d-de47-8eee-b80a-967b984a2822",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Remove Duplicate TGA/TPC",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "bd712c74-49d6-8d80-88b5-8a3aab28e916",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Character Overhaul Patches",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4a452675-10a9-81d2-b825-43731624248a",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Republic Soldier Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "269dc2cf-5e62-85dd-9f6f-3b302fe290a1",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Republic Soldier's New Shade",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "8c7d4f24-3e3f-8e5f-ac4b-96a186f334d6",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Character Textures & Model Fixes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ed7a95d9-fcd4-8011-b84a-fc075490dadc",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Optional Widescreen & Extended Widescreen Support Mods",
+        "heading": "HR Menus",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "6c3c7165-297e-80eb-b9f8-d47506dab2d5",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Optional Widescreen & Extended Widescreen Support Mods",
+        "heading": "HD UI Menu Pack",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "0e6154b2-8591-879d-b410-62baa95cd654",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Optional Widescreen & Extended Widescreen Support Mods",
+        "heading": "Workbench Camera Tweak",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "10380438-2753-8ebc-8694-70236e6b20c3",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Optional Widescreen & Extended Widescreen Support Mods",
+        "heading": "Pretty Good! Icons",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "6ff2988d-370a-8079-9162-093df5c6d60b",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Optional Widescreen & Extended Widescreen Support Mods",
+        "heading": "Robe Icons for JC's Cloaked Robes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "461350dd-6027-8124-a17e-ae6fd5536f37",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Optional Widescreen & Extended Widescreen Support Mods",
+        "heading": "Widescreen Fade Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "94eca3b4-0f21-84e1-ad12-9bd08c7e9d72",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Optional Widescreen & Extended Widescreen Support Mods",
+        "heading": "Main Menu Widescreen Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "da831add-0d34-8105-9657-a46418b358e5",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Optional Widescreen & Extended Widescreen Support Mods",
+        "heading": "Cutscenes Rescaled",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e75d7430-9865-8cbf-a574-773a147cabee",
+        "kind": "unreviewed_draft"
       }
     ],
     "k2": [
@@ -236,6 +1286,839 @@
         "section": "Mod List",
         "heading": "4GB Patcher",
         "reason": "the pinned 4gb_patch.zip ships only the vendor's Windows patcher .exe, so the Rust converter rejects it ('No supported game files or patcher data found in mapped archive') and no instructions can be generated; the guide says to skip it on the Aspyr patch or after 3C-FD, which already applies the same patch, so the lane skips it explicitly instead of installing it out of guide order"
+      },
+      {
+        "section": "Mod List",
+        "heading": "TSLRCM",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "bee5a72b-d748-8f83-8261-81758a9bfc56",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "TSLRCM Tweak Pack",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "8a80301b-fa9b-8c8c-8623-cd6255013703",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Silent Sion",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "9c5bbc49-daa8-89be-8f27-8428d8fa24b8",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Thematic KOTOR 2 Companions",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "d22f13ca-1a14-8942-8875-2d3754e8f499",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Saving Throw Fixes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "8e638d71-aea1-851e-905b-8e7bdf590221",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Classic Class Attack",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "5a13dbf0-ca35-87ea-b27f-181905adc656",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Robes with Shadows",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "8541df8d-5a4f-86fd-b87c-562296b7b619",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "K2CP",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "216eb8b6-3076-8a92-bd7d-012862b10b32",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Remote Tells Influence",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a23aef08-aeb6-8eef-b193-a0d982c1c163",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate HR Textures",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "6e9e1d85-e8e9-88ea-8a32-58f37e5f7398",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Character Overhaul",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "5694d896-2945-86ac-9aba-34b7c922d4c1",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Nar Shaddaa",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4b8d984d-1f71-808d-88e8-c38bb8e5f267",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Dantooine",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "307e3aa7-fb49-8c93-97ec-a5decf6b293e",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Dxun",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "06386c89-6e6d-859e-8b20-7eac4e2e932c",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Onderon",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "fb5f07e9-6e90-8d4c-a4a6-8ef2d84b4e90",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Korriban",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "20bd9cd8-85e2-8e2f-b943-6881b367cf23",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Malachor",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a1224c8e-b3d4-869c-a2f8-53837c8af753",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Korriban Sith Art",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "51c182dd-fa14-8a73-b6ef-1a1b77f92e8f",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ritual and Water Textures",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "015b790e-cf58-854e-8678-65ee7b367873",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Droid Special Weapons Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "d25cb92d-7cee-8c80-a7c3-259c35b09ba2",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Honest Merchant",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "be764bb8-4c17-85a4-8a31-7a23ea0a19df",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "JC's Minor Fixes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "00ab0357-31d9-87f7-b435-5ac18ecf7141",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Kiosk",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "43ff8dfd-3e6a-849e-85fa-f76c70b94556",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Blaster Visual Effects",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a5e44c8f-971b-8627-a545-7d7aff4a47be",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "New Holocron Textures",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "27b988f5-615d-88ef-af93-d4e6a6f264e9",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Thigh-High Boots for Twi'lek",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "c1bd1e7c-85be-8469-93d8-e3aba3777809",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Better Twi'lek Heads",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "1d93e291-aa7d-8c1b-992d-510c349bb926",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Twi'lek Male Diversity",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a7713e63-471e-81f0-8923-e4620be96f6e",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Dahnis Unique Look",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "946b6493-db4b-877c-870d-100b3e44d365",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Darth Malak's Armor",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "97d39844-42a1-8664-98ef-c02a1f2c6b2a",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Supermodel Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "d84764ab-fcb5-844d-802c-4b635d453d6a",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD NPC Portraits",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "93f58945-78b4-8fb9-996e-b67dce2933c3",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD PC Portraits",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "35384a76-4529-88d0-a8aa-55904d163d80",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Stylized Portraits TSL",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "8823785c-725f-8a23-8db5-0b4a8d49de30",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "PFHC03 Restoration",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "fac1545f-791a-8fe0-83b0-1cfb8239063d",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "4K Atton",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "17cbde5b-a234-8c26-95f3-5bdc8de199c5",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Atton with Scruff",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "d96b60b3-24a9-86f5-af8f-59b11ac904e9",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Dark Harbinger",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "39cd6164-573d-8d0d-875e-6ac5c63b4fa7",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Darth Nihilus",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f73985bc-e1eb-8b5b-aa68-bd4d277b69b7",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Darth Sion Remake",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4fa12cf9-b4af-8174-b99f-0b51f9fea045",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Detran's Revan",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "baedd512-a14d-8c31-a651-d2d45d4afae9",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Lore-Friendly Mandalore",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "bd44defe-db68-8c7f-bccf-19285d434b2e",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Visas Reduced Model Clipping",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "aac85482-ec1e-81b0-abb2-7d47325fd6b3",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Visas Marr",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "d440d1d2-8dc0-8b02-8b6c-bf6c5f607de5",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "T3M4 HD 2K",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "8f7963a1-d0ac-83b0-b142-bdba65db00d5",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Duros",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "dbc1e507-288d-8490-9b14-2035e35bef43",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Ithorians",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4486324f-7915-8334-a274-54113babb79b",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Lightsaber Visual Effects",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "1059906d-6b74-81ed-bfe4-21405eac9924",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Lightsaber Hilt Variety",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "2f09619c-5b49-8b97-978f-a8a78e615e12",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Neglected Computer Panel",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "271d3518-941f-87a6-b2ff-39703a2343e3",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Swoop Monitor Replacement",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "9687845e-d9c1-8f8d-b4b4-14e638ba4d71",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Terminal Texture",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "820eca3b-3df1-8874-9e8a-f0215063aa2c",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Animated Computer Panel",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f7f60559-87ae-8b1b-ba23-809788b82e8d",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Backdrop Improvements",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e7861093-a58d-854f-8bfa-ea735fd601b8",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Citadel Station Backdrop",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e8501df3-9a84-8f60-988c-15f30ca01af7",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HQ Skyboxes II",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "351de0e9-d36f-8bb2-ba08-003d9123e25a",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ebon Hawk Cockpit Upgrade I",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "bbd6d8a0-e6e3-816e-a9b8-65fe8b0a9124",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ebon Hawk Cockpit Upgrade II",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "c503ab3f-a9be-8efa-b318-91a2bf173fa6",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Transparent Cockpit Windows",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "02a4e06f-b54e-8384-8cb6-20fd5123f754",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HD Cockpit Skyboxes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "1ef52c4c-8846-8a4e-a304-ef6d30d5e7b9",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Aleema Keto's Robe Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ef2a219f-8140-8d40-8627-323ed78b9ebd",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Short-Term Memory Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4fefced2-405e-8107-9851-888b8827565d",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Onderon News Makes Sense",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "21cf7e64-44c9-862f-a8c7-df867312c607",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Kinrath Egg Crystal Drop",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "40d00784-6d4e-86ba-a2be-c9d24630bbfe",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Kreia's Fall Cutscene",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a38fc2df-8c87-84ea-afab-d5b98c28b4cf",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "PartySwap",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "0d645887-5b3a-82a1-925e-cdd7c68bf923",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Extended Enclave",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "403daebc-dd7f-892c-ac37-823cf1ae6600",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "PartySwap-EE Compatch",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "8fab0c36-d633-8fa1-b7db-a3a61ff83e78",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Extended Korriban Arrival",
+        "reason": "depends on TSLRCM, which is deselected pending human review; the Rust selection cascade deselects it with its dependency, so it is listed explicitly instead of being dropped silently; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "1943c462-51f0-8989-985d-5004700001f9",
+        "kind": "dependent_of_deselected"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Prologue Item Recovery",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "40840198-65b3-8cbc-aaa1-db49a544e6da",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Balance Tweak Pack",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "3e061a46-1f85-8653-884c-9df4bdf89139",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Mines Overhaul",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "3c5272b3-dc18-84eb-bf27-5595f1ca3962",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "No Health Regeneration",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4258d37f-8c01-83d5-940b-4800823ef67e",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Thematic Sith Lords",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e5a9ef4c-bc9b-85cb-aa11-35460e6524c4",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Thematic Jedi Masters",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f88f9af8-050f-811c-814b-706cb9466483",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Better Disciple Meditation",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ec7ead25-991c-89e5-bee8-01e1a5b8ef69",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Bao-Dur & Heavy Armor",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "1a7ac764-f51b-882e-ab19-8c1a13bbbcaa",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "JC's Crystal Attunement",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "eb0e8d8b-eb2f-8be4-96af-505924face12",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Jekk'Jekk'Tarr Thugs",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "d636ea9c-91a4-8954-99ef-5adcfdd23582",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Logical Jekk'Jekk Tarr",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ede3329f-5570-8a73-bea5-d33f538f60d5",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Mira's Vanilla Escape",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f44c70f2-b5a7-894a-8122-0e04e1029169",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Kreia's Longsword",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "7ff1ba5d-e226-8649-9d14-82c27e66484e",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Harbinger Performance Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4a1e3739-5396-84a6-96c7-5ff99267d498",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Visas VO Tweak",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "4fb6ac45-3839-8f16-9867-4f9d4fe58cfd",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Sion and a Male Exile",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "718aff57-5340-8467-8c3e-73c082bb8fde",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Assassins with Lightsabers",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "079aebde-7475-8d37-8d6b-f4a9fa355ca8",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "True Sith Assassins",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "b5b5ebd8-61e4-863c-b922-d46989ea8ee8",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "For Mandalore!",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "1b3a4760-3d39-8f2f-af11-f1409a3f6874",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Peragus Medical Bay Enhancement",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "5554bd4e-92ea-8409-a453-8b171a8f2d01",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "HQ Blasters",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "3eb56efe-013e-8095-80cf-a2584ba2cf94",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Droid Model Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "a5e5f6e5-2c95-8649-8263-1a2dae090c1f",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Upscaled Icon Overhaul",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "56187609-f126-8188-a955-7cab8ae51e2b",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Rescaled Trandoshans",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "2de86e49-571f-8600-931e-5bc2ad5acebe",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Visually Repair HK",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "698da25b-eba9-89b0-a10e-4fa8df07afcb",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Expanded Ending",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "9f0d9805-9b91-8450-a61a-ecbe189c8482",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Consistent Bastila Recognition",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "869841d4-48c6-8989-8dc8-a02e6689aa0d",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Handmaiden Fit Model",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "8f97eab8-9ee5-859f-a86f-bb4d0476c34b",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "JC's Handmaiden Sisters",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "b83b224a-3c42-83d5-85f4-c89df4a263ae",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Replacement Loadscreens",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "cefe9aa3-7ce9-89ce-be59-8e13f8406549",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Vibrocutter Changes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f062f905-3a4b-8d08-8e98-87d4326aebf1",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Peragus Monitor Adjust",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "bc7c31c7-fe6d-8f45-a753-725c9c5cb8e9",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Replacement Peragus II",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "c1c364aa-403a-8333-9ab3-f9bc5d1a8264",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "TSL Galaxymap Fixpack",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "74838401-c8de-815d-97c4-baeadf2671f2",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Fixed Hologram Models",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "6b1a2cc1-49d5-80ce-920c-8ab7eed947da",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Relighting TSL",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "bd26925e-d7a1-896e-8cb7-380755d81089",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Companion Clothes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "f27d4b13-b349-8c56-b9b7-620cdc133579",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Improved Enlightenment/Corruption",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "e015887a-be0f-86d1-830e-92d82c8fc46c",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Repair Affects Stun Droid",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "bb12eb49-4189-822d-ac7b-8d2e7169864b",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Improved Force Sight",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "44dfac1f-e2f3-84a8-bfe8-f0c1162553f5",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Alignment Affects Force Powers",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ac772b5f-e639-822d-b93f-e8c9560c7c18",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Ultimate Character Overhaul Patches",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "1acdc42b-0b9f-836b-8989-bae84915273c",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Remove Duplicate TGA/TPC",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "50750eba-472b-862d-bb38-08d573c2c481",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "TOMB",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "ee2b251b-720d-8f69-9d38-5a56310f0bb4",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Character Textures & Model Fixes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "13b0fc04-d64b-8dae-bdc2-b6eb01f3b4d6",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Enhanced Widescreen Support Mods",
+        "heading": "Main Menu Fix",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "14d721c3-67f9-885b-9736-04282d41bed0",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Enhanced Widescreen Support Mods",
+        "heading": "K2 Remastered Cutscenes",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "35154fa5-f0c4-8418-9634-58aedf9ffec7",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Enhanced Widescreen Support Mods",
+        "heading": "Loading Screen Rescaled",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "863b2f97-c8e8-8715-a1e0-2515fa70c71e",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Enhanced Widescreen Support Mods",
+        "heading": "Workbench Camera Tweak",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "3fa40bfc-198a-80ff-9547-db7e504a1017",
+        "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Enhanced Widescreen Support Mods",
+        "heading": "Upscaled Maps",
+        "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
+        "guid": "600d2fa2-c148-846f-bf3b-a44f10daf103",
+        "kind": "unreviewed_draft"
       }
     ]
   }

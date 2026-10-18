@@ -374,6 +374,16 @@ def print_diagnostics(report):
         suffix = f"; reviewed-policy-skipped={policy}" if policy else ""
         print(f"ports: convert generated instructions for {skips['generated']} of {skips['total']}"
               f" components; not generated: {causes or 'none'}{suffix}", file=sys.stderr)
+    pending = report.get(PENDING_REVIEW_KEY)
+    if pending:
+        print(f"::warning::ports: {pending['count']} component(s) DESELECTED pending human review "
+              f"(reviewed policy skips; not installed, not verified): "
+              f"{pending['by_kind']['unreviewed_draft']} unreviewed draft(s), "
+              f"{pending['by_kind']['dependent_of_deselected']} dependent(s) of a deselected component",
+              file=sys.stderr)
+        for item in pending["components"]:
+            print(f"  - deselected pending review: {item['heading']} [{item['component_guid']}] "
+                  f"({item['kind']})", file=sys.stderr)
     uncovered = report.get("steps_without_instructions")
     if uncovered:
         print(f"::error::ports: {len(uncovered)} guide steps have no instructions", file=sys.stderr)
@@ -395,6 +405,9 @@ SKIPPED_REPORT_KEY = "skipped_by_reviewed_policy"
 LANE_SKIPS_PATH = Path(__file__).with_name("archive_selections.json")
 LANE_SKIP_GAMES = ("k1", "k2")
 LANE_SKIP_KEYS = frozenset({"section", "heading", "reason"})
+LANE_SKIP_PINNED_KEYS = frozenset({"guid", "kind"})
+LANE_SKIP_KINDS = ("unreviewed_draft", "dependent_of_deselected")
+PENDING_REVIEW_KEY = "deselected_pending_review"
 
 
 def load_policy_skips(path, guide):
@@ -429,8 +442,10 @@ def load_lane_skips(game, path=None):
     """Return the reviewed lane skips for one game from archive_selections.json.
 
     The `lane_skips` table maps k1/k2 to a list of {section, heading, reason}
-    objects. The whole table is validated whatever the game, so a malformed
-    entry for the other game still blocks. A missing file or table skips nothing.
+    objects, each optionally pinned with a `guid` and a `kind` (both or neither;
+    see LANE_SKIP_KINDS). The whole table is validated whatever the game, so a
+    malformed entry for the other game still blocks. A missing file or table
+    skips nothing.
     """
     path = Path(path or LANE_SKIPS_PATH)
     if not path.is_file():
@@ -444,19 +459,40 @@ def load_lane_skips(game, path=None):
         if not isinstance(entries, list):
             raise Blocked("lane_skips_invalid")
         seen = set()
+        seen_guids = set()
         for entry in entries:
-            if (not isinstance(entry, dict) or entry.keys() != LANE_SKIP_KEYS
+            if (not isinstance(entry, dict) or not LANE_SKIP_KEYS <= entry.keys()
+                    or not entry.keys() <= LANE_SKIP_KEYS | LANE_SKIP_PINNED_KEYS
                     or any(not isinstance(entry[key], str) or not entry[key].strip()
-                           or entry[key] != entry[key].strip() for key in LANE_SKIP_KEYS)):
+                           or entry[key] != entry[key].strip()
+                           for key in entry.keys() & (LANE_SKIP_KEYS | {"guid"}))):
                 raise Blocked("lane_skips_invalid")
+            if entry.keys() & LANE_SKIP_PINNED_KEYS:
+                if (entry.keys() & LANE_SKIP_PINNED_KEYS != LANE_SKIP_PINNED_KEYS
+                        or entry["kind"] not in LANE_SKIP_KINDS or not canonical_guid(entry["guid"])):
+                    raise Blocked("lane_skips_invalid")
+                if entry["guid"] in seen_guids:
+                    raise Blocked("lane_skips_duplicate")
+                seen_guids.add(entry["guid"])
             key = (entry["section"], entry["heading"])
             if key in seen:
                 raise Blocked("lane_skips_duplicate")
             seen.add(key)
             if name == game:
-                result.append({"section": entry["section"], "heading": entry["heading"],
-                               "reason": entry["reason"], "urls": [], "source": "lane_skips"})
+                skip = {"section": entry["section"], "heading": entry["heading"],
+                        "reason": entry["reason"], "urls": [], "source": "lane_skips"}
+                if "guid" in entry:
+                    skip.update(guid=entry["guid"], kind=entry["kind"])
+                result.append(skip)
     return result
+
+
+def canonical_guid(value):
+    """True when value is a lowercase hyphenated GUID, the form the reports and --deselect use."""
+    try:
+        return isinstance(value, str) and str(uuid.UUID(value)) == value
+    except ValueError:
+        return False
 
 
 def merge_lane_skips(restore_skips, lane_skips):
@@ -480,8 +516,8 @@ def uncovered_steps(report, headings, components, indexes):
     return steps
 
 
-def coverage(guide, converted, report=None, implementation="rust", skipped=()):
-    text = guide.read_text(encoding="utf-8")
+def guide_step_list(text, implementation="rust"):
+    """The counted steps of a guide: (section, heading) in order, every step, and per-section counts."""
     if implementation not in IMPLEMENTATION_SECTIONS:
         raise Blocked("implementation_unknown")
     allowed_sections = {
@@ -490,7 +526,6 @@ def coverage(guide, converted, report=None, implementation="rust", skipped=()):
         "Enhanced Widescreen Support Mods",
     } | IMPLEMENTATION_SECTIONS[implementation]
     section = None
-    headings = []
     steps = []
     guide_steps = set()
     sections = {}
@@ -504,9 +539,15 @@ def coverage(guide, converted, report=None, implementation="rust", skipped=()):
         elif line.startswith("### "):
             guide_steps.add((section, line[4:].strip()))
             if section in allowed_sections:
-                headings.append(line[4:].strip())
                 steps.append((section, line[4:].strip()))
                 sections[section] += 1
+    return steps, guide_steps, sections
+
+
+def coverage(guide, converted, report=None, implementation="rust", skipped=()):
+    text = guide.read_text(encoding="utf-8")
+    steps, guide_steps, sections = guide_step_list(text, implementation)
+    headings = [heading for _, heading in steps]
     if "Mod List" not in sections:
         raise Blocked("unsupported_guide_structure")
     document = tomllib.loads(converted.read_text(encoding="utf-8"))
@@ -525,7 +566,9 @@ def coverage(guide, converted, report=None, implementation="rust", skipped=()):
         key = (skip["section"], skip["heading"])
         if key not in guide_steps:
             raise Blocked("policy_skipped_step_not_in_guide")
-        record = {"status": SKIPPED_BY_POLICY, **skip, "component_guid": None}
+        record = {"status": SKIPPED_BY_POLICY,
+                  **{name: value for name, value in skip.items() if name != "guid"},
+                  "component_guid": None}
         if key in steps:
             if steps.count(key) != 1:
                 raise Blocked("policy_skipped_step_ambiguous")
@@ -534,17 +577,30 @@ def coverage(guide, converted, report=None, implementation="rust", skipped=()):
             if not isinstance(component, dict) or not component.get("Guid"):
                 raise Blocked("policy_skipped_component_unidentified")
             identity = guid(component["Guid"])
-            if any(isinstance(other, dict) and identity in [
-                    str(each).lower() for each in other.get("Dependencies", [])]
-                   for other in components if other is not component):
-                raise Blocked("policy_skipped_component_has_dependents")
+            if "guid" in skip and skip["guid"] != identity:
+                raise Blocked("policy_skipped_guid_mismatch")
             record["component_guid"] = identity
             exempt.add(index)
+        elif "guid" in skip:
+            raise Blocked("policy_skipped_guid_unmatched")
         records.append(record)
+    skipped_guids = {record["component_guid"] for record in records
+                     if record["component_guid"] is not None}
+    for other in (component for index, component in enumerate(components) if index not in exempt):
+        if isinstance(other, dict) and skipped_guids & {
+                str(each).lower() for each in other.get("Dependencies", [])}:
+            raise Blocked("policy_skipped_component_has_dependents")
     if report is not None:
         report[SKIPPED_REPORT_KEY] = records
-        reclassify_policy_skips(report, {record["component_guid"] for record in records
-                                         if record["component_guid"] is not None})
+        pending = [{"component_guid": record["component_guid"], "heading": record["heading"],
+                    "kind": record["kind"]} for record in records if record.get("kind")]
+        if pending:
+            report[PENDING_REVIEW_KEY] = {
+                "count": len(pending),
+                "by_kind": {kind: sum(item["kind"] == kind for item in pending)
+                            for kind in LANE_SKIP_KINDS},
+                "components": pending}
+        reclassify_policy_skips(report, skipped_guids)
     uncovered = [index for index, component in enumerate(components)
                  if index not in exempt and (not isinstance(component, dict)
                                              or not component.get("Instructions"))]

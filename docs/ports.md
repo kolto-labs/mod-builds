@@ -149,6 +149,64 @@ bare-filename and multi-archive drafts stay fenced. `ports.py` never sets
   available, so the real count depends on their contents (the replay must reproduce the
   bound instructions exactly) and may differ from 40.
 
+### Components deselected pending human review
+
+CI run 39136954201 stopped every Rust install lane at the `draft_review` gate: the
+review clears only drafts a replay of one hash-bound archive reproduces, so prose,
+multi-archive and executable-method drafts stayed unreviewed (k2 CLI 118, k2 GUI 113,
+k1 CLI 150, k1 GUI 142 components; the GUI lists are the CLI lists without the
+widescreen-only components it excludes, so the CLI list is the union). On the repository
+owner's explicit instruction (2026-10-18, delegating the review sign-off), those
+components are **omitted from the Rust install lanes** instead of being approved, so the
+remainder installs:
+
+- They are committed `lane_skips` entries (see [Lane skips](#lane-skips-steps-that-need-no-restore-report))
+  carrying `guid` and `kind`. Nothing is reviewed or approved: the drafts keep
+  `RequiresReview = true`, the verifier is unchanged, and the lane still deselects them with
+  `--deselect <Guid>` for `validate` and `install` (and `gui_rust.py --deselect`). The
+  reason of each entry says `deselected pending human review, delegated by owner 2026-10-18`.
+- **Counts.** k1: 150 `unreviewed_draft` entries (8 are widescreen-only). k2: 118
+  `unreviewed_draft` (5 widescreen-only) plus 1 `dependent_of_deselected`, `Extended
+  Korriban Arrival`, which depends on the deselected `TSLRCM`; the Rust selection cascade
+  (`--deselect` also deselects every selected dependent) would drop it silently, so it is
+  listed. Each game also keeps its hand-authored `4GB Patcher` entry; k2 additionally
+  skips `K2 Cutscenes Rescaled` through the restore report. Measured with a
+  pre-verified-review Rust build (`validate --deselect` of the whole set on the
+  `--parse-directions` conversion of the real guides), the cascade auto-deselects only
+  components already in the set (k1: 4 of them, k2: 20), and no `Restrictions`,
+  `InstallBefore`, `InstallAfter` or option reference points at a deselected component.
+- **New drafts still block.** Only the listed GUIDs are exempt from the gate. Any other
+  component with an unreviewed draft stops the lane with
+  `unreviewed_draft_instructions_remain` exactly as before, and a pinned `guid` that no
+  longer matches the converted component blocks (`policy_skipped_guid_mismatch`), so a
+  changed converter or guide cannot silently retarget a skip.
+- **Dependents.** A skipped component with a dependent that is not itself skipped still
+  blocks (`policy_skipped_component_has_dependents`); a dependent that is skipped too
+  (every dependent of a listed component in the k1 and k2 guides except the one above) is
+  fine.
+- **Visible summary.** The lane report has `deselected_pending_review`: `count`,
+  `by_kind` (`unreviewed_draft`, `dependent_of_deselected`) and one record per component
+  (`component_guid`, `heading`, `kind`). `ports.py` repeats it on stderr in the CI log:
+  `::warning::ports: N component(s) DESELECTED pending human review ... ` followed by one
+  `deselected pending review: <heading> [<guid>] (<kind>)` line per component. These
+  components are also in `skipped_by_reviewed_policy`, so the GUI lane never reports them
+  as covered; the GUI `gui_covered_components` count excludes them. Remove an entry (or
+  review the draft and rerun the generator) to put a component back.
+- **Reproducible generation.** `tools/modsync-ci/deselect_unreviewed.py` writes the
+  entries from the log lines `ports: unreviewed draft still selected: <guid> (<name>)`:
+
+  ```text
+  deselect_unreviewed.py --game k2 --guide content/k2/full.md --converted converted.toml \
+      --log install-cli.log --log install-gui.log [--write | --check]
+  ```
+
+  `--converted` is any `convert --parse-directions` output of the same guide (GUIDs and
+  `Dependencies` do not depend on archives). The tool maps each GUID to its
+  `<## section>::<### heading>` step, refuses GUIDs or names the guide does not have, adds
+  the transitive dependents, keeps entries without a `kind` (the `4GB Patcher`), and
+  replaces the kind-marked ones. Without `--write` it prints the result; `--check` exits 1
+  when `archive_selections.json` differs.
+
 TypeScript (`pnpm build`, then the built CLI; the guide's parent directory selects
 `kotor1` or `kotor2`):
 
@@ -268,13 +326,17 @@ table, read by `ports.py` for the **Rust** lanes only (no restore report needed)
 ```
 
 - **Schema.** Keys are `k1` or `k2` (the guide folder name); each value is a list of
-  objects with exactly `section`, `heading` and `reason`, all non-empty strings
-  without surrounding whitespace. A malformed table, an unknown game key, or a
+  objects with `section`, `heading` and `reason`, all non-empty strings
+  without surrounding whitespace, plus optionally a `guid` (lowercase GUID) and a `kind`
+  (`unreviewed_draft` or `dependent_of_deselected`), given together; see
+  [Components deselected pending human review](#components-deselected-pending-human-review).
+  A pinned `guid` must equal the converted component's GUID (`policy_skipped_guid_mismatch`)
+  and be unique in the table. A malformed table, an unknown game key, or a
   repeated step blocks the Rust lane (`lane_skips_invalid`, `lane_skips_duplicate`)
   whichever game is being run; a missing file or table skips nothing.
 - **Scope.** Only the exact `<## section>::<### heading>` is skipped. A step that is
   not in the guide, appears twice in the counted sections, or has a dependent
-  component blocks the lane, exactly like a restore-report skip. Every other step
+  component that is not itself skipped blocks the lane, exactly like a restore-report skip. Every other step
   still needs instructions.
 - **Same path as restore-report skips.** The entries are merged with the restore
   report's `skipped_steps` (a step named by both is reported once, as the restore
