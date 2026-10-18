@@ -193,6 +193,24 @@ longer matches and must be reviewed again.
 The check is structural: it matches records, hashes and UUID coverage. It does not
 prove the review is correct and does not bypass the port's own install gates.
 
+### Drafting a review manifest
+
+`tools/modsync-ci/draft_ts_review.py` prepares the manual work; it never approves anything:
+
+```bash
+python3 tools/modsync-ci/draft_ts_review.py PORTS_WORK/ports-*/converted.toml content/k1/full.md
+```
+
+It writes `ci/drafts/<game>-typescript-review.draft.json` and
+`<game>-typescript-review.checklist.md`. The draft carries the hashes, component GUIDs and
+the verbatim `instructions` and `options` records. `phase` is filled only if `ports.py`
+exposes a `component_phase` function (it does not yet, so it is a TODO). `reviewer`,
+`unresolved`, `assessment` and every `choices` answer are placeholders, and the draft has
+`draft: true`, so `ports.review_manifest` blocks it. A human completes it, removes the
+`draft*` keys and commits it as `ci/<game>-typescript-review.json`; the tool refuses to
+write that path or anything under `ci/`. Use the TOML the lane itself hashed
+(`converted_sha256` in its report), not a fresh conversion.
+
 ## Reviewed policy skips
 
 Rust lanes restore with the reviewed `--allow-uncached-by-policy` step flags
