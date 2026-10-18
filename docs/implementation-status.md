@@ -101,6 +101,16 @@ install and manual lane, because no source can supply the archive.
   `K2 Cutscenes Rescaled` skips) is what these lanes now install, so a green Rust install lane is a
   partial-guide result, not guide parity (the TypeScript lanes do not omit those drafts). Not yet confirmed against the CI-built Rust
   binary; see [ports.md](ports.md#components-deselected-pending-human-review).
+- Rust `validate` failures that name a component (`Error: <Component> / step N (...)`, as
+  `Ebon Hawk Downloadable Map` did in k2 CLI/GUI run 39141977764) are quarantined at run
+  time: the component and its dependents are deselected and `validate` re-runs, at most 15
+  times and never more than 15% of the selected components. Every quarantined component is
+  in the lane report (`quarantined_validate_failures`) and a `::warning::` line, so a green
+  Rust lane may be a partial install. Errors that name no component, caps, a missing game
+  and install-time failures (K1 `Helena Shan Improvement`, which needs a restored game
+  before a retry) still fail the lane; failures now print a bounded evidence excerpt and
+  record the failing component as `failure`. Unit-tested with fake tool output only; not yet
+  run in CI. See [ports.md](ports.md#runtime-quarantine-of-validate-failures-rust-lanes-only).
 - Archive file names containing `[ ] * ? { }` were reported to abort
   `--auto-generate-local`. That behavior is in ModSync.rs; it was not re-checked
   for this update.

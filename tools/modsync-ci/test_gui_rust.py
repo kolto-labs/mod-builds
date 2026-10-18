@@ -8,6 +8,7 @@ import tomllib
 import unittest
 from unittest import mock
 
+import gui_diag
 import gui_rust
 
 BASE_ONE = "10000000-0000-0000-0000-000000000001"
@@ -289,6 +290,111 @@ class ExecuteTests(unittest.TestCase):
         _, args = self.prepare(document(block(BASE_ONE, "A"), block(WIDE_ONE, "W", widescreen=True)))
         _, error = self.run_execute(args)
         self.assertEqual(error, "full_input_contains_separate_widescreen_phase_driver_supports_single_phase_only")
+
+
+class WorkerFailureTests(unittest.TestCase):
+    prepare = ExecuteTests.prepare
+    run_execute = ExecuteTests.run_execute
+    LEAK = "ghp_" + "a1B2c3D4e5" * 4
+
+    def fail(self, log_text, code, phase=None, report=False, expire=False):
+        _, args = self.prepare(document(block(BASE_ONE, "A"), block(BASE_TWO, "B")))
+        result = {}
+        launched = []
+
+        class Process:
+            returncode = code
+
+            def __init__(self, command, **kwargs):
+                launched.append(command)
+                self.pid = 0
+                private = Path(command[-1])
+                (private / "driver.log").write_text(log_text, encoding="utf-8")
+                if phase:
+                    gui_diag.mark_phase(private, *phase)
+                if report:
+                    (private / "result.json").write_text(
+                        json.dumps({"status": "blocked", "reason": "gui_timeout"}), encoding="utf-8")
+
+            def wait(self, timeout=None):
+                if expire:
+                    raise gui_rust.subprocess.TimeoutExpired("xvfb-run", timeout)
+                return code
+
+        with mock.patch.object(gui_rust.shutil, "which", return_value="/bin/true"), \
+                mock.patch.object(gui_rust.subprocess, "Popen", Process), \
+                mock.patch.object(gui_rust, "stop"):
+            with self.assertRaises(gui_rust.Blocked) as caught:
+                gui_rust.execute(args, result)
+        return result, str(caught.exception), args
+
+    def test_missing_report_keeps_the_reason_and_adds_redacted_tail_exit_and_phase(self):
+        log = "\n".join(["xvfb-run: error: Xvfb failed to start", "token=" + self.LEAK,
+                         "open /home/runner/work/_temp/gui/x"]) + "\n"
+        result, reason, args = self.fail(log, 1)
+        self.assertEqual(reason, "isolated_worker_failed_before_report")
+        diagnostics = result["worker_diagnostics"]
+        self.assertEqual((diagnostics["phase"], diagnostics["exit_code"], diagnostics["signal"]),
+                         ("launch", 1, None))
+        self.assertFalse(diagnostics["worker_result_present"])
+        self.assertEqual(result["stage"], "launch")
+        tail = "\n".join(diagnostics["tails"]["worker"])
+        self.assertIn("Xvfb failed to start", tail)
+        self.assertNotIn(self.LEAK, tail)
+        self.assertNotIn(str(args.work_dir), json.dumps(diagnostics))
+        json.dumps(result)
+
+    def test_tail_is_capped_and_signal_and_phase_are_reported(self):
+        log = "".join("line %d\n" % number for number in range(1000))
+        result, _, _ = self.fail(log, -9, phase=("first_screenshot", "Keep telemetry off"))
+        diagnostics = result["worker_diagnostics"]
+        self.assertEqual(len(diagnostics["tails"]["worker"]), gui_diag.TAIL_LINES)
+        self.assertEqual(diagnostics["tails"]["worker"][-1], "line 999")
+        self.assertEqual((diagnostics["signal"], diagnostics["phase"], diagnostics["stage"]),
+                         ("SIGKILL", "first_screenshot", "Keep telemetry off"))
+        self.assertEqual(result["stage"], "Keep telemetry off")
+
+    def test_worker_report_is_kept_and_still_gets_diagnostics(self):
+        result, reason, _ = self.fail("Traceback x\n", 1, phase=("install", "Run validation"), report=True)
+        self.assertEqual(reason, "gui_timeout")
+        self.assertTrue(result["worker_diagnostics"]["worker_result_present"])
+        self.assertEqual(result["worker_diagnostics"]["phase"], "install")
+
+    def test_overall_timeout_is_marked(self):
+        result, reason, _ = self.fail("still running\n", None, expire=True)
+        self.assertEqual(reason, "isolated_desktop_timeout")
+        self.assertTrue(result["worker_diagnostics"]["timed_out"])
+
+    def test_successful_run_has_no_diagnostics(self):
+        _, args = self.prepare(document(block(BASE_ONE, "A"), block(BASE_TWO, "B")))
+        result, error = self.run_execute(args, completed=2)
+        self.assertIsNone(error)
+        self.assertNotIn("worker_diagnostics", result)
+
+    def test_main_prints_a_group_and_a_json_line_without_the_tail_but_saves_it_in_the_report(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        report = root / "report.json"
+        diagnostics = gui_diag.collect(root, (("worker", "driver.log", 5),), code=1)
+
+        def execute(args, result):
+            result["worker_diagnostics"] = dict(diagnostics, tails={"worker": ["boom"]})
+            raise gui_rust.Blocked("isolated_worker_failed_before_report")
+
+        argv = ["gui_rust.py", "--binary", "b", "--input", "i", "--game-dir", "g", "--archives", "a",
+                "--work-dir", "w", "--report", str(report), "--timeout", "5"]
+        printed = []
+        with mock.patch.object(gui_rust.sys, "argv", argv), mock.patch.object(gui_rust, "execute", execute), \
+                mock.patch("builtins.print", lambda *a, **k: printed.append(a[0])):
+            self.assertEqual(gui_rust.main(), 1)
+        self.assertTrue(printed[0].startswith("::group::gui worker tail"))
+        self.assertIn("[worker] boom", printed[0])
+        self.assertTrue(printed[0].rstrip().splitlines()[-2:][0].startswith("::endgroup::"))
+        line = json.loads(printed[1])
+        self.assertNotIn("worker_diagnostics", line)
+        self.assertEqual(line["reason"], "isolated_worker_failed_before_report")
+        saved = json.loads(report.read_text(encoding="utf-8"))
+        self.assertEqual(saved["worker_diagnostics"]["tails"]["worker"], ["boom"])
 
 
 class ArgumentTests(unittest.TestCase):

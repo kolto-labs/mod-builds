@@ -113,9 +113,9 @@ filenames relative to the archives directory, restored links only. `ports.py
 TypeScript lanes ignore it. A guide link that is uncached by policy
 (Nexus Mods, GameFront and the K2 cutscene post, reported as `uncached-by-policy`;
 see [cache.md](cache.md#known-gaps)) stops restore unless the lane passes
-`--allow-uncached-by-policy` for it; the Rust lanes do so for the reviewed steps
-below. The restore also writes `$RUNNER_TEMP/restore-report.json`
-(`--report`), which Rust lanes hand to `ports.py --restore-report`.
+`--allow-uncached-by-policy` for it; every install lane (Rust and TypeScript) does so
+for the reviewed steps below. The restore also writes `$RUNNER_TEMP/restore-report.json`
+(`--report`), which every install lane hands to `ports.py --restore-report`.
 
 ### Install lanes and uncached links
 
@@ -130,12 +130,13 @@ named section or step may pass it. Checked against the lane code on the current
 | --- | --- | --- |
 | `rust` + `cli` | Yes. `ports.py` runs `install --phase all`; the converter leaves widescreen components selected (`IsSelected = true`, `WidescreenOnly = true`) | Not allowed |
 | `rust` + `gui` | No. `ports.py` passes `--exclude-widescreen` to `gui_rust.py`, which deselects every widescreen-only component in a private copy of the converted TOML and reports it as not covered | Not wired |
-| `typescript` + `cli`/`gui` | Not selected for install (`select_base_components`), but `validate --all` selects every mod, and both lanes require a reviewed manifest that does not exist yet (and have no deselect mechanism). The `cli` lane now attempts a physical install (`--ci-physical-install`, see below); the `gui` lane does not | Not wired |
+| `typescript` + `cli`/`gui` | Not selected for install (`select_base_components`). Reviewed policy skips are left out by `--select` of the non-skipped component GUIDs (TypeScript has no `--deselect`), and both lanes require a reviewed manifest that does not exist yet. The `cli` lane now attempts a physical install (`--ci-physical-install`, see below); the `gui` lane does not | Not wired |
 | `manual` | Unknown: depends on the human-reviewed `ci/<game>-manual-plan.json`, which does not exist | Not wired |
 
-Reviewed policy (step-scoped, never a whole section). **Wired for the Rust install
-lanes** (`rust` + `cli` and `rust` + `gui`) in the `Restore required mod archives`
-step; the `manual` lane and the TypeScript lanes do not pass them:
+Reviewed policy (step-scoped, never a whole section). **Wired for all four install
+lanes** (`rust`/`typescript` x `cli`/`gui`) in the `Restore required mod archives`
+step, which both the Rust and the TypeScript install lanes run; the `manual` lane does
+not pass them:
 
 | Link | Game | Step (`##` / `###`) | Reason |
 | --- | --- | --- | --- |
@@ -163,16 +164,21 @@ private copy of the converted TOML (see [GUI subset](ports.md#gui-mode)), listed
 the lane report as `skipped_by_reviewed_policy` and never counted as covered. Every
 other Nexus and GameFront link still fails restore.
 
-The `typescript` lanes get neither the flags nor `--restore-report`: they require
-a reviewed manifest that does not exist, have no deselect mechanism, and
-`validate --all` would select the skipped step.
+The `typescript` lanes get the same `--allow-uncached-by-policy` flags and
+`--restore-report`. TypeScript has no `--deselect`, so `ports.py` passes `--select`
+with the GUIDs of the non-skipped components to `validate` (and the CLI `install`; the GUI lane
+drives a policy-filtered copy of the TOML), and the
+skipped steps are recorded in the lane report as `skipped_by_reviewed_policy`. The
+lanes install Wine (`wine wine64 wine32:i386`) before `ports.py` for legacy patchers
+and `Execute` steps, and still require the reviewed manifest described below.
 
 - **`typescript` lanes** first require `ci/<game>-typescript-review.json`, a
   human-reviewed manifest. If it is missing, the job fails; it never passes
   without one. `ports.py` then validates it against the guide hashes. No
   `ci/*-typescript-review.json` exists yet (it must be human-authored), so these
-  lanes still fail at that step and are not claimed to pass; they also have no
-  policy-skip mechanism (`--restore-report` is refused).
+  lanes still fail at that step and are not claimed to pass. Policy skips work as
+  for the Rust lanes, through `--restore-report` and `--select` of the non-skipped
+  GUIDs.
   - **Source ref.** The `typescript` lanes check out ModSync.ts at
     `vars.MODSYNC_TS_REF`, default `feat/physical-install` (workflow-level env
     `MODSYNC_TS_REF`), not the repository default branch. That branch is unmerged

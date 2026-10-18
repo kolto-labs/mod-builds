@@ -2,8 +2,10 @@
 """Private-source, fail-closed full-guide port runner (Python 3.11+)."""
 
 import argparse
+import gui_diag
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -22,6 +24,65 @@ class Blocked(Exception):
 
 def digest(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+FAILURE_TAIL_LINES = 80
+GUI_STAGE = "gui"
+GUI_REPORT_NAME = "gui-report.json"
+GUI_TAIL_LINES = 200
+GUI_TAIL_GROUP = "::group::gui worker tail"
+DIAGNOSTICS_MAX_DEPTH = 4
+DIAGNOSTICS_MAX_ITEMS = 400
+
+
+def sanitize_diagnostics(value, depth=0):
+    """Redact every string again and bound the shape of driver-supplied diagnostics."""
+    if isinstance(value, str):
+        redacted = gui_diag.redact(value)
+        return redacted if len(redacted) <= gui_diag.LINE_LIMIT else redacted[:gui_diag.LINE_LIMIT] + "..."
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if depth >= DIAGNOSTICS_MAX_DEPTH:
+        return None
+    if isinstance(value, list):
+        return [sanitize_diagnostics(item, depth + 1) for item in value[-DIAGNOSTICS_MAX_ITEMS:]]
+    if isinstance(value, dict):
+        return {sanitize_diagnostics(str(key), depth + 1): sanitize_diagnostics(item, depth + 1)
+                for key, item in list(value.items())[:DIAGNOSTICS_MAX_ITEMS]}
+    return None
+
+
+def load_worker_diagnostics(path):
+    """The driver report's `worker_diagnostics`, sanitized, or None when absent or unreadable."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    diagnostics = data.get("worker_diagnostics") if isinstance(data, dict) else None
+    if not isinstance(diagnostics, dict) or not diagnostics:
+        return None
+    return sanitize_diagnostics(diagnostics)
+
+
+def reemit_gui_failure(text, driver_report, report):
+    """Make a failed GUI driver visible in the plain CI log and copy its diagnostics into the lane report.
+
+    The driver prints its own `::group::gui worker tail` block (already redacted) just before
+    its final JSON line; it is re-emitted without an enclosing group because Actions groups do
+    not nest. Every line is redacted again before it reaches the log.
+    """
+    lines = [gui_diag.CONTROL.sub("", gui_diag.redact(line))
+             for line in text.splitlines()[-GUI_TAIL_LINES:]]
+    print(f"gui output (last {GUI_TAIL_LINES} lines)", file=sys.stderr)
+    print("\n".join(lines), file=sys.stderr)
+    diagnostics = load_worker_diagnostics(driver_report)
+    if diagnostics is None:
+        return
+    report["worker_diagnostics"] = diagnostics
+    if not any(line.startswith(GUI_TAIL_GROUP) for line in lines):
+        print("\n".join(gui_diag.render_group(diagnostics)), file=sys.stderr)
 
 
 def run(command, source, private, stage, report, env):
@@ -44,11 +105,115 @@ def run(command, source, private, stage, report, env):
             raise Blocked("command_interrupted_or_timed_out") from None
     report["commands"].append({"stage": stage, "exit_code": code})
     if code:
-        lines = log.read_text(encoding="utf-8", errors="replace").splitlines()[-80:]
-        print(f"::group::{stage} output (last 80 lines)", file=sys.stderr)
-        print("\n".join(lines), file=sys.stderr)
-        print("::endgroup::", file=sys.stderr)
+        text = log.read_text(encoding="utf-8", errors="replace")
+        if stage == GUI_STAGE:
+            reemit_gui_failure(text, private / GUI_REPORT_NAME, report)
+        else:
+            lines = text.splitlines()[-FAILURE_TAIL_LINES:]
+            print(f"::group::{stage} output (last {FAILURE_TAIL_LINES} lines)", file=sys.stderr)
+            print("\n".join(lines), file=sys.stderr)
+            print("::endgroup::", file=sys.stderr)
+        record_failure(text, stage, code, report, print_excerpt=True)
         raise Blocked(stage + "_failed")
+
+
+ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*[A-Za-z]")
+EVIDENCE_LINES_BEFORE = 60
+EVIDENCE_LINE_CAP = 200
+EVIDENCE_LINE_WIDTH = 600
+ERROR_LINE = re.compile(r"(?:\bError|\bException):|\[Error\]")
+STOP_MARKER = re.compile(r"(?:install(?:ation)?|cli command)\s+stopped", re.IGNORECASE)
+FAILURE_WORDS = re.compile(r"error|failed", re.IGNORECASE)
+COMPONENT_FAILURE = re.compile(
+    r"(?:Error|Exception): (?P<component>.+?) / step (?P<step>\d+) "
+    r"\((?P<action>[^)]*)\): (?P<message>.*?)\s*$")
+SECRET_PATTERNS = (
+    (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"), r"\1 ***"),
+    (re.compile(r"(?i)\b([\w-]*(?:token|secret|passw(?:or)?d|api[_-]?key|access[_-]?key|authorization"
+                r"|credential|signature)[\w-]*)\s*[=:]\s*\S+"), r"\1=***"),
+    (re.compile(r"://[^/\s:@]+:[^/\s@]+@"), "://***@"),
+    (re.compile(r"(?i)([?&](?:token|key|sig|signature|x-amz-[a-z-]+)=)[^&\s]+"), r"\1***"),
+    (re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"), "***"),
+)
+
+
+def clean_line(line):
+    """One log line without terminal escapes, secrets, or text a CI runner would read as a command."""
+    line = ANSI_ESCAPE.sub("", line).rstrip()
+    for pattern, replacement in SECRET_PATTERNS:
+        line = pattern.sub(replacement, line)
+    if len(line) > EVIDENCE_LINE_WIDTH:
+        line = line[:EVIDENCE_LINE_WIDTH] + " ...[truncated]"
+    if line.startswith(("::", "##[")):
+        line = " " + line
+    return line
+
+
+def failure_excerpt(text, before=EVIDENCE_LINES_BEFORE, cap=EVIDENCE_LINE_CAP):
+    """A bounded excerpt of a failed tool's output: its Error/Exception lines with context.
+
+    Keeps each Error:/Exception: line with up to `before` lines ahead of it and, after the first
+    install-stopped marker (kept too), every line that mentions an error or a failure. At most `cap` lines
+    (the last ones win); gaps are marked and the result is secret-scrubbed.
+    """
+    lines = [ANSI_ESCAPE.sub("", line) for line in text.splitlines()]
+    keep = set()
+    for index, line in enumerate(lines):
+        if ERROR_LINE.search(line):
+            keep.update(range(max(0, index - before), index + 1))
+    marker = next((index for index, line in enumerate(lines) if STOP_MARKER.search(line)), None)
+    if marker is not None:
+        keep.add(marker)
+        keep.update(index for index in range(marker, len(lines)) if FAILURE_WORDS.search(lines[index]))
+    ordered = sorted(keep)
+    omitted = max(0, len(ordered) - cap)
+    ordered = ordered[omitted:]
+    excerpt = []
+    if omitted:
+        excerpt.append(f"[{omitted} earlier excerpt line(s) omitted]")
+    previous = None
+    for index in ordered:
+        if previous is not None and index != previous + 1:
+            excerpt.append("[...]")
+        excerpt.append(clean_line(lines[index]))
+        previous = index
+    return excerpt
+
+
+def parse_component_failure(text):
+    """The last `Error: <Component> / step N (<Action>): <message>` line of a tool's output, or None."""
+    found = None
+    for line in text.splitlines():
+        match = COMPONENT_FAILURE.search(ANSI_ESCAPE.sub("", line))
+        if match:
+            found = match
+    if found is None:
+        return None
+    return {"component": found.group("component").strip(), "step": int(found.group("step")),
+            "action": found.group("action").strip(),
+            "message": clean_line(found.group("message")),
+            "error_line": clean_line(found.group(0))}
+
+
+def record_failure(text, stage, code, report, print_excerpt=False):
+    """Write the failing component/step into the lane report and, optionally, the excerpt into the CI log."""
+    failure = {"stage": stage, "exit_code": code, "component": None, "step": None,
+               "action": None, "error_line": None}
+    parsed = parse_component_failure(text)
+    if parsed:
+        failure.update(parsed)
+    report["failure"] = failure
+    if print_excerpt:
+        excerpt = failure_excerpt(text)
+        print(f"::group::{stage} failure evidence (bounded excerpt, {len(excerpt)} lines)",
+              file=sys.stderr)
+        print("\n".join(excerpt) if excerpt else "(no Error/Exception line or install-stopped marker in the output)",
+              file=sys.stderr)
+        print("::endgroup::", file=sys.stderr)
+        if parsed:
+            print(f"ports: {stage} failed at component '{parsed['component']}', step {parsed['step']} "
+                  f"({parsed['action']})", file=sys.stderr)
+    return failure
 
 
 SKIP_CAUSES = (
@@ -353,6 +518,147 @@ def reclassify_policy_skips(report, guids):
             counts[POLICY_CAUSE] = counts.get(POLICY_CAUSE, 0) + 1
 
 
+QUARANTINE_KEY = "quarantined_validate_failures"
+QUARANTINE_MAX_ITERATIONS = 15
+QUARANTINE_MAX_FRACTION = 0.15
+VALIDATE_FAILURE_KIND = "validate_failure"
+QUARANTINE_DEPENDENT_KIND = "dependent_of_quarantined"
+QUARANTINE_CAP_REASON = "validate_quarantine_cap_exceeded"
+GAME_MISSING = re.compile(
+    r"\b(?:game|kotor)\s+(?:directory|folder|install(?:ation)?)\b[^:]{0,40}"
+    r"\b(?:not found|does not exist|is missing|missing)\b|chitin\.key",
+    re.IGNORECASE)
+
+
+def deselected_guids(flags):
+    """The GUIDs named by the --deselect flags of a command line, normalized."""
+    return {normalized_reference(value) for flag, value in zip(flags, flags[1:]) if flag == "--deselect"}
+
+
+def converted_components(converted):
+    document = tomllib.loads(converted.read_text(encoding="utf-8"))
+    components = document.get("thisMod", document.get("Components", []))
+    return [component for component in components if isinstance(component, dict)]
+
+
+def find_failing_component(components, name):
+    """The one converted component a validate error names, or (None, why it cannot be attributed)."""
+    matches = {}
+    for component in components:
+        if name in (component.get("Name"), component.get("Heading")):
+            matches[normalized_reference(component.get("Guid"))] = component
+    if not matches:
+        folded = name.casefold()
+        for component in components:
+            if folded in (str(component.get("Name", "")).casefold(),
+                          str(component.get("Heading", "")).casefold()):
+                matches[normalized_reference(component.get("Guid"))] = component
+    if not matches:
+        return None, "component_unknown"
+    if len(matches) > 1:
+        return None, "component_ambiguous"
+    return next(iter(matches.items())), None
+
+
+def transitive_dependents(components, root, excluded):
+    """Every not-yet-excluded component that depends, directly or through others, on `root`."""
+    found = {}
+    frontier = {root}
+    while frontier:
+        reached = set()
+        for component in components:
+            identity = normalized_reference(component.get("Guid"))
+            if identity == root or identity in found or identity in excluded:
+                continue
+            if frontier & {normalized_reference(each) for each in component.get("Dependencies", [])}:
+                found[identity] = component
+                reached.add(identity)
+        frontier = reached
+    return found
+
+
+def validate_with_quarantine(command, directories, deselect, converted, game, source, private, report,
+                             env, max_iterations=QUARANTINE_MAX_ITERATIONS,
+                             max_fraction=QUARANTINE_MAX_FRACTION):
+    """Run `validate`; quarantine each component it names as failing and re-run, visibly and bounded.
+
+    `deselect` is the --deselect flag list shared with install and the GUI driver; quarantined
+    components (and their dependents) are appended to it in place. A failure is only
+    quarantined when its `Error: <Component> / step N (<Action>): ...` line names exactly one
+    converted component that is still selected, the game directory is populated, and neither
+    the iteration cap nor max_fraction of the selected components would be exceeded. Anything
+    else leaves the lane failed. Every quarantined component is listed in
+    report["quarantined_validate_failures"].
+    """
+    components = converted_components(converted)
+    taken = deselected_guids(deselect)
+    selected = sum(normalized_reference(component.get("Guid")) not in taken for component in components)
+    max_components = min(selected, math.floor(selected * max_fraction + 1e-9)) if max_fraction > 0 else 0
+    quarantined = report.setdefault(QUARANTINE_KEY, [])
+    policy = report["quarantine"] = {
+        "max_iterations": max_iterations, "max_fraction": max_fraction,
+        "selected_components": selected, "max_components": max_components,
+        "attempts": 0, "stopped": None}
+
+    def stop(reason, parsed, failure, blocked=None):
+        policy["stopped"] = {"reason": reason, "component": parsed and parsed["component"],
+                             "step": parsed and parsed["step"], "error_line": parsed and parsed["error_line"]}
+        raise Blocked(blocked or "validate_failed") from failure
+
+    iterations = 0
+    while True:
+        stage = "validate" if iterations == 0 else f"validate_retry_{iterations}"
+        policy["attempts"] = iterations + 1
+        try:
+            run(command + ["validate"] + directories + deselect, source, private, stage, report, env)
+        except Blocked as failure:
+            if str(failure) != stage + "_failed":
+                raise
+            try:
+                text = (private / (stage + ".log")).read_text(encoding="utf-8", errors="replace")
+            except OSError:
+                text = ""
+            code = report["commands"][-1].get("exit_code") if report.get("commands") else None
+            parsed = parse_component_failure(text)
+            if parsed is None:
+                record_failure(text, stage, code, report)
+                stop("error_not_attributable", None, failure)
+            record_failure(text, stage, code, report)
+            if max_iterations <= 0:
+                stop("quarantine_disabled", parsed, failure)
+            if iterations >= max_iterations:
+                stop("iteration_cap_exceeded", parsed, failure, QUARANTINE_CAP_REASON)
+            if not game.is_dir() or not any(game.iterdir()) or GAME_MISSING.search(parsed["message"]):
+                stop("game_missing", parsed, failure)
+            match, problem = find_failing_component(components, parsed["component"])
+            if problem:
+                stop(problem, parsed, failure)
+            identity, component = match
+            taken = deselected_guids(deselect)
+            if identity in taken:
+                stop("component_already_deselected", parsed, failure)
+            dependents = transitive_dependents(components, identity, taken)
+            if len(quarantined) + 1 + len(dependents) > max_components:
+                stop("component_cap_exceeded", parsed, failure, QUARANTINE_CAP_REASON)
+            name = component.get("Name", component.get("Heading"))
+            quarantined.append({
+                "kind": VALIDATE_FAILURE_KIND, "name": name, "component_guid": identity,
+                "step": parsed["step"], "action": parsed["action"],
+                "error_line": parsed["error_line"], "stage": stage, "caused_by": None})
+            for dependent_guid, dependent in dependents.items():
+                quarantined.append({
+                    "kind": QUARANTINE_DEPENDENT_KIND,
+                    "name": dependent.get("Name", dependent.get("Heading")),
+                    "component_guid": dependent_guid, "step": None, "action": None,
+                    "error_line": None, "stage": stage, "caused_by": identity})
+            for each in (identity, *dependents):
+                deselect += ["--deselect", each]
+            iterations += 1
+            continue
+        report.pop("failure", None)
+        return
+
+
 def print_diagnostics(report):
     """Put the skip causes and every uncovered step in the CI log so one read is enough."""
     review = report.get("draft_review")
@@ -384,6 +690,30 @@ def print_diagnostics(report):
         for item in pending["components"]:
             print(f"  - deselected pending review: {item['heading']} [{item['component_guid']}] "
                   f"({item['kind']})", file=sys.stderr)
+    quarantined = report.get(QUARANTINE_KEY)
+    if quarantined:
+        failing = [item for item in quarantined if item["kind"] == VALIDATE_FAILURE_KIND]
+        print(f"::warning::ports: {len(quarantined)} component(s) QUARANTINED after validate failures "
+              f"({len(failing)} failing, {len(quarantined) - len(failing)} dependent(s)): they are "
+              f"not installed and not verified, so a green lane is a PARTIAL install", file=sys.stderr)
+        for item in quarantined:
+            if item["kind"] == VALIDATE_FAILURE_KIND:
+                print(f"::warning::ports: quarantined {item['name']} [{item['component_guid']}]: "
+                      f"validate failed at step {item['step']} ({item['action']}): {item['error_line']}",
+                      file=sys.stderr)
+            else:
+                print(f"::warning::ports: quarantined {item['name']} [{item['component_guid']}]: "
+                      f"depends on quarantined {item['caused_by']}", file=sys.stderr)
+    stopped = (report.get("quarantine") or {}).get("stopped")
+    if stopped:
+        print(f"::error::ports: validate failure not quarantined ({stopped['reason']})"
+              + (f": {stopped['error_line']}" if stopped.get("error_line") else ""), file=sys.stderr)
+    failure = report.get("failure")
+    if failure and report.get("status") != "installed":
+        where = (f"component '{failure['component']}', step {failure['step']} ({failure['action']})"
+                 if failure.get("component") else "no component could be attributed")
+        print(f"::error::ports: {failure['stage']} failed (exit {failure['exit_code']}): {where}",
+              file=sys.stderr)
     uncovered = report.get("steps_without_instructions")
     if uncovered:
         print(f"::error::ports: {len(uncovered)} guide steps have no instructions", file=sys.stderr)
@@ -977,8 +1307,12 @@ def execute(args, report):
         return
     directories = ["--input", str(converted), "--game-dir", str(game),
                    "--source-dir", str(archives)]
-    run(command + ["validate"] + directories + deselect,
-        source, private, "validate", report, env)
+    validate_with_quarantine(
+        command, directories, deselect, converted, game, source, private, report, env,
+        getattr(args, "max_quarantine", QUARANTINE_MAX_ITERATIONS),
+        getattr(args, "max_quarantine_fraction", QUARANTINE_MAX_FRACTION))
+    quarantined_guids = {item["component_guid"] for item in report.get(QUARANTINE_KEY, [])}
+    gui_skipped = policy_guids | quarantined_guids
     if args.mode == "gui":
         if (digest(guide) != report["guide_sha256"]
                 or digest(converted) != report["converted_sha256"]):
@@ -989,12 +1323,12 @@ def execute(args, report):
              "--game-dir", str(game), "--archives", str(archives),
              "--work-dir", str(private / "gui-work"),
              "--report", str(driver_report), "--timeout", "7000", "--exclude-widescreen"]
-            + [flag for guid_ in sorted(policy_guids) for flag in ("--deselect", guid_)],
+            + [flag for guid_ in sorted(gui_skipped) for flag in ("--deselect", guid_)],
             source, private, "gui", report, env)
         if not driver_report.is_file() or driver_report.is_symlink():
             raise Blocked("gui_completion_report_missing")
         result = json.loads(driver_report.read_text(encoding="utf-8"))
-        expected_completed = (report["component_count"] - len(policy_guids) - len(excluded))
+        expected_completed = (report["component_count"] - len(gui_skipped) - len(excluded))
         if (not isinstance(result, dict)
                 or result.get("schema_version") != 1
                 or result.get("implementation") != "rust"
@@ -1007,11 +1341,11 @@ def execute(args, report):
                 or result.get("component_count") != report["component_count"]
                 or result.get("completed_components") != expected_completed
                 or result.get("expected_components") != expected_completed
-                or result.get("skipped_by_reviewed_policy") != sorted(policy_guids)
+                or result.get("skipped_by_reviewed_policy") != sorted(gui_skipped)
                 or result.get("excluded_widescreen") != sorted(
                     item["component_guid"] for item in excluded)
                 or result.get("widescreen_phase") != report["gui_not_covered"]["widescreen_phase"]
-                or result.get("coverage") != ("subset" if policy_guids or excluded else "full")
+                or result.get("coverage") != ("subset" if gui_skipped or excluded else "full")
                 or not isinstance(result.get("verified_game_files"), int)
                 or result["verified_game_files"] <= 0
                 or not isinstance(result.get("receipt_sha256"), str)
@@ -1046,6 +1380,12 @@ def main(argv=None):
                              "coverage, recorded in the report and left out of the install (Rust --deselect, "
                              "TypeScript --select of the rest). Both implementations also apply the reviewed "
                              "lane_skips of archive_selections.json (TypeScript: the unpinned entries only)")
+    parser.add_argument("--max-quarantine", type=int, default=QUARANTINE_MAX_ITERATIONS,
+                        help="Rust lanes: most validate failures to quarantine (deselect and re-run) "
+                             "before the lane fails; 0 disables quarantine (default %(default)s)")
+    parser.add_argument("--max-quarantine-fraction", type=float, default=QUARANTINE_MAX_FRACTION,
+                        help="Rust lanes: most quarantined components (failures plus dependents) as a "
+                             "fraction of the selected components (default %(default)s)")
     for name in ("source", "guide", "game-dir", "archives", "work-dir", "report"):
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args(argv)

@@ -7,6 +7,15 @@ archive input file (including files in copied directories) must be bound.
 steps are ordered {id, source_heading, operations, timeout_seconds?} objects.
 source_heading is the exact Markdown line, including '### '. Every level-three
 heading inside the single '## Mod List' section must occur once, in order.
+A step may instead be {id, source_heading, omit: {reason, reviewed_by}} with no
+operations or timeout: a visible, reviewed omission. It is never executed, appears
+in the report as status "omitted" and in report["omitted_steps"], emits a ::warning::
+line, and makes the run partial (report status "partial", report["partial"] true).
+reason and reviewed_by must be nonempty printable strings; omit together with
+operations (even an empty list) is an error, and at least one step must execute.
+Every guide step is therefore executed or explicitly omitted, never silently skipped.
+A partial result is NOT a full reference install: later steps run without the
+omitted ones and shared .2da/.tlk rows may differ.
 supplemental_sections lists {source_heading, review, step_ids} for EVERY level-two
 and level-three heading outside that section, in order. review is a nonempty
 human review rationale; step_ids explicitly associates any applicable mod steps
@@ -50,7 +59,8 @@ staging cannot fit, live state and snapshot remain intact. Recovery has no
 timeout. A hard kill,
 power loss, uncooperative process or external tree writer needs operator recovery;
 the pending report and retained snapshot are the recovery evidence, not success.
-Exit 0: complete; 1: failed/blocked (consult private report). No resume or commit.
+Exit 0: complete or partial (see report status); 1: failed/blocked (consult private
+report). No resume or commit.
 """
 
 import argparse
@@ -272,6 +282,38 @@ def timeout_value(value):
     return value
 
 
+def validate_omission(step):
+    require("operations" not in step and "timeout_seconds" not in step,
+            "omitted step must not declare operations or timeout")
+    omit = step["omit"]
+    fields(omit, ("reason", "reviewed_by"))
+    for key in ("reason", "reviewed_by"):
+        require(isinstance(omit[key], str) and omit[key].strip() and omit[key].isprintable(),
+                "omit " + key + " must be a nonempty printable string")
+
+
+def omitted_steps(plan):
+    return [{"id": step["id"], "heading": step["source_heading"],
+             "reason": step["omit"]["reason"], "reviewed_by": step["omit"]["reviewed_by"]}
+            for step in plan["steps"] if "omit" in step]
+
+
+def annotation_text(text):
+    return text.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+
+
+def warn_omitted(omitted, total):
+    for entry in omitted:
+        print("::warning title=manual step omitted::%s" % annotation_text(
+            "%s (%s) omitted, reviewed by %s: %s" % (entry["id"], entry["heading"],
+                                                     entry["reviewed_by"], entry["reason"])),
+              flush=True)
+    if omitted:
+        print("::warning title=partial manual install::%s" % annotation_text(
+            "%d of %d guide steps omitted; this is a PARTIAL reference, not a full manual install"
+            % (len(omitted), total)), flush=True)
+
+
 def validate_plan(plan, guide, roots, default_timeout):
     fields(plan, ("guide_sha256", "archive_sha256", "steps", "supplemental_sections"))
     require(isinstance(plan["archive_sha256"], dict), "archive_sha256 must be a mapping")
@@ -283,16 +325,20 @@ def validate_plan(plan, guide, roots, default_timeout):
     require(isinstance(plan["steps"], list), "steps must be a list")
     identifiers, actual = [], []
     for step in plan["steps"]:
-        fields(step, ("id", "source_heading", "operations"), ("timeout_seconds",))
+        fields(step, ("id", "source_heading"), ("operations", "timeout_seconds", "omit"))
         require(isinstance(step["id"], str) and step["id"].strip(), "invalid step id")
         identifiers.append(step["id"])
         actual.append(step["source_heading"])
+        if "omit" in step:
+            validate_omission(step)
+            continue
         timeout_value(step.get("timeout_seconds", default_timeout))
-        require(isinstance(step["operations"], list) and step["operations"], "empty operations")
+        require(isinstance(step.get("operations"), list) and step["operations"], "empty operations")
         for operation in step["operations"]:
             validate_operation(operation, roots)
     require(actual == mods, "mod headings must match exactly once in guide order")
     require(len(set(identifiers)) == len(identifiers), "duplicate step id")
+    require(any("omit" not in step for step in plan["steps"]), "plan omits every step; nothing would be installed")
     require(isinstance(plan["supplemental_sections"], list), "supplemental_sections must be a list")
     covered = []
     for section in plan["supplemental_sections"]:
@@ -350,7 +396,7 @@ def validate_digest(value):
 
 def verify_archive_inputs(plan, roots, deadline=None):
     for step in plan["steps"]:
-        for operation in step["operations"]:
+        for operation in step.get("operations", []):
             source_token = operation.get("source", operation.get("patcher"))
             if isinstance(source_token, str) and source_token.startswith("{archives}/"):
                 source = path_token(source_token, roots, ("archives",))
@@ -738,7 +784,10 @@ def main():
         roots["extract"].mkdir(mode=0o700)
         requested_report.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         report_path = requested_report
-        report.update(status="running", guide_sha256=plan["guide_sha256"], plan_sha256=plan_hash)
+        omitted = omitted_steps(plan)
+        report.update(status="running", guide_sha256=plan["guide_sha256"], plan_sha256=plan_hash,
+                      partial=bool(omitted), omitted_steps=omitted)
+        warn_omitted(omitted, len(plan["steps"]))
         write_json(work / "reviewed-plan.json", plan)
         write_json(report_path, report)
         signal.signal(signal.SIGTERM, interrupted)
@@ -746,6 +795,12 @@ def main():
         for index, step in enumerate(plan["steps"], 1):
             require(sha256(args.plan) == plan_hash and sha256(args.guide) == plan["guide_sha256"],
                     "immutable plan or guide changed")
+            if "omit" in step:
+                report["steps"].append({"id": step["id"], "status": "omitted",
+                                        "reason": step["omit"]["reason"],
+                                        "reviewed_by": step["omit"]["reviewed_by"]})
+                write_json(report_path, report)
+                continue
             checkpoint = work / ("step-%04d" % index)
             checkpoint.mkdir(mode=0o700)
             snapshot = checkpoint / "before"
@@ -802,8 +857,15 @@ def main():
             successful.append((snapshot, receipt))
             prune_snapshots(successful, args.keep_snapshots, roots["game"], after)
             write_json(report_path, report)
-        report["status"] = "complete"
+        require([item["id"] for item in report["steps"]] == [step["id"] for step in plan["steps"]]
+                and all(item["status"] in ("complete", "omitted") for item in report["steps"]),
+                "every guide step must be complete or omitted")
+        report["status"] = "partial" if omitted else "complete"
         write_json(report_path, report)
+        if omitted:
+            print("::warning title=partial manual install::%s" % annotation_text(
+                "finished PARTIAL: %d of %d guide steps omitted (see report omitted_steps)"
+                % (len(omitted), len(plan["steps"]))), flush=True)
         return 0
     except (Exception, KeyboardInterrupt) as error:
         report["status"] = "failed"

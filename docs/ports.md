@@ -244,6 +244,94 @@ also `IsSelected = false` (`report.selected_after_policy_count`). The review has
 bound to `converted.toml` (before that copy), so it does not depend on the restore
 report. The GUI input hash is checked against the copy.
 
+### Runtime quarantine of validate failures (Rust lanes only)
+
+CI run 39141977764 got past the draft-review gate and then stopped the k2 CLI and GUI
+lanes in `validate` at `Error: Ebon Hawk Downloadable Map / step 2 (Patcher): File blocks
+destination directory: .../Modules/003ebo.mod`. On the owner's standing instruction
+(omit what cannot install, visibly, so the remainder installs), the Rust `validate` step
+now runs in a bounded quarantine loop. Nothing is quarantined statically: the committed
+tables (`archive_selections.json`) are unchanged, and a component only enters the list
+because `validate` named it in a failing run.
+
+1. `validate` runs with the normal `--deselect` list. When it exits nonzero, `ports.py`
+   reads `validate.log` for the last `Error: <Component> / step N (<Action>): <message>`
+   line.
+2. The component name must match exactly one converted component (`Name` or `Heading`;
+   a case-insensitive match is accepted only when exact matching finds nothing). Its
+   GUID, and the GUID of every selected component that depends on it, directly or
+   through others (`Dependencies`, the same relation the
+   `policy_skipped_component_has_dependents` check uses), are added to the shared
+   `--deselect` list. Dependents are listed individually as `dependent_of_quarantined`.
+3. `validate` is re-run as `validate_retry_1`, `validate_retry_2`, ... (each stage has its
+   own log). The final `--deselect` list, including the quarantined GUIDs, is what `install`
+   and, for the GUI lane, `gui_rust.py --deselect` receive. The GUI lane counts quarantined
+   components as skipped, never covered (`coverage` is `subset`).
+
+The loop is bounded: at most `--max-quarantine` re-runs (default 15; `0` disables the loop) and at
+most `--max-quarantine-fraction` (default 0.15) of the **selected** components in total,
+failing components plus dependents, rounded down. "Selected" excludes the reviewed-policy
+and GUI-widescreen deselects, so it is small on the current guides (k2 has about 30
+installable components, so at most 4 can be quarantined); raise the fraction only
+deliberately.
+
+The lane still **hard-fails** (`validate_failed`, or `validate_quarantine_cap_exceeded` for the
+caps) when:
+
+- the error names no component (`error_not_attributable`: a panic, `No components are
+  selected`, an empty log);
+- the name matches no component (`component_unknown`) or more than one
+  (`component_ambiguous`);
+- the component is already deselected, which would loop (`component_already_deselected`);
+- the game directory is missing or empty, or the message says the game directory or
+  `chitin.key` is missing (`game_missing`);
+- either cap would be exceeded (`iteration_cap_exceeded`, `component_cap_exceeded`; the
+  offending component is not quarantined), or quarantine is disabled
+  (`quarantine_disabled`).
+
+Restore, convert, coverage and draft-review problems happen before `validate` and are
+never quarantined. TypeScript lanes do not use the loop. `install` failures are not
+quarantined either: a failed install has already changed the game directory (the K1 CLI
+stop `Helena Shan Improvement / step 2 (Patcher): Built-in OdyPatcher reported errors;
+restore before retrying` is of that kind), so retrying needs a restored game, which
+`ports.py` does not do. Its component and the tool's output are recorded and printed (see
+[Failure evidence](#failure-evidence)) instead.
+
+**A green lane with quarantined components is a partial install.** The quarantined
+components were not installed and not verified, so the lane is not guide parity, and it
+is less complete than the reviewed-policy subset alone. Every one is reported:
+
+- The lane report has `quarantined_validate_failures`, one record per component: `kind`
+  (`validate_failure` or `dependent_of_quarantined`), `name`, `component_guid`, `step`,
+  `action`, `error_line` (scrubbed, one line), `stage` (the `validate` run that failed)
+  and `caused_by` (the failing component's GUID, for dependents). It is an empty list when
+  nothing was quarantined. `quarantine` records the caps, the selected-component count, the
+  `attempts` and, when the loop refused, `stopped` (`reason`, `component`, `step`,
+  `error_line`).
+- The CI log prints `::warning::ports: N component(s) QUARANTINED after validate failures
+  ... PARTIAL install` and one `::warning::ports: quarantined <name> [<guid>]: validate
+  failed at step N (<action>): <error line>` (or `depends on quarantined <guid>`) per
+  component, and an `::error::` line when the loop refused.
+
+To bring a component back, fix its instructions (or archive) and rerun; to make an
+omission permanent and reviewed, add it to `lane_skips` as for any other skip.
+
+### Failure evidence
+
+The CI log keeps only the last 80 lines of a failed command, which hid the three patcher
+errors of the K1 `install` failure. When any command fails, `ports.py` additionally
+prints a `::group::<stage> failure evidence` excerpt of the full log: every `Error:` /
+`Exception:` / `[Error]` line with up to 60 lines before it and, after the first
+`Install stopped` / `CLI command stopped` marker (the marker included), every line that
+contains `error` or `failed`; gaps are shown as `[...]`, at most 200 lines are kept (the
+latest win, with a count of omitted lines first), lines are cut at 600 characters, and
+ANSI escapes, `key=value` secrets, bearer tokens, URL credentials and signed-URL
+parameters are scrubbed. The failing component is also written to the lane report as
+`failure` (`stage`, `exit_code`, `component`, `step`, `action`, `error_line`; the component
+fields are `null` when the output names none) and echoed as `ports: <stage> failed at
+component '<name>', step N (<action>)` and a final `::error::ports: <stage> failed ...`
+line.
+
 ## TypeScript review manifest (schema 1)
 
 A JSON file bound to one exact conversion. Without it the lane stops with
@@ -492,4 +580,7 @@ Each run writes logs, the converted TOML and GUI evidence to a private `ports-*`
 directory under the work directory. Reports hold reason codes, stage exit codes and
 hashes, but GUI reports include private paths; review them before publishing.
 Exit 0 means the port's own install completed. It is not, by itself, proof of
-parity with the manual reference.
+parity with the manual reference, and for the Rust lanes it is a partial install
+whenever the report lists `deselected_pending_review`, `skipped_by_reviewed_policy` or
+`quarantined_validate_failures` entries (see
+[Runtime quarantine](#runtime-quarantine-of-validate-failures-rust-lanes-only)).

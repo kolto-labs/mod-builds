@@ -19,6 +19,8 @@ import sys
 import tempfile
 import tomllib
 
+import gui_diag
+
 
 class Blocked(Exception):
     pass
@@ -51,12 +53,19 @@ const {createModSyncServer} = await import(pathToFileURL(join(config.source, 'pa
 const evidence = async (name, value) => writeFile(join(config.private, name), JSON.stringify(value, null, 2));
 let server, browser, page;
 let stage = 'launch';
+let phase = 'preflight';
+const mark = async next => {
+  phase = next || phase;
+  await writeFile(join(config.private, 'phase.txt'), `${phase}\n${stage}\n`).catch(() => {});
+};
+await mark();
 const clicks = [];
 const fail = reason => {throw new Error(reason);};
 try {
   const token = randomBytes(32).toString('hex');
   server = await createModSyncServer({token, staticDir: join(config.source, 'packages/web/dist'), settingsPath: join(config.private, 'settings.json')});
   const address = await server.listen(0, '127.0.0.1');
+  await mark('first_screenshot');
   browser = await chromium.launch({headless: true});
   page = await browser.newPage({viewport: {width: 1440, height: 1000}});
   page.setDefaultTimeout(30000);
@@ -69,6 +78,7 @@ try {
   }, route);
   const click = async name => {
     stage = String(name);
+    await mark();
     const control = page.getByRole('button', {name, exact: true});
     await control.waitFor();
     if (!await control.isEnabled()) fail('visible_control_disabled');
@@ -78,6 +88,7 @@ try {
   };
   await page.goto(`${address}/?token=${token}`);
   await page.getByRole('heading', {name: 'Welcome to ModSync', exact: true}).waitFor();
+  await mark('install');
   if (await page.getByText('Mock mode is active').count()) fail('mock_ui_rejected');
   await click('Next →');
   await page.getByRole('heading', {name: 'Setup', exact: true}).waitFor();
@@ -261,6 +272,8 @@ def execute(args, result):
     command = [node, "--import", str(args.source / "node_modules/tsx/dist/loader.mjs"),
                "--input-type=module", "-"]
     process = None
+    timed_out = False
+    failure = None
     try:
         with (private / "driver.log").open("wb") as log:
             process = subprocess.Popen(command, cwd=args.source, env=environment, stdin=subprocess.PIPE,
@@ -268,6 +281,7 @@ def execute(args, result):
             try:
                 process.communicate(WORKER.encode(), timeout=args.timeout)
             except subprocess.TimeoutExpired:
+                timed_out = True
                 raise Blocked("ui_timeout_recovery_may_be_required") from None
         worker_path = private / "worker-result.json"
         if not worker_path.is_file():
@@ -279,6 +293,9 @@ def execute(args, result):
         verify(args, private, result)
         if digest(args.input) != result["input_sha256"]:
             raise Blocked("input_changed_during_install")
+    except BaseException as error:
+        failure = error
+        raise
     finally:
         if process:
             try:
@@ -294,6 +311,15 @@ def execute(args, result):
             except ProcessLookupError:
                 pass
             process.wait()
+        if failure is not None:
+            result["worker_diagnostics"] = gui_diag.collect(
+                private, (("worker", "driver.log", gui_diag.TAIL_LINES),),
+                process.returncode if process else None, timed_out,
+                (private / "worker-result.json").is_file(), failure,
+                paths={private: "$EVIDENCE", args.work_dir: "$WORK_DIR", args.source: "$SOURCE"})
+            if not (private / "worker-result.json").is_file():
+                result["stage"] = (result["worker_diagnostics"]["stage"]
+                                   or result["worker_diagnostics"]["phase"])
 
 
 def main():
@@ -327,7 +353,10 @@ def main():
         result.update(status="blocked", reason=str(error) if isinstance(error, Blocked) else type(error).__name__)
     destination.parent.mkdir(parents=True, exist_ok=True)
     save(destination, result)
-    print(json.dumps(result))
+    diagnostics = result.get("worker_diagnostics")
+    if diagnostics:
+        print("\n".join(gui_diag.render_group(diagnostics)), flush=True)
+    print(json.dumps({key: value for key, value in result.items() if key != "worker_diagnostics"}))
     return 0 if result["status"] == "installed" else 1
 
 

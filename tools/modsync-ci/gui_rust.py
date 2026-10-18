@@ -15,6 +15,7 @@ deselected base component. Deselected components are reported, never covered.
 """
 
 import argparse
+import faulthandler
 import hashlib
 import importlib.util
 import json
@@ -28,6 +29,11 @@ import sys
 import tempfile
 import time
 import tomllib
+
+import gui_diag
+
+
+WORKER_LOGS = (("worker", "driver.log", gui_diag.TAIL_LINES),)
 
 
 class Blocked(Exception):
@@ -183,6 +189,11 @@ def drive(args, private, result):
     events = []
     pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0.15
+    progress = {"phase": "preflight"}
+
+    def mark(phase=None, stage=None):
+        progress["phase"] = phase or progress["phase"]
+        gui_diag.mark_phase(private, progress["phase"], stage or result.get("stage"))
 
     def check_time():
         if time.monotonic() >= deadline:
@@ -209,6 +220,8 @@ def drive(args, private, result):
                  for indices in groups.values()]
         text = "\n".join(line for line, _ in lines)
         (private / "latest-ocr.txt").write_text(text, encoding="utf-8")
+        if progress["phase"] == "first_screenshot":
+            mark("install")
         if re.search(
             r"validation (?:failed|stopped|did not complete)|installation (?:failed|stopped|review blocked)|"
             r"review remains open|requires? review|unreviewed|inputs changed|"
@@ -254,6 +267,7 @@ def drive(args, private, result):
 
     def click(label, optional=False):
         result["stage"] = label
+        mark()
         point = locate(label, optional)
         if point is None:
             return
@@ -284,6 +298,7 @@ def drive(args, private, result):
         with (private / "desktop.log").open("wb") as log:
             process = subprocess.Popen(command, cwd=private, env=environment,
                                        stdout=log, stderr=subprocess.STDOUT)
+            mark("first_screenshot")
             click("Keep telemetry off", optional=True)
             click("Summary / selection")
             click("Pause sharing to edit", optional=True)
@@ -291,20 +306,24 @@ def drive(args, private, result):
                 click("Select all")
             if plan["subset"]:
                 result["stage"] = "selection_summary"
+                mark()
                 label = "Base build: %d of %d mods selected" % (plan["base_selected"], plan["base_total"])
                 if locate(label, optional=True) is None:
                     raise Blocked("selection_summary_does_not_match_expected_subset")
             click("Validation / install")
             click("Run validation")
             result["stage"] = "validation"
+            mark()
             locate("Validation passed")
             click("Install selected mods")
             locate("Ready to Install")
             click("Next")
             click("Create snapshot and install")
             result["stage"] = "installation"
+            mark()
             locate("Installation complete")
             result["ui_completed"] = True
+            mark(stage="receipt")
             verify_receipt(args, result, check_time, plan["expected_components"])
     finally:
         if process is not None and process.poll() is None:
@@ -409,6 +428,9 @@ def execute(args, result):
                sys.executable, str(Path(__file__).resolve()),
                *sys.argv[1:], "--private-worker", str(private)]
     process = None
+    code = None
+    timed_out = False
+    failure = None
     try:
         with (private / "driver.log").open("wb") as log:
             process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT,
@@ -416,6 +438,7 @@ def execute(args, result):
             try:
                 code = process.wait(timeout=args.timeout + 15)
             except subprocess.TimeoutExpired:
+                timed_out = True
                 raise Blocked("isolated_desktop_timeout") from None
         worker = private / "result.json"
         if not worker.is_file():
@@ -427,8 +450,19 @@ def execute(args, result):
             raise Blocked("completion_does_not_cover_expected_subset")
         if digest(args.input) != result["input_sha256"]:
             raise Blocked("input_changed_during_install")
+    except BaseException as error:
+        failure = error
+        raise
     finally:
         stop(process)
+        if failure is not None:
+            result["worker_diagnostics"] = gui_diag.collect(
+                private, WORKER_LOGS, code if code is not None or process is None else process.returncode,
+                timed_out, (private / "result.json").is_file(), failure,
+                paths={private: "$EVIDENCE", args.work_dir: "$WORK_DIR"})
+            if not (private / "result.json").is_file():
+                result["stage"] = (result["worker_diagnostics"]["stage"]
+                                   or result["worker_diagnostics"]["phase"])
 
 
 def main():
@@ -468,6 +502,8 @@ def main():
         if not 0 < args.timeout < 604800:
             raise Blocked("timeout_must_be_positive_and_under_one_week")
         if args.private_worker:
+            faulthandler.enable()
+            gui_diag.mark_phase(args.private_worker, "preflight")
             for name in ("binary", "input", "game_dir", "archives"):
                 setattr(args, name, getattr(args, name).resolve(strict=True))
             drive(args, args.private_worker, result)
@@ -478,11 +514,17 @@ def main():
         result["reason"] = str(error) if isinstance(error, Blocked) else type(error).__name__
         if args.private_worker:
             import traceback
-            (args.private_worker / "failure.txt").write_text(traceback.format_exc(), encoding="utf-8")
+            trace = traceback.format_exc()
+            (args.private_worker / "failure.txt").write_text(trace, encoding="utf-8")
+            print(trace, file=sys.stderr, flush=True)
     destination.parent.mkdir(parents=True, exist_ok=True)
     save(destination, result)
     if not args.private_worker:
-        print(json.dumps(result))
+        diagnostics = result.get("worker_diagnostics")
+        if diagnostics:
+            print("\n".join(gui_diag.render_group(diagnostics)), flush=True)
+        print(json.dumps({key: value for key, value in result.items() if key != "worker_diagnostics"}
+                         if diagnostics else result))
     return 0 if result["status"] == "installed" else 1
 
 
