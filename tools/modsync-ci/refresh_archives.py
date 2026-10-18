@@ -53,7 +53,8 @@ ADAPTER_REASONS = {
 }
 SELECTION_PREFIXES = ("reviewed archive selection for file", "landing page lists multiple files and no reviewed selection",
                       "fetched files do not match the reviewed multi-file selection")
-NETWORK_REASONS = {"network request failed", "total download timeout", "TimeoutError", "URLError", "HTTPException"}
+NETWORK_REASONS = {"network request failed", "total download timeout", "TimeoutError", "URLError", "HTTPException",
+                   cache.PAGE_UNAVAILABLE}
 INTEGRITY_REASONS = {
     "not a supported archive (HTML and unknown payloads rejected)", "truncated archive", "invalid manifest SHA256",
     "restore SHA256 mismatch", "cache object conflict", "expected complete HTTP 200 archive",

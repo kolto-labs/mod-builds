@@ -45,6 +45,10 @@ SHA256 = re.compile(r"[a-f0-9]{64}")
 UNCACHED = "uncached-by-policy"
 UNCACHED_SKIPPED = "uncached-skipped"
 OVER_LIMIT = "over-cache-limit"
+PAGE_UNAVAILABLE = ("landing page returned no download links after retries; "
+                    "transient page variance or removed file, not a selection mismatch")
+PAGE_RETRY_SECONDS = 4
+PAGE_RETRY_CAP_SECONDS = 20
 MAX_LINK_BYTES = 20 * 1024 ** 3
 NEXUS_REASON = "nexus requires NEXUS_API_KEY (no headless adapter; CAPTCHA is never bypassed); blocked-pending-user-action"
 
@@ -605,6 +609,10 @@ def entry_loose(item, entry, path=None):
     return entry.get("extension") == LOOSE and reviewed_loose(item, path) is not None
 
 
+class LandingVariance(ValueError):
+    """A DeadlyStream landing page without a usable download list; a re-fetch can differ."""
+
+
 def describe_rows(rows):
     shown = ["%s (r=%s)" % (json.dumps(row["name"]) if row["name"] else "unnamed", row["r"]) for row in rows[:12]]
     return "; ".join(shown) + ("; ..." if len(rows) > 12 else "")
@@ -653,8 +661,11 @@ def deadlystream_endpoint(source, base, candidates, file_id, selections):
         return choose_downloads(rows, file_id, selections)
     downloads = {url for url in candidates if query_of(url).get("do") == ["download"]}
     pool = downloads or candidates
+    if not pool:
+        raise LandingVariance(PAGE_UNAVAILABLE)
     if len(pool) != 1:
-        raise ValueError("landing page has no unique archive endpoint; attachment selection/provider adapter required")
+        raise LandingVariance("landing page has no unique archive endpoint; "
+                              "attachment selection/provider adapter required")
     return [{"name": None, "url": next(iter(pool)), "r": None}]
 
 
@@ -765,11 +776,28 @@ def resolve(item, args):
         return reviewed["url"]
     if item["direct"]:
         return item["url"]
-    with request(item["url"], args) as response:
-        if "html" not in response.headers.get("Content-Type", "").lower():
-            raise ValueError("landing URL has no explicit archive endpoint")
-        rows = page_rows(response, item)
-        return rows if len(rows) > 1 or (rows[0]["name"] and multi_selectors(item)) else rows[0]["url"]
+    rows = landing_rows(item, args)
+    return rows if len(rows) > 1 or (rows[0]["name"] and multi_selectors(item)) else rows[0]["url"]
+
+
+def landing_rows(item, args):
+    """Download rows of the landing page; a DeadlyStream page without any is fetched again, with backoff.
+
+    A failed fetch keeps request's own reason (HTTP status or network request failed) and a reviewed
+    selection that matches no listed file keeps choose_downloads's: only a page that lists nothing usable
+    is re-fetched, and it ends as PAGE_UNAVAILABLE rather than as a selection or adapter problem.
+    """
+    attempts = args.retries + 1 if item["provider"] == "deadlystream" else 1
+    for attempt in range(attempts):
+        with request(item["url"], args) as response:
+            if "html" not in response.headers.get("Content-Type", "").lower():
+                raise ValueError("landing URL has no explicit archive endpoint")
+            try:
+                return page_rows(response, item)
+            except LandingVariance:
+                if attempt + 1 == attempts:
+                    raise
+        time.sleep(min(PAGE_RETRY_SECONDS * 2 ** attempt, PAGE_RETRY_CAP_SECONDS))
 
 
 def fetch_with_tool(item, root, args):

@@ -16,7 +16,9 @@ The game cache is described in [steam.md](steam.md). The archives add up to tens
 of GB, far over what the Actions cache can hold, so `cache.py refresh` keeps only
 what fits `--cache-limit-bytes 2684354560` (2.5 GiB): pinned objects first, then the
 smallest. A link whose objects do not fit is reported `over-cache-limit` and its archive
-is fetched by the lane that needs it. The optional bucket can hold the full set.
+is fetched by the lane that needs it. The optional bucket can hold the full set; an
+over-limit archive that the bucket does not hold either is downloaded from its website
+by every lane that needs it.
 
 The repository's Actions cache is capped at 10 GB with LRU eviction, shared with the game
 caches (K1 ~3.0 GB, K2 ~3.2 GB). 3.0 + 3.2 + 2.7 (2.5 GiB) is ~8.9 GB. `--cache-limit-bytes`
@@ -249,6 +251,14 @@ only after confirming the lane never installs the named section or step (see
   | GameFront | Never fetched; see [Known gaps](#known-gaps) |
 
   The client does not run JavaScript and never touches CAPTCHAs.
+- A DeadlyStream file page that comes back as HTML with no download links (a degraded or
+  transient variant of the page) is fetched again, up to `--retries` more times (default 2)
+  with 4 s, 8 s, ... backoff capped at 20 s. Reasons stay distinct: a failed fetch reports
+  `HTTP <status>` or `network request failed`; a page that stays empty reports `landing page
+  returned no download links after retries; ...` (reason class `network` in the bucket refresh
+  totals, not `adapter-required`); a reviewed `archive_selections.json` file that is not among
+  the listed files reports `reviewed archive selection for file <id> matches 0 ...` and is
+  never retried, nor is a CAPTCHA/challenge page.
 - `cache.py import-existing` copies archives you already have locally into the
   cache as unconfirmed entries (dry run unless `--apply`). Restore ignores them
   until a refresh confirms them.
