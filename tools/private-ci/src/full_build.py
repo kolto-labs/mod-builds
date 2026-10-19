@@ -73,10 +73,12 @@ def safe_name(value):
 
 def safe_root(value):
     path = Path(value).expanduser().absolute()
-    for part in [path, *path.parents]:
-        require(not part.is_symlink(), "Symlink input root refused")
-        if part.exists():
-            require(not (getattr(part.lstat(), "st_file_attributes", 0) & 0x400), "Reparse input root refused")
+    # System temp roots on macOS commonly contain a platform symlink (/var ->
+    # /private/var). Rejecting every parent incorrectly blocks ordinary
+    # workspaces; reject the supplied root itself and reparse roots instead.
+    require(not path.is_symlink(), "Symlink input root refused")
+    if path.exists():
+        require(not (getattr(path.lstat(), "st_file_attributes", 0) & 0x400), "Reparse input root refused")
     return path.resolve()
 
 
