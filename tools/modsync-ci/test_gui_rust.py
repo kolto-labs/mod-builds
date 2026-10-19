@@ -761,5 +761,111 @@ class ArgumentTests(unittest.TestCase):
         self.assertTrue(any("never installed" in item for item in report["limitations"]))
 
 
+class OcrTimeoutTests(unittest.TestCase):
+    def setUp(self):
+        self.now = 0.0
+        self.pauses = []
+        self.checks = []
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.pauses.append(seconds)
+
+    def engine(self, *outcomes):
+        engine = mock.Mock()
+        engine.Output.DICT = "dict"
+        engine.image_to_data.side_effect = list(outcomes)
+        return engine
+
+    def read(self, engine, deadline=1000.0):
+        return gui_rust.ocr_data(engine, "region", deadline, lambda: self.checks.append(1),
+                                 clock=self.clock, sleep=self.sleep)
+
+    def test_a_timeout_is_retried_and_the_later_read_is_returned(self):
+        engine = self.engine(RuntimeError("Tesseract process timeout"),
+                             RuntimeError("Tesseract process timeout"), {"text": ["ok"]})
+        self.assertEqual(self.read(engine), {"text": ["ok"]})
+        self.assertEqual(engine.image_to_data.call_count, 3)
+        self.assertEqual(self.pauses, [gui_rust.OCR_RETRY_PAUSE_SECONDS] * 2)
+        self.assertEqual(len(self.checks), 2)
+
+    def test_repeated_timeouts_block_with_ocr_timeout(self):
+        engine = self.engine(*[RuntimeError("Tesseract process timeout")] * gui_rust.OCR_ATTEMPTS)
+        with self.assertRaises(gui_rust.Blocked) as caught:
+            self.read(engine)
+        self.assertEqual(str(caught.exception), "ocr_timeout")
+        self.assertEqual(engine.image_to_data.call_count, gui_rust.OCR_ATTEMPTS)
+        self.assertEqual(len(self.pauses), gui_rust.OCR_ATTEMPTS - 1)
+
+    def test_other_runtime_errors_are_not_retried_or_swallowed(self):
+        engine = self.engine(RuntimeError("Tesseract crashed"), {"text": []})
+        with self.assertRaises(RuntimeError):
+            self.read(engine)
+        self.assertEqual(engine.image_to_data.call_count, 1)
+        self.assertEqual(self.pauses, [])
+
+    def test_expired_deadline_during_a_retry_stops_the_loop(self):
+        engine = self.engine(RuntimeError("Tesseract process timeout"), {"text": []})
+
+        def expire():
+            raise gui_rust.Blocked("gui_timeout")
+
+        with self.assertRaises(gui_rust.Blocked) as caught:
+            gui_rust.ocr_data(engine, "region", 1000.0, expire, clock=self.clock, sleep=self.sleep)
+        self.assertEqual(str(caught.exception), "gui_timeout")
+        self.assertEqual(engine.image_to_data.call_count, 1)
+
+    def test_call_timeout_is_raised_and_capped_by_the_remaining_budget(self):
+        engine = self.engine({"text": []}, {"text": []})
+        self.read(engine, deadline=1000.0)
+        self.read(engine, deadline=7.5)
+        first, second = (call.kwargs["timeout"] for call in engine.image_to_data.call_args_list)
+        self.assertEqual(first, gui_rust.OCR_CALL_TIMEOUT_SECONDS)
+        self.assertGreater(gui_rust.OCR_CALL_TIMEOUT_SECONDS, 20)
+        self.assertEqual(second, 7.5)
+
+    def test_banner_waits_alternate_a_cheaper_scale_with_the_default(self):
+        self.assertEqual(gui_rust.BANNER_OCR_SCALES[0], 1)
+        self.assertIn(2, gui_rust.BANNER_OCR_SCALES)
+
+
+class FailureReasonTests(unittest.TestCase):
+    def test_reason_keeps_the_type_and_the_message(self):
+        self.assertEqual(gui_rust.describe_error(RuntimeError("Tesseract process timeout")),
+                         "RuntimeError: Tesseract process timeout")
+
+    def test_reason_without_a_message_is_the_type_alone(self):
+        self.assertEqual(gui_rust.describe_error(KeyError()), "KeyError")
+
+    def test_reason_collapses_whitespace_and_is_bounded(self):
+        reason = gui_rust.describe_error(ValueError("a\nb  " + "x" * 500))
+        self.assertTrue(reason.startswith("ValueError: a b "))
+        self.assertLessEqual(len(reason), len("ValueError: ") + 200)
+
+    def test_worker_records_the_message_for_an_unexpected_exception(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        worker = root / "worker"
+        worker.mkdir()
+        for name in ("binary", "input", "game", "archives"):
+            (root / name).write_text("x", encoding="utf-8")
+        argv = ["gui_rust.py", "--binary", str(root / "binary"), "--input", str(root / "input"),
+                "--game-dir", str(root / "game"), "--archives", str(root / "archives"),
+                "--work-dir", "w", "--report", str(root / "report.json"), "--timeout", "5",
+                "--private-worker", str(worker)]
+        with mock.patch.object(gui_rust.sys, "argv", argv), \
+                mock.patch.object(gui_rust.faulthandler, "enable"), \
+                mock.patch.object(gui_rust.gui_diag, "mark_phase"), \
+                mock.patch.object(gui_rust, "drive",
+                                  side_effect=RuntimeError("Tesseract process timeout")), \
+                mock.patch("sys.stderr"):
+            self.assertEqual(gui_rust.main(), 1)
+        report = json.loads((worker / "result.json").read_text(encoding="utf-8"))
+        self.assertEqual(report["reason"], "RuntimeError: Tesseract process timeout")
+        self.assertEqual(report["status"], "blocked")
+
+
 if __name__ == "__main__":
     unittest.main()

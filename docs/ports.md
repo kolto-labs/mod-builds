@@ -811,6 +811,18 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
     The failure line in `driver.log` also gives the attempts, the last click and the busy
     text. On a failed run every `*_navigation` key, plus `selection_summary`, is copied into
     `worker_diagnostics`; `stage` is `<name>_navigation` while one is in progress.
+  - **OCR timeouts.** The app repaints every 100 ms on software GL while validation runs on the
+    same CPU, so a Tesseract call can overrun. Each call may take up to 45 s
+    (`OCR_CALL_TIMEOUT_SECONDS`, still capped by the remaining `--timeout`) and runs with
+    `OMP_THREAD_LIMIT=1` so it does not fight the app for cores. A `Tesseract process timeout`
+    is retried after a 1 s pause, up to 3 attempts in total (`OCR_ATTEMPTS`); if every attempt
+    times out the run blocks with `ocr_timeout`, never swallowed. Any other OCR error is
+    raised as it is. The `Validation passed` and `Installation complete` waits alternate a
+    cheaper 1x read with the usual 2x read (`BANNER_OCR_SCALES`).
+  - **Failure reason.** An unexpected worker exception is recorded as `<Type>: <message>`
+    (for example `RuntimeError: Tesseract process timeout`), with the message whitespace
+    collapsed and cut to 200 characters, instead of only the class name. `Blocked` reasons
+    are unchanged.
   - Components that remain selected must not depend on a deselected one
     (`selected_component_depends_on_deselected_component`).
   - Widescreen-only components are excluded, never installed: the report lists them as

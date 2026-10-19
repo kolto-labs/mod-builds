@@ -99,10 +99,38 @@ SUMMARY_SCREENSHOT = "selection-summary.png"
 SUMMARY_PATTERN = re.compile(r"Base\s*build\s*:?\s*(\d+)\s*of\s*(\d+)\s*mods?\s*selected", re.IGNORECASE)
 SUMMARY_FRAGMENT = re.compile(r"Base\s*build.{0,70}", re.IGNORECASE)
 QUERY_TIMEOUT_SECONDS = 120
+OCR_CALL_TIMEOUT_SECONDS = 45
+OCR_ATTEMPTS = 3
+OCR_RETRY_PAUSE_SECONDS = 1.0
+OCR_TIMEOUT_MESSAGE = "Tesseract process timeout"
+BANNER_OCR_SCALES = (1, 2)
 
 
 class Blocked(Exception):
     pass
+
+
+def describe_error(error):
+    message = " ".join(str(error).split())[:200]
+    return type(error).__name__ + (": " + message if message else "")
+
+
+def ocr_data(pytesseract, region, deadline, check=lambda: None, clock=time.monotonic,
+             sleep=time.sleep):
+    for attempt in range(OCR_ATTEMPTS):
+        try:
+            return pytesseract.image_to_data(
+                region,
+                config="--psm 11", output_type=pytesseract.Output.DICT,
+                timeout=max(0.1, min(OCR_CALL_TIMEOUT_SECONDS, deadline - clock())),
+            )
+        except RuntimeError as error:
+            if OCR_TIMEOUT_MESSAGE not in str(error):
+                raise
+            if attempt + 1 == OCR_ATTEMPTS:
+                raise Blocked("ocr_timeout") from error
+            sleep(OCR_RETRY_PAUSE_SECONDS)
+            check()
 
 
 def clean_ocr_lines(lines):
@@ -461,11 +489,7 @@ def drive(args, private, result):
         if scale != 1:
             region = region.resize((region.width * scale, region.height * scale))
         frame["height"] = region.height
-        data = pytesseract.image_to_data(
-            region,
-            config="--psm 11", output_type=pytesseract.Output.DICT,
-            timeout=max(0.1, min(20, deadline - time.monotonic())),
-        )
+        data = ocr_data(pytesseract, region, deadline, check_time)
         groups = {}
         for index, word in enumerate(data["text"]):
             if word.strip():
@@ -500,7 +524,7 @@ def drive(args, private, result):
 
     last_hit = {}
 
-    def find_control(shot, data, lines, pattern):
+    def find_control(shot, data, lines, pattern, scale=2):
         matches = []
         for text, indices in lines:
             match = re.search(pattern, text, re.IGNORECASE)
@@ -521,21 +545,24 @@ def drive(args, private, result):
             bottom = max(data["top"][index] + data["height"][index] for index in matching)
             width, height = pyautogui.size()
             matched = " ".join(text[match.start():match.end()].split())[:SUMMARY_OCR_LINE_CHARS]
-            matches.append((len(text), (left + right) / 4 * width / shot.width,
-                            (top + bottom) / 4 * height / shot.height, matched))
+            matches.append((len(text), (left + right) / (2 * scale) * width / shot.width,
+                            (top + bottom) / (2 * scale) * height / shot.height, matched))
         if not matches:
             return None
         _, horizontal, vertical, matched = min(matches)
         last_hit["text"] = matched
         return horizontal, vertical
 
-    def locate(label, optional=False, window=None, pattern=None):
+    def locate(label, optional=False, window=None, pattern=None, scales=(2,)):
         limit = min(deadline, time.monotonic() + (window or (4 if optional else args.timeout)))
         pattern = pattern or r"\s*".join(re.escape(token) for token in
                                          re.findall(r"\w+|[^\w\s]", label))
+        attempt = 0
         while time.monotonic() < limit:
-            shot, data, lines = observe()
-            point = find_control(shot, data, lines, pattern)
+            scale = scales[attempt % len(scales)]
+            attempt += 1
+            shot, data, lines = observe(scale=scale)
+            point = find_control(shot, data, lines, pattern, scale)
             if point is not None:
                 shot.save(private / f"{len(events):02d}-observed.png")
                 return point
@@ -705,6 +732,7 @@ def drive(args, private, result):
     environment.pop("DBUS_SESSION_BUS_ADDRESS", None)
     environment["WINIT_UNIX_BACKEND"] = "x11"
     environment["LIBGL_ALWAYS_SOFTWARE"] = "1"
+    os.environ["OMP_THREAD_LIMIT"] = "1"
     try:
         with (private / "desktop.log").open("wb") as log:
             process = subprocess.Popen(command, cwd=private, env=environment,
@@ -725,7 +753,7 @@ def drive(args, private, result):
                        "validation_not_started")
             result["stage"] = "validation"
             mark()
-            locate("Validation passed")
+            locate("Validation passed", scales=BANNER_OCR_SCALES)
             transition("install_review", "Install selected mods", INSTALL_REVIEW_MARKER,
                        "install_review_not_reached")
             transition("install_confirmation", "Next", INSTALL_CONFIRMATION_MARKER,
@@ -734,7 +762,7 @@ def drive(args, private, result):
                        INSTALLATION_STARTED_MARKER, "installation_not_started")
             result["stage"] = "installation"
             mark()
-            locate("Installation complete")
+            locate("Installation complete", scales=BANNER_OCR_SCALES)
             result["ui_completed"] = True
             mark(stage="receipt")
             verify_receipt(args, result, check_time, plan["expected_components"])
@@ -936,7 +964,8 @@ def main():
             execute(args, result)
     except (Exception, KeyboardInterrupt) as error:
         result["status"] = "blocked"
-        result["reason"] = str(error) if isinstance(error, Blocked) else type(error).__name__
+        result["reason"] = (str(error) if isinstance(error, Blocked)
+                            else describe_error(error))
         if args.private_worker:
             import traceback
             trace = traceback.format_exc()
