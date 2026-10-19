@@ -17,7 +17,8 @@ The "Base build: N of M mods selected" count the GUI shows is the application's
 (`selection::counts` after `game::enforce_selectable` and the dependency rules), so a
 subset run asks the same binary (`modsync selection --json`) before launching and
 refuses any difference from the plan. The desktop starts in wizard mode (Welcome page), so the
-driver dismisses the telemetry prompt, then clicks the "Summary / selection" nav button and
+driver pre-seeds a declined telemetry config in the fresh settings directory so the prompt
+normally never shows, still dismisses it if it appears, then clicks the "Summary / selection" nav button and
 verifies the page by OCR (the "Base build" line or the page's controls) before reading it,
 re-locating and re-clicking every 10 s (the buttons are disabled while the app is busy; a busy
 indicator in the top bar pauses the clicks) for up to 300 s (later transitions get 90 s) and
@@ -43,6 +44,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import uuid
 
 import gui_diag
 
@@ -92,6 +94,7 @@ TELEMETRY_PROMPT = re.compile(
 TELEMETRY_KEEP_PATTERN = r"Keep\s*tele\w*(?:\s*off)?|\btele\w*\s*off\b"
 TELEMETRY_PROMPT_WINDOW_SECONDS = 20
 TELEMETRY_RETRY_SECONDS = 3
+TELEMETRY_CONFIG_NAME = "telemetry_config.json"
 SUMMARY_SCREENSHOT = "selection-summary.png"
 SUMMARY_PATTERN = re.compile(r"Base\s*build\s*:?\s*(\d+)\s*of\s*(\d+)\s*mods?\s*selected", re.IGNORECASE)
 SUMMARY_FRAGMENT = re.compile(r"Base\s*build.{0,70}", re.IGNORECASE)
@@ -161,6 +164,29 @@ def save(path, value):
     temporary = path.with_name(path.name + ".tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
     temporary.replace(path)
+
+
+def seed_telemetry_config(settings):
+    settings.mkdir(mode=0o700, parents=True, exist_ok=True)
+    value = {
+        "enabled": False,
+        "user_consented": False,
+        "consent_date": None,
+        "anonymous_user_id": str(uuid.uuid4()),
+        "environment": "production",
+        "collect_usage_data": True,
+        "collect_performance_metrics": True,
+        "collect_crash_reports": True,
+        "collect_machine_info": False,
+        "enable_otlp_exporter": True,
+        "endpoint": "",
+        "session_id": str(uuid.uuid4()),
+        "is_first_run": False,
+    }
+    path = settings / TELEMETRY_CONFIG_NAME
+    path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+    path.chmod(0o600)
+    return path
 
 
 def table_key(document):
@@ -668,6 +694,7 @@ def drive(args, private, result):
                "--input", str(driven_input), "--game-dir", str(args.game_dir),
                "--source-dir", str(args.archives),
                "--settings-dir", str(private / "settings")]
+    seed_telemetry_config(private / "settings")
     save(private / "command.json", command)
     environment = os.environ.copy()
     for name in ("HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"):

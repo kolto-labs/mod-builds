@@ -701,6 +701,41 @@ class WorkerFailureTests(unittest.TestCase):
         self.assertEqual(saved["worker_diagnostics"]["tails"]["worker"], ["boom"])
 
 
+class TelemetrySeedTests(unittest.TestCase):
+    def seed(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        settings = root / "settings"
+        path = gui_rust.seed_telemetry_config(settings)
+        return settings, path, json.loads(path.read_text(encoding="utf-8"))
+
+    def test_seeded_file_marks_first_run_done_and_declined(self):
+        settings, path, value = self.seed()
+        self.assertEqual(path, settings / "telemetry_config.json")
+        self.assertIs(value["is_first_run"], False)
+        self.assertIs(value["user_consented"], False)
+        self.assertIs(value["enabled"], False)
+        self.assertIsNone(value["consent_date"])
+        self.assertEqual(value["endpoint"], "")
+
+    def test_seeded_file_has_the_application_field_set(self):
+        _, _, value = self.seed()
+        self.assertEqual(set(value), {
+            "enabled", "user_consented", "consent_date", "anonymous_user_id", "environment",
+            "collect_usage_data", "collect_performance_metrics", "collect_crash_reports",
+            "collect_machine_info", "enable_otlp_exporter", "endpoint", "session_id",
+            "is_first_run"})
+        self.assertNotEqual(value["anonymous_user_id"], value["session_id"])
+        self.assertTrue(value["anonymous_user_id"])
+
+    def test_seeded_file_is_private_and_each_seed_gets_a_new_identity(self):
+        _, path, first = self.seed()
+        self.assertEqual(path.stat().st_mode & 0o777, 0o600)
+        self.assertEqual(path.parent.stat().st_mode & 0o777, 0o700)
+        _, _, second = self.seed()
+        self.assertNotEqual(first["anonymous_user_id"], second["anonymous_user_id"])
+
+
 class ArgumentTests(unittest.TestCase):
     def test_selection_flags_are_parsed_and_forwarded_to_the_worker(self):
         seen = {}

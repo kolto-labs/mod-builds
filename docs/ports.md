@@ -746,7 +746,11 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
     selects a different set. The desktop starts in wizard mode (Welcome page), and the
     `Summary / selection` nav button (`src/ui/main_window.rs`) is disabled while the app is busy
     (loading, saving the telemetry choice, sharing transitions), so a click can be silently
-    ignored. The driver therefore dismisses the `Telemetry preference` prompt (`Keep telemetry
+    ignored. The driver therefore pre-seeds `telemetry_config.json` in the fresh `--settings-dir`
+    before launch (declined: `is_first_run` false, `user_consented` and `enabled` false, new
+    random `anonymous_user_id` and `session_id`, the shape the app itself writes after `Keep
+    telemetry off`), so the first-run `Telemetry preference` modal normally never opens, keeps a
+    fallback that dismisses the prompt if it still shows (`Keep telemetry
     off`, up to 20 s, retried, and again whenever it reappears), clicks `Summary / selection`,
     and verifies the page by OCR (`Base build`, `Select all`, category controls) before polling,
     re-locating and re-clicking every 10 s for up to 300 s (90 s for later pages; a busy
@@ -782,7 +786,9 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
     `SUMMARY_CROP` (`0.0, 0.05, 1.0, 0.95`: full width, 5% to 95% of the height) is only the
     body crop used by the `Base build` count OCR described above, not by the transitions,
     which read the full frame at 2x.
-  - **Telemetry modal.** `dismiss_telemetry_prompt` runs once right after launch, before the
+  - **Telemetry modal.** `seed_telemetry_config` writes the declined config into the fresh
+    settings directory before the app starts, so the modal is not expected. As a fallback,
+    `dismiss_telemetry_prompt` runs once right after launch, before the
     summary transition: it OCRs for `Telemetry preference`, `Allow configured` or `Keep
     telemetry off`, presses `Keep telemetry off` (again after 3 s if still visible) and returns
     once the prompt has been seen and is gone. If it never appears, it stops after 20 s. Every
