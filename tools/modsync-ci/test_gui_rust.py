@@ -901,6 +901,55 @@ class InstallConfirmationMatchTests(unittest.TestCase):
         self.assertEqual(gui_rust.CONFIRMATION_OCR_SCALES[0], 2)
         self.assertIn(1, gui_rust.CONFIRMATION_OCR_SCALES)
 
+    def test_install_start_steps_add_a_larger_scale(self):
+        self.assertEqual(gui_rust.INSTALL_START_OCR_SCALES[0], 2)
+        self.assertIn(3, gui_rust.INSTALL_START_OCR_SCALES)
+
+
+class FragmentControlTests(unittest.TestCase):
+    HEIGHT = 26
+
+    def word(self, text, left, top):
+        return (text, left, top, left + len(text) * 13, top + self.HEIGHT)
+
+    def locate(self, words):
+        return gui_rust.fragment_control_point(
+            words, gui_rust.INSTALL_START_FRAGMENTS, gui_rust.INSTALL_START_ANCHOR)
+
+    def modal_words(self, with_anchor=True):
+        words = [self.word("Install", 300, 300), self.word("selected", 400, 300),
+                 self.word("mods?", 520, 300), self.word("The", 300, 350),
+                 self.word("install", 340, 350), self.word("stops", 420, 350),
+                 self.word("Cre:", 340, 400), self.word("na", 420, 400),
+                 self.word("hot", 460, 400), self.word("an", 520, 400),
+                 self.word("install", 570, 400), self.word("Back", 100, 600)]
+        if with_anchor:
+            words.append(self.word("ancel", 760, 400))
+        return words
+
+    def test_split_button_label_is_located_from_the_row_beside_the_neighbouring_button(self):
+        x, y, matched = self.locate(self.modal_words())
+        self.assertTrue(340 <= x <= 650)
+        self.assertTrue(400 <= y <= 426)
+        self.assertIn("install", matched)
+
+    def test_split_button_label_is_located_without_the_neighbouring_button_when_mostly_fragments(self):
+        x, y, _ = self.locate(self.modal_words(with_anchor=False))
+        self.assertTrue(340 <= x <= 650)
+        self.assertTrue(400 <= y <= 426)
+
+    def test_modal_heading_body_and_other_buttons_are_not_mistaken_for_the_label(self):
+        words = [self.word("Install", 300, 300), self.word("selected", 400, 300),
+                 self.word("mods?", 520, 300), self.word("Cancel", 760, 400),
+                 self.word("Back", 100, 600), self.word("Next", 900, 600)]
+        self.assertIsNone(self.locate(words))
+
+    def test_word_boxes_keep_only_the_centre_of_the_frame(self):
+        words = [("Centre", 400, 300, 500, 330), ("Corner", 10, 10, 100, 40)]
+        boxes = gui_rust.central_word_boxes(words, 2, 1000, 800)
+        self.assertEqual([box["text"] for box in boxes], ["Centre"])
+        self.assertEqual((boxes[0]["x"], boxes[0]["y"]), (200, 150))
+
 
 class SingleClickTests(unittest.TestCase):
     def test_first_click_is_always_due(self):

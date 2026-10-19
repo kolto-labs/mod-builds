@@ -86,6 +86,16 @@ INSTALL_REVIEW_MARKER = re.compile(r"Ready\s*to\s*Install", re.IGNORECASE)
 INSTALL_CONFIRMATION_MARKER = re.compile(
     r"Create\s*snap|snap\w*\s*needs|Install\s*selected\s*mods\s*\?", re.IGNORECASE)
 INSTALL_START_PATTERN = r"snap\w*\s*and\s*inst\w*|Create\s*snap\w*\s*and"
+INSTALL_START_FRAGMENTS = re.compile(
+    r"^\W*(?:cr\w*|sn\w*|\w*shot|\w*hot|an|and|ins\w*|\w*tall\w*|na)\W*$", re.IGNORECASE)
+INSTALL_START_ANCHOR = re.compile(r"^\W*c?anc\w{0,3}\W*$", re.IGNORECASE)
+INSTALL_START_OCR_SCALES = (2, 3, 1)
+FRAGMENT_GAP_HEIGHTS = 6
+FRAGMENT_ROW_HEIGHTS = 0.7
+FRAGMENT_ANCHORLESS_MIN = 3
+FRAGMENT_ANCHORLESS_SHARE = 0.6
+WORD_BOX_REGION = (0.2, 0.2, 0.8, 0.8)
+WORD_BOX_LIMIT = 150
 CONFIRMATION_OCR_SCALES = (2, 1)
 CONFIRMATION_RECLICK_SECONDS = 45
 CONFIRMATION_RECLICKS = 1
@@ -143,6 +153,89 @@ def ocr_data(pytesseract, region, deadline, check=lambda: None, clock=time.monot
 def clean_ocr_lines(lines):
     read = [" ".join(text.split())[:SUMMARY_OCR_LINE_CHARS] for text, _ in lines]
     return [text for text in read if text]
+
+
+def ocr_word_boxes(data):
+    """(text, left, top, right, bottom) of every non-blank word of an OCR data dict."""
+    return [(data["text"][index], data["left"][index], data["top"][index],
+             data["left"][index] + data["width"][index],
+             data["top"][index] + data["height"][index])
+            for index in range(len(data["text"])) if data["text"][index].strip()]
+
+
+def central_word_boxes(words, scale, frame_width, frame_height, region=WORD_BOX_REGION,
+                       limit=WORD_BOX_LIMIT):
+    """Words whose centre lies in `region` of the frame, as screenshot-pixel boxes."""
+    kept = []
+    for text, left, top, right, bottom in words:
+        horizontal = (left + right) / (2 * scale * frame_width)
+        vertical = (top + bottom) / (2 * scale * frame_height)
+        if region[0] <= horizontal <= region[2] and region[1] <= vertical <= region[3]:
+            kept.append({"text": text[:SUMMARY_OCR_LINE_CHARS], "x": int(left / scale),
+                         "y": int(top / scale), "w": int((right - left) / scale),
+                         "h": int((bottom - top) / scale)})
+    return sorted(kept, key=lambda box: (box["y"], box["x"]))[:limit]
+
+
+def word_rows(words):
+    """Group word boxes into visual rows by vertical centre."""
+    rows = []
+    for word in sorted(words, key=lambda item: item[2] + item[4]):
+        centre = (word[2] + word[4]) / 2
+        height = word[4] - word[2]
+        if rows and abs(centre - rows[-1]["centre"]) <= max(height, rows[-1]["height"]) * FRAGMENT_ROW_HEIGHTS:
+            rows[-1]["words"].append(word)
+            rows[-1]["height"] = max(rows[-1]["height"], height)
+        else:
+            rows.append({"centre": centre, "height": height, "words": [word]})
+    return rows
+
+
+def fragment_cluster(row_words, fragments, edge, height):
+    """Fragment words chained leftwards from `edge`, each within a bounded gap of the previous."""
+    chosen = []
+    for word in sorted(row_words, key=lambda item: item[3], reverse=True):
+        if not fragments.match(word[0]) or word[3] > edge + height:
+            continue
+        if edge - word[3] > height * FRAGMENT_GAP_HEIGHTS:
+            break
+        chosen.append(word)
+        edge = word[1]
+    return chosen
+
+
+def fragment_control_point(words, fragments, anchor):
+    """Centre of a button label that OCR split into fragments, as (x, y, matched) or None.
+
+    A button whose label Tesseract cannot read as one phrase still shows as several
+    short words on one row. With a visible `anchor` word on that row (the neighbouring
+    button) the fragments chained leftwards from it identify the control; without one the
+    row must be mostly fragments and hold at least FRAGMENT_ANCHORLESS_MIN of them.
+    """
+    for row in word_rows(words):
+        height = max(word[4] - word[2] for word in row["words"])
+        anchors = [word for word in row["words"] if anchor.match(word[0])]
+        if anchors:
+            edge = min(word[1] for word in anchors)
+            others = [word for word in row["words"] if word not in anchors]
+            chosen = fragment_cluster(others, fragments, edge, height)
+            enough = len(chosen) >= 1
+        else:
+            candidates = [word for word in row["words"] if fragments.match(word[0])]
+            if not candidates:
+                continue
+            chosen = fragment_cluster(row["words"], fragments, max(word[3] for word in candidates), height)
+            enough = (len(chosen) >= FRAGMENT_ANCHORLESS_MIN
+                      and len(chosen) >= FRAGMENT_ANCHORLESS_SHARE * len(row["words"]))
+        if not enough:
+            continue
+        left = min(word[1] for word in chosen)
+        right = max(word[3] for word in chosen)
+        top = min(word[2] for word in chosen)
+        bottom = max(word[4] for word in chosen)
+        matched = " ".join(word[0] for word in sorted(chosen, key=lambda item: item[1]))
+        return (left + right) / 2, (top + bottom) / 2, "fragments: " + matched[:SUMMARY_OCR_LINE_CHARS]
+    return None
 
 
 def top_bar_lines(data, lines, frame_height, fraction=TOP_BAR_FRACTION):
@@ -585,6 +678,16 @@ def drive(args, private, result):
         last_hit["text"] = matched
         return horizontal, vertical
 
+    def find_fragment_control(shot, data, scale, fragments):
+        hit = fragment_control_point(ocr_word_boxes(data), *fragments)
+        if hit is None:
+            return None
+        horizontal, vertical, matched = hit
+        width, height = pyautogui.size()
+        last_hit["text"] = matched
+        return (horizontal / scale * width / shot.width,
+                vertical / scale * height / shot.height)
+
     def locate(label, optional=False, window=None, pattern=None, scales=(2,)):
         limit = min(deadline, time.monotonic() + (window or (4 if optional else args.timeout)))
         pattern = pattern or r"\s*".join(re.escape(token) for token in
@@ -654,7 +757,7 @@ def drive(args, private, result):
             time.sleep(0.5)
 
     def transition(name, label, marker, reason, pattern=None, window=NAV_WINDOW_SECONDS,
-                   scales=(2,), retry=True, page_marker=None):
+                   scales=(2,), retry=True, page_marker=None, fragments=None):
         """Click `label` until `marker` is read on screen, or block with `reason`.
 
         The desktop ignores clicks on disabled controls (it is busy loading, saving the
@@ -672,7 +775,10 @@ def drive(args, private, result):
         once and the frames are only polled, apart from one guarded re-click after
         CONFIRMATION_RECLICK_SECONDS when `page_marker` is still on screen. Each frame is OCRed
         at the next of `scales`. On failure the last frame that differed from the first one
-        is kept in "changed_frame".
+        is kept in "changed_frame", together with "ocr_words" (boxes of the words near the
+        screen centre, where the modal sits). With `fragments` (a fragment and an anchor
+        regex) a control whose label OCR split into several words is also located from
+        those words when the full-phrase pattern finds nothing.
         """
         result["stage"] = name + "_navigation"
         mark()
@@ -749,6 +855,8 @@ def drive(args, private, result):
                     and len(new_lines(baseline, read)) <= CONFIRMATION_NOISE_LINES)
             if click_due:
                 point = find_control(shot, data, lines, pattern, scale)
+                if point is None and fragments is not None:
+                    point = find_fragment_control(shot, data, scale, fragments)
                 if point is not None:
                     next_click = now + NAV_RETRY_SECONDS
                     last_click = now
@@ -763,6 +871,9 @@ def drive(args, private, result):
                 navigation["screenshot"] = evidence + ".png"
                 navigation["ocr_lines"] = read[:NAV_LOG_LINES]
                 navigation["top_bar"] = top_bar_lines(data, lines, frame["height"])
+                navigation["ocr_scale"] = scale
+                navigation["ocr_words"] = central_word_boxes(
+                    ocr_word_boxes(data), scale, shot.width, shot.height)
                 save(private / (evidence + ".json"), navigation)
                 last = navigation["clicks"][-1] if navigation["clicks"] else None
                 print("gui_rust: %s after %d attempts; last click %s; busy %s; screenshot %s; "
@@ -818,7 +929,8 @@ def drive(args, private, result):
                        scales=CONFIRMATION_OCR_SCALES, retry=False, page_marker=INSTALL_REVIEW_MARKER)
             transition("installation_start", "Create snapshot and install",
                        INSTALLATION_STARTED_MARKER, "installation_not_started",
-                       pattern=INSTALL_START_PATTERN, scales=CONFIRMATION_OCR_SCALES)
+                       pattern=INSTALL_START_PATTERN, scales=INSTALL_START_OCR_SCALES,
+                       fragments=(INSTALL_START_FRAGMENTS, INSTALL_START_ANCHOR))
             result["stage"] = "installation"
             mark()
             locate("Installation complete", scales=BANNER_OCR_SCALES)
