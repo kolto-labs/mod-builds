@@ -1731,6 +1731,8 @@ UNFINISHED_INSTALL_MARKERS = (UNFINISHED_INSTALL, TS_UNFINISHED_INSTALL)
 TYPESCRIPT_INSTALL_PHASES = ("base", "widescreen")
 TYPESCRIPT_FIRST_CHECKPOINT = "0"
 NOTHING_TO_RESTORE = "no unfinished install to restore"
+UNCAPTURED_MUTATION = "pre-mutation content was never captured"
+ENGINE_RESTORE_SKIP_KEY = "engine_restore_skip"
 ENGINE_RESTORE_KEY = "engine_restores"
 ENGINE_RESTORE_TIMEOUT = BASELINE_COPY_TIMEOUT
 UNFINISHED_INSTALL_REASON = "unfinished_install_not_recovered"
@@ -1801,6 +1803,8 @@ def engine_restore(command, directories, source, private, stage, report, env, in
         elif NOTHING_TO_RESTORE in ANSI_ESCAPE.sub("", text).lower():
             status = "nothing_pending"
         else:
+            if invocation is not None and UNCAPTURED_MUTATION in ANSI_ESCAPE.sub("", text).lower():
+                record["uncaptured_mutation"] = True
             lines = text.splitlines()[-FAILURE_TAIL_LINES:]
             print(f"::group::{stage} output (last {FAILURE_TAIL_LINES} lines)", file=sys.stderr)
             print("\n".join(lines), file=sys.stderr)
@@ -1848,7 +1852,20 @@ def recover_typescript_state(command, game, text, source, private, stage, report
     in the failed install's log. It is best effort, recorded in engine_restores: when it is unavailable
     (no session in the log) or fails, `fallback` says the baseline restore carries the recovery, which
     empties the game directory, and with it the checkpoint store and any restore intent in it.
+
+    When a restore fails because the install changed paths through a patcher or external program whose
+    pre-mutation content was never captured, the engine cannot restore this game: the decision is
+    cached in `quarantine.engine_restore_skip` and every later restore of the run goes straight to the
+    baseline restore (record status `skipped`) after a one-line note. The failed install step itself
+    is still quarantined or reported as before; only the restore strategy changes.
     """
+    skip = report["quarantine"].get(ENGINE_RESTORE_SKIP_KEY)
+    if skip is not None:
+        print(f"{stage}: skipped, the engine cannot restore this game ({skip['reason']}, first seen at "
+              f"{skip['stage']}); using baseline_restore", file=sys.stderr)
+        record = {"stage": stage, "status": "skipped", "seconds": 0.0, "fallback": "baseline_restore"}
+        report["quarantine"].setdefault(ENGINE_RESTORE_KEY, []).append(record)
+        return record
     session = checkpoint_session(text)
     invocation = None if session is None else [
         "checkpoints", "restore", session, TYPESCRIPT_FIRST_CHECKPOINT, "--kotor", str(game),
@@ -1856,6 +1873,11 @@ def recover_typescript_state(command, game, text, source, private, stage, report
     record = engine_restore(command, [], source, private, stage, report, env, invocation)
     if record["status"] != "restored":
         record["fallback"] = "baseline_restore"
+    if record.pop("uncaptured_mutation", False):
+        reason = "checkpoint modified paths whose pre-mutation content was never captured"
+        report["quarantine"][ENGINE_RESTORE_SKIP_KEY] = {"reason": reason, "stage": stage}
+        print(f"::notice::ports: {stage}: {reason}; skipping the engine restore for the rest of this run "
+              "and using baseline_restore", file=sys.stderr)
     return record
 
 
@@ -2332,7 +2354,7 @@ def print_diagnostics(report):
             title=f"{item['stage']} install failure (summary; the log tail is in the gui worker output above)")),
             file=sys.stderr)
     for item in (report.get("quarantine") or {}).get(ENGINE_RESTORE_KEY) or ():
-        if item["status"] not in ("restored", "nothing_pending"):
+        if item["status"] not in ("restored", "nothing_pending", "skipped"):
             print(f"::warning::ports: {item['stage']}: engine restore {item['status']}"
                   + (f", fell back to {item['fallback']}" if item.get("fallback") else ""), file=sys.stderr)
     baseline = (report.get("quarantine") or {}).get("baseline")

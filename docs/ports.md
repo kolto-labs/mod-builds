@@ -365,7 +365,7 @@ in 17 s). Before every retry, in this order, as part of the restore in step 2:
 3. The game directory is then restored from the baseline as above (`baseline_restore_N`).
 
 `quarantine.engine_restores` lists each engine restore (`stage`, `status` one of `restored`,
-`nothing_pending`, `failed`, `unavailable`, `seconds`, and `fallback` when used); the CI log
+`nothing_pending`, `failed`, `unavailable`, `skipped` (TypeScript only, see below), `seconds`, and `fallback` when used); the CI log
 adds a `::warning::` for any that was not a clean restore.
 
 The install uses the same caps as `validate`, from one shared budget: `--max-quarantine`
@@ -466,6 +466,12 @@ otherwise), a `::warning::` per component and a `PARTIAL install` notice, never 
    line of the failed log; checkpoint `0` is the pre-install anchor). It is recorded in
    `quarantine.engine_restores`; if it is unavailable or fails the record gets
    `fallback: baseline_restore` and a `::warning::`.
+   When it fails with "pre-mutation content was never captured" (the install changed paths
+   through a patcher or external program, which the engine cannot roll back), the decision is
+   cached in `quarantine.engine_restore_skip` with a one-line `::notice::`; every later retry of
+   the run skips this step (record `status: skipped`, `fallback: baseline_restore`, no
+   `::warning::`) and goes straight to the baseline restore. The failed install step is still
+   quarantined or reported as usual; only the restore strategy changes.
 2. The baseline restore (`baseline_restore_N`) empties and refills the game directory, which
    also removes `<game>/.modsync`, i.e. the checkpoint store and any pending marker, so the
    retry starts a fresh session whatever step 1 did.
