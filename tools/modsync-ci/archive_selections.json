@@ -1313,6 +1313,13 @@
       },
       {
         "section": "Mod List",
+        "heading": "Worn-Out Mando Armor",
+        "lane": "rust",
+        "bind_diagnostic": "loose_file_unresolved",
+        "reason": "Rust loose-file bind refuses this layout: the guide declares 'Installation Method: Loose-File Mod' for the restored 'Mandalorian Worn-Out Armour Reskin.rar' and convert --resolved-archives records 'Loose-file method remains unresolved' and exits 0, so the component never gets instructions; omitted from the Rust lane (temporary reviewed policy, partial install so the rest installs), tracked for an upstream converter fix. Applies only while the bind stage records that diagnostic for the component and it has no instructions; the TypeScript lanes are unaffected"
+      },
+      {
+        "section": "Mod List",
         "heading": "TSLRCM",
         "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
         "guid": "bee5a72b-d748-8f83-8261-81758a9bfc56",

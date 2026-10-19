@@ -662,6 +662,93 @@ def bound_result(before, after):
                if (item.get("DraftReview") or {}).get("Generator") == BIND_GENERATOR), None
 
 
+BIND_DIAGNOSTICS_KEY = "bind_diagnostics"
+BIND_DIAGNOSTIC_KINDS = (
+    ("loose-file method remains unresolved", "loose_file_unresolved"),
+    ("patcher method remains unresolved", "patcher_unresolved"),
+)
+BIND_DIAGNOSTIC_PRINT_CAP = 50
+
+
+def component_names(converted):
+    """{lowercase GUID: Name} of a converted TOML; empty when it cannot be read."""
+    try:
+        document = tomllib.loads(Path(converted).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    components = document.get("thisMod", document.get("Components", []))
+    return {str(each["Guid"]).lower(): each.get("Name") or each.get("Heading")
+            for each in components if isinstance(each, dict) and each.get("Guid")}
+
+
+def bind_diagnostic_kind(reason):
+    lowered = reason.lower()
+    for prefix, kind in BIND_DIAGNOSTIC_KINDS:
+        if lowered.startswith(prefix):
+            return kind
+    return "unresolved"
+
+
+def unresolved_diagnostics(text):
+    """(component GUID or None, reason) for each 'unresolved' diagnostic a bind stage log carries.
+
+    The converter prints its per-component reports as pretty JSON arrays on stderr: the resolved
+    archive pass as {componentGuid, diagnostics: [...]}, the local generation pass as
+    {ComponentGuid, Success, SkipReason}. A log with no such array falls back to its raw
+    'remains unresolved' lines.
+    """
+    found = []
+    decoder = json.JSONDecoder()
+    for start in (match.start() for match in re.finditer(r"^\[$", text, re.MULTILINE)):
+        try:
+            results, _ = decoder.raw_decode(text, start)
+        except ValueError:
+            continue
+        for item in results if isinstance(results, list) else ():
+            if not isinstance(item, dict):
+                continue
+            identity = item.get("componentGuid", item.get("ComponentGuid"))
+            reasons = list(item["diagnostics"]) if isinstance(item.get("diagnostics"), list) else []
+            if item.get("Success") is False:
+                reasons.append(item.get("SkipReason"))
+            found += [(str(identity).lower() if identity else None, reason) for reason in reasons
+                      if isinstance(reason, str) and "unresolved" in reason.lower()]
+    if not found:
+        found = [(None, line.strip()) for line in ANSI_ESCAPE.sub("", text).splitlines()
+                 if "remains unresolved" in line.lower()]
+    return found
+
+
+def record_bind_diagnostics(private, report, names=None):
+    """Keep and print, flushed, the unresolved diagnostics of the archive binding stages.
+
+    The converter exits 0 when it refuses to bind a component (for example a loose-file layout it
+    cannot place), so the only trace is a diagnostic in the stage log. They go to
+    report["bind_diagnostics"] as {stage, component, component_guid, kind, reason}.
+    """
+    names = names or {}
+    entries, seen = [], set()
+    for stage in (BIND_STAGE, BIND_GENERATE_STAGE):
+        try:
+            text = (private / (stage + ".log")).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        for identity, reason in unresolved_diagnostics(text):
+            if (stage, identity, reason) in seen:
+                continue
+            seen.add((stage, identity, reason))
+            entries.append({"stage": stage, "component": names.get(identity), "component_guid": identity,
+                            "kind": bind_diagnostic_kind(reason), "reason": reason})
+    report[BIND_DIAGNOSTICS_KEY] = entries
+    for entry in entries[:BIND_DIAGNOSTIC_PRINT_CAP]:
+        print(f"::warning::ports: {entry['stage']}: {entry['component'] or 'unnamed component'} "
+              f"[{entry['component_guid'] or 'no guid'}]: {entry['reason'][:600]}",
+              file=sys.stderr, flush=True)
+    if len(entries) > BIND_DIAGNOSTIC_PRINT_CAP:
+        print(f"::warning::ports: {len(entries) - BIND_DIAGNOSTIC_PRINT_CAP} more bind diagnostics "
+              f"are in the report under {BIND_DIAGNOSTICS_KEY}", file=sys.stderr, flush=True)
+
+
 def bind_archives(command, source, guide, converted, archives, archive_map, private, report, env,
                   rules=None):
     """Bind method-only loose-file components to their one mapped archive (convert --resolved-archives).
@@ -700,6 +787,8 @@ def bind_archives(command, source, guide, converted, archives, archive_map, priv
             raise
         review["bind_failed"] = str(failure)
         return converted
+    finally:
+        record_bind_diagnostics(private, report, component_names(converted))
     if not bound.is_file() or bound.is_symlink():
         review["bind_failed"] = "bind_output_missing"
         return converted
@@ -1929,6 +2018,18 @@ def print_diagnostics(report):
         suffix = f"; reviewed-policy-skipped={policy}" if policy else ""
         print(f"ports: convert generated instructions for {skips['generated']} of {skips['total']}"
               f" components; not generated: {causes or 'none'}{suffix}", file=sys.stderr)
+    for record in report.get(SKIPPED_REPORT_KEY) or ():
+        if record.get("bind_diagnostic"):
+            print(f"::warning::ports: OMITTED {record['heading']} [{record['component_guid']}] from this "
+                  f"lane (reviewed lane skip, temporary, so a green lane is a PARTIAL install): "
+                  f"{record['reason']}; converter diagnostic: {record.get('bind_diagnostic_reason')}",
+                  file=sys.stderr)
+    for item in report.get(UNAPPLIED_BIND_SKIPS_KEY) or ():
+        outcome = ("the converter now gives it instructions, so it is NOT skipped; remove the entry"
+                   if item["state"] == "stale"
+                   else "no matching bind diagnostic was recorded, so the coverage gap stands")
+        print(f"::warning::ports: lane skip for {item['heading']} [{item['component_guid']}] "
+              f"({item['bind_diagnostic']}) not applied: {outcome}", file=sys.stderr)
     pending = report.get(PENDING_REVIEW_KEY)
     if pending:
         print(f"::warning::ports: {pending['count']} component(s) DESELECTED pending human review "
@@ -1998,6 +2099,8 @@ def print_diagnostics(report):
             print(f"  - {step['heading']} [{step['component_guid']}] "
                   f"{step['skip_reason'] or 'no convert skip reason recorded'} "
                   f"<{' '.join(step['urls'])}>", file=sys.stderr)
+            if step.get("bind_diagnostic"):
+                print(f"    bind diagnostic: {step['bind_diagnostic']}", file=sys.stderr)
 
 
 IMPLEMENTATION_SECTIONS = {
@@ -2014,7 +2117,9 @@ LANE_SKIPS_PATH = Path(__file__).with_name("archive_selections.json")
 LANE_SKIP_GAMES = ("k1", "k2")
 LANE_SKIP_KEYS = frozenset({"section", "heading", "reason"})
 LANE_SKIP_PINNED_KEYS = frozenset({"guid", "kind"})
-LANE_SKIP_LANES = ("typescript",)
+LANE_SKIP_LANES = ("typescript", "rust")
+LANE_SKIP_BIND_DIAGNOSTICS = ("loose_file_unresolved", "patcher_unresolved")
+UNAPPLIED_BIND_SKIPS_KEY = "unapplied_bind_skips"
 LANE_SKIP_KINDS = ("unreviewed_draft", "dependent_of_deselected")
 PENDING_REVIEW_KEY = "deselected_pending_review"
 
@@ -2052,7 +2157,10 @@ def load_lane_skips(game, path=None, implementation="rust"):
 
     The `lane_skips` table maps k1/k2 to a list of {section, heading, reason}
     objects, each optionally pinned with a `guid` and a `kind` (both or neither;
-    see LANE_SKIP_KINDS). The whole table is validated whatever the game, so a
+    see LANE_SKIP_KINDS). An unpinned entry with `"lane": "rust"` and a `bind_diagnostic`
+    (see LANE_SKIP_BIND_DIAGNOSTICS) is a Rust-only skip that coverage applies only while the
+    archive binding stage recorded that diagnostic for the component and the component still has
+    no instructions (see bind_skip_state). The whole table is validated whatever the game, so a
     malformed entry for the other game still blocks. A missing file or table
     skips nothing. Entries pinned with a `guid`/`kind` record the Rust converter's
     unreviewed-draft state and name Rust GUIDs, so the TypeScript lanes apply only
@@ -2075,13 +2183,16 @@ def load_lane_skips(game, path=None, implementation="rust"):
         seen_guids = set()
         for entry in entries:
             if (not isinstance(entry, dict) or not LANE_SKIP_KEYS <= entry.keys()
-                    or not entry.keys() <= LANE_SKIP_KEYS | LANE_SKIP_PINNED_KEYS | {"lane"}
+                    or not entry.keys() <= LANE_SKIP_KEYS | LANE_SKIP_PINNED_KEYS | {"lane", "bind_diagnostic"}
                     or any(not isinstance(entry[key], str) or not entry[key].strip()
                            or entry[key] != entry[key].strip()
                            for key in entry.keys() & (LANE_SKIP_KEYS | {"guid"}))):
                 raise Blocked("lane_skips_invalid")
             if "lane" in entry and (entry["lane"] not in LANE_SKIP_LANES
                                     or entry.keys() & LANE_SKIP_PINNED_KEYS):
+                raise Blocked("lane_skips_invalid")
+            if "bind_diagnostic" in entry and (entry["bind_diagnostic"] not in LANE_SKIP_BIND_DIAGNOSTICS
+                                               or entry.get("lane") != "rust"):
                 raise Blocked("lane_skips_invalid")
             if entry.keys() & LANE_SKIP_PINNED_KEYS:
                 if (entry.keys() & LANE_SKIP_PINNED_KEYS != LANE_SKIP_PINNED_KEYS
@@ -2102,6 +2213,8 @@ def load_lane_skips(game, path=None, implementation="rust"):
                         "reason": entry["reason"], "urls": [], "source": "lane_skips"}
                 if "guid" in entry:
                     skip.update(guid=entry["guid"], kind=entry["kind"])
+                if "bind_diagnostic" in entry:
+                    skip["bind_diagnostic"] = entry["bind_diagnostic"]
                 result.append(skip)
     return result
 
@@ -2122,6 +2235,22 @@ def canonical_guid(value):
         return False
 
 
+def bind_skip_state(report, identity, kind, component):
+    """Whether a lane skip bound to a bind diagnostic applies, and the diagnostic that confirms it.
+
+    "confirmed": the binding stage recorded this diagnostic kind for the component and it still has
+    no instructions. "stale": it has instructions (the converter now binds it, so the skip would drop
+    an installable component). "unconfirmed": no instructions and no such diagnostic, so the gap is
+    not the one that was reviewed and coverage must still fail.
+    """
+    if isinstance(component, dict) and component.get("Instructions"):
+        return "stale", None
+    for item in (report or {}).get(BIND_DIAGNOSTICS_KEY) or ():
+        if item.get("component_guid") == identity and item.get("kind") == kind:
+            return "confirmed", item["reason"]
+    return "unconfirmed", None
+
+
 def merge_lane_skips(restore_skips, lane_skips):
     """Restore-report skips first; a lane skip naming the same step adds nothing."""
     known = {(skip["section"], skip["heading"]) for skip in restore_skips}
@@ -2133,13 +2262,20 @@ def uncovered_steps(report, headings, components, indexes):
     """Heading, GUID, links and the converter's skip reason for each step lacking instructions."""
     reasons = {item["component_guid"]: item["reason"]
                for item in report.get("convert_skips", {}).get("components", [])}
+    diagnostics = {}
+    for item in report.get(BIND_DIAGNOSTICS_KEY) or ():
+        if item.get("component_guid"):
+            diagnostics.setdefault(item["component_guid"], item["reason"])
     steps = []
     for index in indexes:
         component = components[index] if isinstance(components[index], dict) else {}
         identity = str(component.get("Guid", "")).lower()
-        steps.append({"heading": headings[index], "component_guid": identity,
-                      "urls": [urldefrag(url).url for url in component.get("ResourceRegistry", {})],
-                      "skip_reason": reasons.get(identity)})
+        step = {"heading": headings[index], "component_guid": identity,
+                "urls": [urldefrag(url).url for url in component.get("ResourceRegistry", {})],
+                "skip_reason": reasons.get(identity)}
+        if identity in diagnostics:
+            step["bind_diagnostic"] = diagnostics[identity]
+        steps.append(step)
     return steps
 
 
@@ -2189,6 +2325,7 @@ def coverage(guide, converted, report=None, implementation="rust", skipped=()):
         raise Blocked("guide_component_coverage_mismatch")
     exempt = set()
     records = []
+    unapplied = []
     for skip in skipped:
         key = (skip["section"], skip["heading"])
         if key not in guide_steps:
@@ -2207,8 +2344,16 @@ def coverage(guide, converted, report=None, implementation="rust", skipped=()):
             if "guid" in skip and skip["guid"] != identity:
                 raise Blocked("policy_skipped_guid_mismatch")
             record["component_guid"] = identity
+            if "bind_diagnostic" in skip:
+                state, reason = bind_skip_state(report, identity, skip["bind_diagnostic"], component)
+                if state != "confirmed":
+                    unapplied.append({"section": skip["section"], "heading": skip["heading"],
+                                      "component_guid": identity,
+                                      "bind_diagnostic": skip["bind_diagnostic"], "state": state})
+                    continue
+                record["bind_diagnostic_reason"] = reason
             exempt.add(index)
-        elif "guid" in skip:
+        elif "guid" in skip or "bind_diagnostic" in skip:
             raise Blocked("policy_skipped_guid_unmatched")
         records.append(record)
     skipped_guids = {record["component_guid"] for record in records
@@ -2219,6 +2364,8 @@ def coverage(guide, converted, report=None, implementation="rust", skipped=()):
             raise Blocked("policy_skipped_component_has_dependents")
     if report is not None:
         report[SKIPPED_REPORT_KEY] = records
+        if unapplied:
+            report[UNAPPLIED_BIND_SKIPS_KEY] = unapplied
         pending = [{"component_guid": record["component_guid"], "heading": record["heading"],
                     "kind": record["kind"]} for record in records if record.get("kind")]
         if pending:

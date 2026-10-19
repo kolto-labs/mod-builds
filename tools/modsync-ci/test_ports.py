@@ -1157,6 +1157,14 @@ def linked(name, guid, *links, bound=False, instructed=True):
     return block + "\n" + record
 
 
+UNRESOLVED_REASON = "Loose-file method remains unresolved: no archive layout can be placed"
+
+
+def bind_log(guid, reasons=(UNRESOLVED_REASON,), name="warning: noise\n"):
+    return name + json.dumps([{"componentGuid": guid, "instructionsAdded": 0,
+                               "diagnostics": list(reasons)}], indent=2) + "\n"
+
+
 class ArchiveBindingTests(unittest.TestCase):
     prepare = ExecuteCommandTests.prepare
 
@@ -1333,7 +1341,8 @@ class ArchiveBindingTests(unittest.TestCase):
                          "bound_output_drops_instructions_or_drafts")
         self.assertEqual(ports.bound_result(before, lost_component)[1], "bound_output_components_changed")
 
-    def run_lane(self, converted, bound_output, mapping=True, fail=None, files=None, interrupt=False):
+    def run_lane(self, converted, bound_output, mapping=True, fail=None, files=None, interrupt=False,
+                 bind_log=None):
         root, args = self.prepare("k1")
         args.implementation = "rust"
         for name, content in (files if files is not None else {"one.zip": b"one", "two.zip": b"two"}).items():
@@ -1349,6 +1358,8 @@ class ArchiveBindingTests(unittest.TestCase):
             report["stage"] = stage
             if stage == "convert":
                 (private / "converted.toml").write_text(converted, encoding="utf-8")
+            if stage == ports.BIND_STAGE and bind_log is not None:
+                (private / (stage + ".log")).write_text(bind_log, encoding="utf-8")
             if stage == ports.BIND_STAGE:
                 seen["plan"] = json.loads(Path(command[command.index("--resolved-archives") + 1]).read_text())
                 if fail == stage:
@@ -1405,6 +1416,30 @@ class ArchiveBindingTests(unittest.TestCase):
         self.assertEqual(report["draft_review"]["bound"], 1)
         self.assertEqual(report["draft_review"]["cleared"], 1)
         self.assertNotIn("bind_failed", report["draft_review"])
+
+    def test_unresolved_bind_diagnostics_reach_the_report_and_the_log_even_when_the_pass_exits_zero(self):
+        converted, bound = self.documents()
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            _, _, report, _, _ = self.run_lane(converted, bound, bind_log=bind_log(BIND_TWO))
+        self.assertEqual(report["bind_diagnostics"], [{
+            "stage": ports.BIND_STAGE, "component": "Mod Two", "component_guid": BIND_TWO,
+            "kind": "loose_file_unresolved", "reason": UNRESOLVED_REASON}])
+        self.assertIn("::warning::ports: bind_archives: Mod Two [" + BIND_TWO + "]: " + UNRESOLVED_REASON,
+                      stderr.getvalue())
+
+    def test_bind_diagnostics_are_kept_when_the_generation_pass_fails(self):
+        converted, bound = self.documents()
+        with contextlib.redirect_stderr(io.StringIO()):
+            _, _, report, _, _ = self.run_lane(converted, bound, fail=ports.BIND_GENERATE_STAGE,
+                                               bind_log=bind_log(BIND_TWO))
+        self.assertEqual([item["component_guid"] for item in report["bind_diagnostics"]], [BIND_TWO])
+        self.assertEqual(report["draft_review"]["bind_failed"], ports.BIND_GENERATE_STAGE + "_failed")
+
+    def test_a_clean_binding_pass_records_no_diagnostics(self):
+        converted, bound = self.documents()
+        _, _, report, _, _ = self.run_lane(converted, bound)
+        self.assertEqual(report["bind_diagnostics"], [])
 
     def test_a_failed_binding_pass_keeps_the_plain_converted_toml(self):
         converted, bound = self.documents()
@@ -1582,7 +1617,8 @@ class LaneSkipTableTests(unittest.TestCase):
 
     def test_shipped_table_keeps_the_hand_authored_4gb_patcher_in_both_games(self):
         for game in ("k1", "k2"):
-            hand_authored = [skip for skip in self.shipped(game) if "kind" not in skip]
+            hand_authored = [skip for skip in self.shipped(game)
+                             if "kind" not in skip and "bind_diagnostic" not in skip]
             self.assertEqual([(skip["section"], skip["heading"]) for skip in hand_authored], [FOUR_GB], game)
             self.assertIn(REJECTION, hand_authored[0]["reason"])
             self.assertEqual(hand_authored[0]["urls"], [])
@@ -1620,7 +1656,7 @@ class LaneSkipTableTests(unittest.TestCase):
     def test_malformed_or_clashing_lane_keys_block(self):
         pinned = {"guid": "bee5a72b-d748-8f83-8261-81758a9bfc56", "kind": "unreviewed_draft"}
         for table in (
-            {"k2": [lane_entry(lane="rust")]},
+            {"k2": [lane_entry(lane="python")]},
             {"k2": [lane_entry(lane=3)]},
             {"k2": [lane_entry(lane="typescript", **pinned)]},
             {"k2": [lane_entry(), lane_entry(lane="typescript")]},
@@ -4899,6 +4935,158 @@ class TypeScriptRecoveryTests(unittest.TestCase):
         record, calls = self.recover("ERROR: boom\n")
         self.assertEqual((record["status"], record["fallback"]), ("unavailable", "baseline_restore"))
         self.assertEqual(calls, [])
+
+
+NO_INSTRUCTIONS_GUIDE = "# Guide\n\n## Mod List\n\n### Mod One\n\n### Mod Two\n"
+NO_INSTRUCTIONS_GUID = "40000000-0000-0000-0000-000000000002"
+
+
+def bind_skip(**override):
+    skip = {"section": "Mod List", "heading": "Mod Two", "reason": "reviewed: test", "urls": [],
+            "source": "lane_skips", "lane": "rust", "bind_diagnostic": "loose_file_unresolved"}
+    skip.update(override)
+    return skip
+
+
+def bind_entry(kind="loose_file_unresolved", guid=NO_INSTRUCTIONS_GUID):
+    return {"stage": ports.BIND_STAGE, "component": "Mod Two", "component_guid": guid,
+            "kind": kind, "reason": UNRESOLVED_REASON}
+
+
+class BindDiagnosticTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.directory))
+        self.guide = self.directory / "full.md"
+        self.guide.write_text(NO_INSTRUCTIONS_GUIDE, encoding="utf-8")
+
+    def converted(self, instructed=False, dependent=False):
+        second = ("[[thisMod]]\nGuid = \"" + NO_INSTRUCTIONS_GUID + "\"\nName = \"Mod Two\"\nIsSelected = true\n")
+        if instructed:
+            second = component("Mod Two", NO_INSTRUCTIONS_GUID)
+        first = component("Mod One", "40000000-0000-0000-0000-000000000001")
+        if dependent:
+            first = first.replace("IsSelected = false",
+                                  'IsSelected = false\nDependencies = ["' + NO_INSTRUCTIONS_GUID + '"]')
+        path = self.directory / "converted.toml"
+        path.write_text(document(first, second), encoding="utf-8")
+        return path
+
+    def coverage(self, report, skips=None, **options):
+        return ports.coverage(self.guide, self.converted(**options), report, "rust",
+                              [bind_skip()] if skips is None else skips)
+
+    def test_a_confirmed_diagnostic_lets_the_reviewed_skip_cover_the_gap_visibly(self):
+        report = {ports.BIND_DIAGNOSTICS_KEY: [bind_entry()]}
+        self.assertEqual(self.coverage(report), 2)
+        record, = report["skipped_by_reviewed_policy"]
+        self.assertEqual((record["component_guid"], record["bind_diagnostic_reason"]),
+                         (NO_INSTRUCTIONS_GUID, UNRESOLVED_REASON))
+        self.assertNotIn("unapplied_bind_skips", report)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        self.assertIn("::warning::ports: OMITTED Mod Two [" + NO_INSTRUCTIONS_GUID + "]", stderr.getvalue())
+        self.assertIn("PARTIAL install", stderr.getvalue())
+
+    def test_without_the_diagnostic_the_coverage_gap_still_blocks(self):
+        for label, entries in (("none", []), ("other kind", [bind_entry("patcher_unresolved")]),
+                               ("other component", [bind_entry(guid="40000000-0000-0000-0000-000000000009")])):
+            with self.subTest(label):
+                report = {ports.BIND_DIAGNOSTICS_KEY: entries}
+                with self.assertRaisesRegex(ports.Blocked, "guide_steps_without_instructions"):
+                    self.coverage(report)
+                self.assertEqual(report["unapplied_bind_skips"][0]["state"], "unconfirmed")
+                self.assertEqual(report["skipped_by_reviewed_policy"], [])
+
+    def test_a_skip_never_drops_a_component_that_now_has_instructions(self):
+        report = {}
+        self.assertEqual(self.coverage(report, instructed=True), 2)
+        self.assertEqual(report["skipped_by_reviewed_policy"], [])
+        self.assertEqual(report["unapplied_bind_skips"][0]["state"], "stale")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        self.assertIn("NOT skipped; remove the entry", stderr.getvalue())
+
+    def test_a_dependent_of_the_omitted_component_still_blocks(self):
+        report = {ports.BIND_DIAGNOSTICS_KEY: [bind_entry()]}
+        with self.assertRaisesRegex(ports.Blocked, "policy_skipped_component_has_dependents"):
+            self.coverage(report, dependent=True)
+
+    def test_a_bind_skip_for_a_step_the_converter_does_not_count_blocks(self):
+        report = {ports.BIND_DIAGNOSTICS_KEY: [bind_entry()]}
+        with self.assertRaisesRegex(ports.Blocked, "policy_skipped_step_not_in_guide"):
+            self.coverage(report, [bind_skip(heading="Mod Three")])
+
+    def test_the_failure_names_each_steps_bind_diagnostic(self):
+        report = {ports.BIND_DIAGNOSTICS_KEY: [bind_entry()]}
+        with self.assertRaisesRegex(ports.Blocked, "guide_steps_without_instructions"):
+            self.coverage(report, [])
+        step, = report["steps_without_instructions"]
+        self.assertEqual(step["bind_diagnostic"], UNRESOLVED_REASON)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        self.assertIn("::error::ports: 1 guide steps have no instructions", stderr.getvalue())
+        self.assertIn("bind diagnostic: " + UNRESOLVED_REASON, stderr.getvalue())
+
+    def test_generation_pass_skip_reasons_are_recorded_and_flushed(self):
+        flushes = []
+
+        class Stream(io.StringIO):
+            def flush(self):
+                flushes.append(1)
+
+        log = [{"ComponentGuid": NO_INSTRUCTIONS_GUID, "ComponentName": "Mod Two", "Success": False,
+                "SkipReason": "Patcher method remains unresolved: layout"},
+               {"ComponentGuid": "40000000-0000-0000-0000-000000000001", "Success": False,
+                "SkipReason": "No matching archive found"}]
+        (self.directory / (ports.BIND_GENERATE_STAGE + ".log")).write_text(
+            "noise\n" + json.dumps(log, indent=2) + "\n", encoding="utf-8")
+        report = {}
+        with contextlib.redirect_stderr(Stream()):
+            ports.record_bind_diagnostics(self.directory, report, {NO_INSTRUCTIONS_GUID: "Mod Two"})
+        self.assertEqual([(item["stage"], item["kind"], item["component"]) for item in report["bind_diagnostics"]],
+                         [(ports.BIND_GENERATE_STAGE, "patcher_unresolved", "Mod Two")])
+        self.assertTrue(flushes)
+
+    def test_a_log_without_json_falls_back_to_the_unresolved_lines(self):
+        (self.directory / (ports.BIND_STAGE + ".log")).write_text(
+            "info\n\x1b[31m" + UNRESOLVED_REASON + "\x1b[0m\n", encoding="utf-8")
+        report = {}
+        with contextlib.redirect_stderr(io.StringIO()):
+            ports.record_bind_diagnostics(self.directory, report)
+        self.assertEqual([(item["component_guid"], item["reason"]) for item in report["bind_diagnostics"]],
+                         [(None, UNRESOLVED_REASON)])
+
+    def test_rust_bind_skips_are_validated_and_apply_to_the_rust_lane_only(self):
+        entry = {"section": "Mod List", "heading": "Mod Two", "reason": "reviewed: test",
+                 "lane": "rust", "bind_diagnostic": "loose_file_unresolved"}
+        path = lane_skips_file(self.directory, {"k2": [entry]})
+        rust, = ports.load_lane_skips("k2", path)
+        self.assertEqual((rust["heading"], rust["bind_diagnostic"]), ("Mod Two", "loose_file_unresolved"))
+        self.assertEqual(ports.load_lane_skips("k2", path, "typescript"), [])
+        self.assertEqual(ports.load_lane_skips("k1", path), [])
+        pinned = {"guid": NO_INSTRUCTIONS_GUID, "kind": "unreviewed_draft"}
+        for label, changed in (("no lane", {"lane": None}), ("typescript lane", {"lane": "typescript"}),
+                               ("unknown kind", {"bind_diagnostic": "anything"}), ("pinned", pinned),
+                               ("blank", {"bind_diagnostic": " "})):
+            with self.subTest(label):
+                broken = {key: value for key, value in {**entry, **changed}.items() if value is not None}
+                bad = lane_skips_file(self.directory, {"k2": [broken]})
+                with self.assertRaisesRegex(ports.Blocked, "lane_skips_invalid"):
+                    ports.load_lane_skips("k2", bad)
+
+    def test_the_shipped_k2_table_omits_one_component_from_the_rust_lane_only(self):
+        rust = [skip for skip in ports.load_lane_skips("k2", SHIPPED_LANE_SKIPS) if "bind_diagnostic" in skip]
+        self.assertEqual([(skip["section"], skip["bind_diagnostic"]) for skip in rust],
+                         [("Mod List", "loose_file_unresolved")])
+        self.assertIn("partial install", rust[0]["reason"])
+        self.assertFalse([skip for skip in ports.load_lane_skips("k2", SHIPPED_LANE_SKIPS, "typescript")
+                          if "bind_diagnostic" in skip])
+        self.assertFalse([skip for skip in ports.load_lane_skips("k1", SHIPPED_LANE_SKIPS)
+                          if "bind_diagnostic" in skip])
 
 
 if __name__ == "__main__":

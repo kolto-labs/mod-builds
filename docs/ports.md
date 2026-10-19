@@ -645,7 +645,9 @@ table, read by `ports.py` (no restore report needed):
   A pinned `guid` must equal the converted component's GUID (`policy_skipped_guid_mismatch`)
   and be unique in the table. A malformed table, an unknown game key, or a
   repeated step blocks the Rust lane (`lane_skips_invalid`, `lane_skips_duplicate`)
-  whichever game is being run; a missing file or table skips nothing.
+  whichever game is being run; a missing file or table skips nothing. An unpinned entry may also
+  carry `"lane": "rust"` with a `bind_diagnostic`; see
+  [Bind diagnostics and Rust bind skips](#bind-diagnostics-and-rust-bind-skips).
 - **Scope.** Only the exact `<## section>::<### heading>` is skipped. A step that is
   not in the guide, appears twice in the counted sections, or has a dependent
   component that is not itself skipped blocks the lane, exactly like a restore-report skip. Every other step
@@ -788,6 +790,38 @@ A `lane_skips` entry may carry `"lane": "typescript"` to apply the skip to the T
 lanes only (the Rust lanes still install the component). It is used for components whose
 archive is a Windows installer `.exe` that ModSync.ts cannot extract; the dependents are
 skipped with it, and the skip is reported like any other policy skip.
+
+#### Bind diagnostics and Rust bind skips
+
+`convert --resolved-archives` exits 0 when it refuses to bind a component (for example a
+`Installation Method: Loose-File Mod` layout it cannot place); the only trace is a
+`Loose-file method remains unresolved: <reason>` (or `Patcher method ...`) diagnostic in the
+`bind_archives` / `bind_generate_local` stage log. `ports.py` now reads both logs after the binding
+passes (also when a pass fails), prints each as a flushed `::warning::ports: <stage>: <component>
+[<guid>]: <reason>` line, and records them under `bind_diagnostics` in the lane report
+(`stage`, `component`, `component_guid`, `kind` of `loose_file_unresolved`, `patcher_unresolved`
+or `unresolved`, `reason`). When coverage fails with `guide_steps_without_instructions`, each
+step in `steps_without_instructions` carries its `bind_diagnostic` and the `::error::` listing
+prints it under the step.
+
+A component the Rust binder cannot process is omitted temporarily and visibly so the rest installs, by
+a reviewed `lane_skips` entry with `"lane": "rust"` and `"bind_diagnostic": "loose_file_unresolved"`
+(or `patcher_unresolved`), unpinned (no `guid`/`kind`, so `deselect_unreviewed.py` keeps it):
+
+- It applies only while the bind stage recorded that diagnostic kind for the component and the
+  component still has no instructions. With no matching diagnostic the gap is a different one and
+  coverage still fails (`unapplied_bind_skips` state `unconfirmed`). Once the converter gives the
+  component instructions the skip is not applied and the component installs (state `stale`); remove the entry.
+- When applied it is reported like any policy skip (`skipped_by_reviewed_policy`, plus
+  `bind_diagnostic` and `bind_diagnostic_reason`), deselected in `validate`/`install`, and printed as
+  `::warning::ports: OMITTED <step> [<guid>] ... PARTIAL install`. A component that depends on it still
+  blocks (`policy_skipped_component_has_dependents`) unless it is skipped as well.
+- `bind_diagnostic` is valid only with `"lane": "rust"` and without a `guid`/`kind` pin
+  (`lane_skips_invalid` otherwise); the TypeScript lanes never read it.
+
+K2 `Worn-Out Mando Armor` is skipped this way: the Rust loose-file bind refuses its layout, so it is
+omitted from the Rust lane (partial install) and tracked for an upstream converter fix. Its archive
+alias rule and the TypeScript lanes are unchanged.
 
 The restored file must be a regular, non-symlink file whose map name is a plain file name in
 the archive directory. Map entries with several or conflicting files, unmapped links,
