@@ -25,13 +25,55 @@ Steam account. Fork and Dependabot pull requests get no secrets and skip it.
       approvals have timed out this way).
    3. If that also failed, try each code in `STEAM_GUARD_CODES` in turn (see
       [Backup-code fallback](#backup-code-fallback)).
-3. `tools/modsync-ci/game_cache.py pack` drops every `*.bik` movie, checks for
-   `chitin.key`, `dialog.tlk`, and the game executable, records a SHA-256
-   inventory, and encrypts the tree with `CACHE_ENCRYPTION_KEY`.
-4. Save the result under `game-<game>-v1`.
+3. `game_cache.py inventory --require-modules` prints the downloaded tree (see
+   [Game inventory](#game-inventory)) and fails the job when `modules/` holds no
+   `.rim` file. A real Steam KOTOR install always ships `modules/*.rim`, so
+   an empty `modules/` means a partial or wrong-depot download.
+4. `tools/modsync-ci/game_cache.py pack` repeats that check, drops every `*.bik`
+   movie, checks for `chitin.key`, `dialog.tlk`, and the game executable,
+   records a SHA-256 inventory, and encrypts the tree with `CACHE_ENCRYPTION_KEY`.
+5. Save the result under `game-<game>-v1`.
 
-The job fails only if the game is still missing after these steps. Nothing partial
-is saved.
+The job fails if the game is still missing after these steps or has no module
+`.rim` files. Nothing partial is saved. Each SteamCMD attempt that exits nonzero
+logs a `::warning::` with its status; the attempt loop still stops at the first
+one that leaves `chitin.key`, so a partial download that has `chitin.key` is
+caught by the `.rim` check, not retried.
+
+The check looks for `modules` case-insensitively. The K2 lane's runner log names
+`.../game/Modules/003ebo.mod` (see [ports.md](ports.md)), and the Linux runner is
+case-sensitive, so the earlier `modules/` check (removed in e287887, "Accept valid
+Steam KOTOR installs without modules"; the commit gives no other evidence) most
+likely failed on a directory spelled `Modules/`. Do not restore a check that
+spells the directory in one case; the inventory prints the real spelling.
+
+The restore-key fallback `steam-sealed-v3-excludingmovies-<game>-Linux-` is accepted
+by the `game` job's lookup, so a hit on a legacy entry ends the job without
+contacting Steam and without running the `.rim` check. If an install lane's
+inventory shows a legacy entry with no `.rim` files, delete that cache entry and
+re-run `game`.
+
+## Game inventory
+
+`game_cache.py inventory --game <k1|k2> --game-dir <dir> [--label <text>]
+[--require-modules] [--quiet]` is read-only. It prints, flushed, and appends the
+same text to `$GITHUB_STEP_SUMMARY`:
+
+- top-level entry names, and the actual spelling of the `modules`, `override` and
+  `data` directories (flagged when `modules` is not lowercase);
+- `modules/`: counts and total bytes of `*.rim` (without `_s`), `*_s.rim`,
+  `*.mod`, `*_dlg.erf`, and all files;
+- `override/`: recursive file count and bytes;
+- `data/*.bif`: count and bytes;
+- sizes of `chitin.key` and `dialog.tlk`;
+- the `steamapps/appmanifest_*.acf` state (`StateFlags`, `buildid`) when it
+  still exists, which is only right after SteamCMD.
+
+It runs in the `game` job right after SteamCMD (label `after SteamCMD`), and in
+every `install` lane (label `<implementation> <mode>`) and the `manual` lane
+(label `manual`) right after `Unpack game`, so a failure such as a TS
+`GFFList ... not found in modules/<name>.mod` can be read against what the cached
+game really holds. The output is never an input to any cache key.
 
 Install and manual jobs restore the same key (a miss fails the job) and run
 `game_cache.py unpack`, which decrypts the cache and refuses to continue unless

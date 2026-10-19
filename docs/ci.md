@@ -33,8 +33,8 @@ them failed, as long as `game` was not skipped. Each lane is independent
 
 **`game`** — Looks up the sealed game in the Actions cache (nothing is downloaded
 on a hit). On a miss it downloads the game once with SteamCMD, removes `.bik`
-movies, seals it and saves it. If there is no complete game at the end, the job
-fails. Runs k1, then k2, on one Steam account. The Monday/Thursday schedule keeps
+movies, seals it and saves it. If there is no complete game, or `modules/` holds
+no `.rim` file, at the end, the job fails (it prints a game inventory first). Runs k1, then k2, on one Steam account. The Monday/Thursday schedule keeps
 both game caches in use; see [steam.md](steam.md).
 
 **`mods`** — Restores the newest `mod-archives-*` Actions cache, runs `cache.py
@@ -75,7 +75,8 @@ any lane.
 source for the implementation (the repository named by `MODSYNC_RS_REPOSITORY` or
 `MODSYNC_TS_REPOSITORY`, read with `MODSYNC_SOURCE_TOKEN`; empty values fail the
 job). It restores the game cache (a miss fails the job with "game cache evicted —
-re-run the game job") and unpacks it, restores
+re-run the game job") and unpacks it, prints a game inventory (also in
+`$GITHUB_STEP_SUMMARY`; see [steam.md](steam.md#game-inventory)), restores
 the Actions cache that `mods` saved in the same run (key from
 `needs.mods.outputs.archive_cache_key`, falling back to the `mod-archives-` prefix when
 `mods` failed or was skipped; a miss is not an error), restores the archives for `content/<game>/full.md` from the chain

@@ -88,18 +88,22 @@ jobs:
             umask 077
             mkdir -p "$HOME/Steam/config"
             printf '%s' "$STEAM_CONFIG_VDF" | base64 -d > "$HOME/Steam/config/config.vdf"
-            "$steamcmd" "${options[@]}" +@NoPromptForPassword 1 +login "$STEAM_USERNAME" "${install[@]}" </dev/null || true
+            "$steamcmd" "${options[@]}" +@NoPromptForPassword 1 +login "$STEAM_USERNAME" "${install[@]}" </dev/null || echo "::warning::steamcmd (saved login) exited with status $?"
           fi
           if [[ ! -f "$RUNNER_TEMP/game/chitin.key" ]]; then
-            printf '%s\n' "$STEAM_PASSWORD" | "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "${install[@]}" || true
+            printf '%s\n' "$STEAM_PASSWORD" | "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "${install[@]}" || echo "::warning::steamcmd (password login) exited with status $?"
           fi
           # Fallback: Steam Guard backup codes (each is single-use; spent codes are rejected quickly).
           for code in $STEAM_GUARD_CODES; do
             [[ -f "$RUNNER_TEMP/game/chitin.key" ]] && break
             echo "Trying a Steam Guard backup code."
-            "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "$STEAM_PASSWORD" "$code" "${install[@]}" </dev/null || true
+            "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "$STEAM_PASSWORD" "$code" "${install[@]}" </dev/null || echo "::warning::steamcmd (backup code) exited with status $?"
           done
           test -f "$RUNNER_TEMP/game/chitin.key"
+          # A real Steam KOTOR install always ships modules/*.rim (K2 names the directory Modules/); fail the game job, never cache a partial download.
+          python tools/modsync-ci/game_cache.py inventory --game "$GAME" --game-dir "$RUNNER_TEMP/game" \
+            --label "after SteamCMD" --require-modules \
+            || { echo "::error::$GAME SteamCMD download has no modules/*.rim; see the game inventory above and docs/steam.md"; exit 1; }
           python tools/modsync-ci/game_cache.py pack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
 
@@ -792,6 +796,10 @@ jobs:
         run: |
           python tools/modsync-ci/game_cache.py unpack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
+      - name: Game inventory
+        run: |
+          python tools/modsync-ci/game_cache.py inventory --game "$GAME" --game-dir "$RUNNER_TEMP/game" \
+            --label "${{ matrix.implementation }} ${{ matrix.mode }}"
       - name: Install archive tools
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq 7zip 7zip-rar megatools libarchive-tools >/dev/null && { sudo apt-get install -y -qq unrar >/dev/null 2>&1 || echo "unrar unavailable; falling back to 7z/bsdtar"; }
@@ -956,6 +964,10 @@ jobs:
         run: |
           python tools/modsync-ci/game_cache.py unpack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
+      - name: Game inventory
+        if: steps.plan.outputs.present == 'true'
+        run: |
+          python tools/modsync-ci/game_cache.py inventory --game "$GAME" --game-dir "$RUNNER_TEMP/game" --label manual
       - name: Install archive tools
         if: steps.plan.outputs.present == 'true'
         run: |
