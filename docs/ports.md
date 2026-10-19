@@ -793,8 +793,18 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
     | `validation_page` | `Validation / install` | `Run validation`, `Analyze conflicts` or `Install selected mods` | 90 s | `validation_page_not_reached` |
     | `validation_start` | `Run validation` | `Validating`, `Starting validation` or `Validation completed/passed` | 90 s | `validation_not_started` |
     | `install_review` | `Install selected mods` | `Ready to Install` | 90 s | `install_review_not_reached` |
-    | `install_confirmation` | `Next` (matched as the word) | `Create snapshot` or `snapshot needs space` | 90 s | `install_confirmation_not_reached` |
-    | `installation_start` | `Create snapshot and install` | `Installing` (not `Installing multiple`), `What's Happening`, `Stop Install` or `Installation complete` | 90 s | `installation_not_started` |
+    | `install_confirmation` | `Next` (matched as the word, clicked once) | `Create snap…`, `snap… needs…` or `Install selected mods?` | 90 s | `install_confirmation_not_reached` |
+    | `installation_start` | `Create snapshot and install` (matched as `snap… and inst…`) | `Installing` (not `Installing multiple`), `What's Happening`, `Stop Install` or `Installation complete` | 90 s | `installation_not_started` |
+
+    `install_confirmation` is the one transition that does not re-click on the 10 s cadence:
+    `Next` on `Ready to Install` opens the `Install selected mods?` modal, and a click outside
+    the modal closes it, so a retry would toggle it open and shut. `Next` is pressed once
+    (`retry=False`) and the frames are only read, alternating 2x and 1x OCR
+    (`CONFIRMATION_OCR_SCALES`); `installation_start` alternates the same scales. Only if the
+    marker is still absent after `CONFIRMATION_RECLICK_SECONDS` (45 s), `Ready to Install` is
+    still on screen and the frame has at most `CONFIRMATION_NOISE_LINES` (3) lines the first
+    frame lacked, `Next` gets one more click. The markers and the button pattern accept the
+    split or clipped words that `tesseract --psm 11` produces.
 
     Between `validation_start` and `install_review` the driver waits for the text `Validation
     passed` (`locate`), and after `installation_start` for `Installation complete`; those
@@ -824,6 +834,10 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
     `label_not_found`, `clicks` (last 12: `control`, `x`, `y`, `after_seconds`, `matched`),
     `ocr_tail` (keyword-filtered), `window_seconds`, `busy_waits` and `busy_text`. On failure
     it adds `screenshot`, `ocr_lines` (first 80 OCR lines) and `top_bar` (the top-bar lines).
+    Every transition also records `retry` and `label_clicks` (presses of the label), and on
+    failure `changed_frame`: the last frame whose OCR had a line the first frame of the
+    transition lacked (`attempt`, `line_count`, `new_lines`, and the full `ocr_lines`, each
+    bounded to `CHANGED_FRAME_LOG_LINES` = 150), or `null` if the screen never changed.
     The failure line in `driver.log` also gives the attempts, the last click and the busy
     text. On a failed run every `*_navigation` key, plus `selection_summary`, is copied into
     `worker_diagnostics`; `stage` is `<name>_navigation` while one is in progress.

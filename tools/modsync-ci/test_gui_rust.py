@@ -1,10 +1,17 @@
 import argparse
+import contextlib
 import hashlib
+import importlib.machinery
+import io
 import json
+import os
 from pathlib import Path
+import re
 import shutil
+import sys
 import tempfile
 import tomllib
+import types
 import unittest
 from unittest import mock
 
@@ -865,6 +872,307 @@ class FailureReasonTests(unittest.TestCase):
         report = json.loads((worker / "result.json").read_text(encoding="utf-8"))
         self.assertEqual(report["reason"], "RuntimeError: Tesseract process timeout")
         self.assertEqual(report["status"], "blocked")
+
+
+class InstallConfirmationMatchTests(unittest.TestCase):
+    def test_marker_reads_the_modal_even_when_words_are_split_or_dropped(self):
+        for text in ("Create snapshot and install", "Create snap",
+                     "The snapshot needs space for both folders.", "snapshot needs",
+                     "Install selected mods?", "Install selected mods ?",
+                     "INSTALL SELECTEDMODS?"):
+            self.assertTrue(gui_rust.INSTALL_CONFIRMATION_MARKER.search(text), text)
+
+    def test_marker_does_not_match_the_pages_around_the_modal(self):
+        for text in ("Ready to Install", "Install selected mods", "Run validation", "Next",
+                     "Installing 12 mods", "Validation passed", "Stop Install"):
+            self.assertFalse(gui_rust.INSTALL_CONFIRMATION_MARKER.search(text), text)
+
+    def test_install_button_pattern_tolerates_a_dropped_or_split_first_word(self):
+        for text in ("Create snapshot and install", "snapshot and install", "Create snapshot and",
+                     "Create snapshots and inst", "Create  snapshot  and  install"):
+            self.assertRegex(text, re.compile(gui_rust.INSTALL_START_PATTERN, re.IGNORECASE))
+
+    def test_install_button_pattern_ignores_the_modal_heading_and_body(self):
+        for text in ("Install selected mods?", "The snapshot needs space for both folders.",
+                     "Cancel", "Ready to Install", "Install selected mods"):
+            self.assertNotRegex(text, re.compile(gui_rust.INSTALL_START_PATTERN, re.IGNORECASE))
+
+    def test_confirmation_steps_try_both_scales_and_start_with_the_one_that_reads_next(self):
+        self.assertEqual(gui_rust.CONFIRMATION_OCR_SCALES[0], 2)
+        self.assertIn(1, gui_rust.CONFIRMATION_OCR_SCALES)
+
+
+class SingleClickTests(unittest.TestCase):
+    def test_first_click_is_always_due(self):
+        self.assertTrue(gui_rust.single_click_due(0, 0, 0, False))
+
+    def test_no_second_click_before_the_guard_interval(self):
+        self.assertFalse(gui_rust.single_click_due(1, 20, 0, True))
+        self.assertFalse(gui_rust.single_click_due(1, gui_rust.CONFIRMATION_RECLICK_SECONDS - 1, 0, True))
+
+    def test_second_click_needs_the_page_to_be_visible_and_unchanged(self):
+        self.assertTrue(gui_rust.single_click_due(1, gui_rust.CONFIRMATION_RECLICK_SECONDS, 0, True))
+        self.assertFalse(gui_rust.single_click_due(1, 500, 0, False))
+
+    def test_only_one_guarded_reclick_is_ever_allowed(self):
+        self.assertFalse(gui_rust.single_click_due(2, 500, 0, True))
+
+    def test_guard_is_longer_than_the_retry_cadence_that_closed_the_modal(self):
+        self.assertGreater(gui_rust.CONFIRMATION_RECLICK_SECONDS, gui_rust.NAV_RETRY_SECONDS)
+        self.assertLess(gui_rust.CONFIRMATION_RECLICK_SECONDS, gui_rust.NAV_WINDOW_SECONDS)
+
+
+class ChangedFrameTests(unittest.TestCase):
+    def test_new_lines_are_the_ones_the_baseline_lacked(self):
+        self.assertEqual(gui_rust.new_lines(["a", "b"], ["b", "c", "d"]), ["c", "d"])
+        self.assertEqual(gui_rust.new_lines(["a", "b"], ["b", "a"]), [])
+
+    def test_record_keeps_the_attempt_and_all_lines(self):
+        record = gui_rust.changed_frame_record(7, ["a"], ["a", "b", "c"])
+        self.assertEqual(record, {"attempt": 7, "line_count": 3, "new_lines": ["b", "c"],
+                                  "ocr_lines": ["a", "b", "c"]})
+
+    def test_record_is_bounded(self):
+        read = ["line %d" % number for number in range(400)]
+        record = gui_rust.changed_frame_record(2, [], read)
+        self.assertEqual(gui_rust.CHANGED_FRAME_LOG_LINES, 150)
+        self.assertEqual(len(record["ocr_lines"]), 150)
+        self.assertEqual(len(record["new_lines"]), 150)
+        self.assertEqual(record["line_count"], 400)
+
+
+class FakeClock:
+    def __init__(self):
+        self.now = 0.0
+
+    def monotonic(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+
+class FakeImage:
+    def __init__(self, width, height):
+        self.width = width
+        self.height = height
+
+    def save(self, path):
+        Path(path).write_bytes(b"png")
+
+    def crop(self, box):
+        return FakeImage(box[2] - box[0], box[3] - box[1])
+
+    def resize(self, size):
+        return FakeImage(*size)
+
+
+class FakeScreen:
+    WIDTH = 1600
+    HEIGHT = 1200
+    ROW = 60
+
+    def __init__(self, clock, pages, start="welcome"):
+        self.clock = clock
+        self.pages = pages
+        self.page = start
+        self.position = (0, 0)
+        self.scales = []
+        self.clicks = []
+        self.moves = 0
+
+    def lines(self):
+        return self.pages[self.page]["lines"]
+
+    def readable(self, scale):
+        allowed = self.pages[self.page].get("scales")
+        return allowed is None or scale in allowed
+
+    def image_to_data(self, region, config=None, output_type=None, timeout=None):
+        self.clock.now += 1.0
+        scale = region.width // self.WIDTH
+        self.scales.append(scale)
+        data = {name: [] for name in ("text", "left", "top", "width", "height",
+                                      "block_num", "par_num", "line_num")}
+        if not self.readable(scale):
+            return data
+        for row, text in enumerate(self.lines()):
+            for column, word in enumerate(text.split()):
+                data["text"].append(word)
+                data["left"].append((100 + column * 120) * scale)
+                data["top"].append((100 + row * self.ROW) * scale)
+                data["width"].append(100 * scale)
+                data["height"].append(20 * scale)
+                data["block_num"].append(row + 1)
+                data["par_num"].append(1)
+                data["line_num"].append(1)
+        return data
+
+    def row_at(self, x, y):
+        row = round((y - 110) / self.ROW)
+        if row < 0 or row >= len(self.lines()) or abs(y - (110 + row * self.ROW)) > 15:
+            return None
+        return row
+
+    def click(self):
+        x, y = self.position
+        row = self.row_at(x, y)
+        page = self.pages[self.page]
+        self.clicks.append((self.page, row, self.clock.now))
+        if row is not None and row in page.get("buttons", {}):
+            self.page = page["buttons"][row]
+        elif "outside" in page:
+            self.page = page["outside"]
+
+
+def default_pages():
+    return {
+        "welcome": {"lines": ["Welcome", "Summary / selection"], "buttons": {1: "summary"}},
+        "summary": {"lines": ["Base build: 3 of 3 mods selected", "Validation / install"],
+                    "buttons": {1: "validation"}},
+        "validation": {"lines": ["Run validation", "Analyze conflicts"], "buttons": {0: "validated"}},
+        "validated": {"lines": ["Validating mods", "Validation passed", "Install selected mods"],
+                      "buttons": {2: "review"}},
+        "review": {"lines": ["Ready to Install", "Next"], "buttons": {1: "modal"}},
+        "modal": {"lines": ["Ready to Install", "Install selected mods?",
+                            "The snapshot needs space for both folders.", "Cancel",
+                            "Create snapshot and install"],
+                  "buttons": {4: "installing"}, "outside": "review"},
+        "installing": {"lines": ["Installing 3 mods", "Installation complete"]},
+    }
+
+
+class InstallConfirmationFlowTests(unittest.TestCase):
+    def run_flow(self, **pages):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        private = root / "private"
+        private.mkdir()
+        (private / "selection-plan.json").write_text(json.dumps(
+            {"click_select_all": False, "subset": False, "expected_components": []}), encoding="utf-8")
+        clock = FakeClock()
+        table = default_pages()
+        table.update(pages)
+        screen = FakeScreen(clock, table)
+
+        def module(name, **attributes):
+            fake = types.ModuleType(name)
+            fake.__spec__ = importlib.machinery.ModuleSpec(name, None)
+            for key, value in attributes.items():
+                setattr(fake, key, value)
+            return fake
+
+        def move(x, y):
+            screen.position = (x, y)
+
+        pyautogui = module("pyautogui", FAILSAFE=True, PAUSE=0,
+                           size=lambda: (screen.WIDTH, screen.HEIGHT), moveTo=move,
+                           mouseDown=screen.click, mouseUp=lambda: None)
+        pytesseract = module("pytesseract", image_to_data=screen.image_to_data,
+                             Output=types.SimpleNamespace(DICT="dict"))
+        grab = module("PIL.ImageGrab", grab=lambda xdisplay=None: FakeImage(screen.WIDTH, screen.HEIGHT))
+        pil = module("PIL", ImageGrab=grab)
+
+        class Process:
+            def poll(self):
+                return None
+
+            def terminate(self):
+                pass
+
+            def wait(self, timeout=None):
+                return 0
+
+        args = argparse.Namespace(binary=root / "modsync", game_dir=root / "game",
+                                  archives=root / "archives", timeout=600.0)
+        result = {}
+        output = io.StringIO()
+        error = None
+        with mock.patch.dict(sys.modules, {"pyautogui": pyautogui, "pytesseract": pytesseract,
+                                           "PIL": pil, "PIL.ImageGrab": grab}), \
+                mock.patch.dict(os.environ, {"DISPLAY": ":0"}), \
+                mock.patch.object(gui_rust, "time", clock), \
+                mock.patch.object(gui_rust.subprocess, "Popen", return_value=Process()), \
+                mock.patch.object(gui_rust.gui_diag, "mark_phase"), \
+                mock.patch.object(gui_rust, "verify_receipt"), \
+                contextlib.redirect_stdout(output):
+            try:
+                gui_rust.drive(args, private, result)
+            except gui_rust.Blocked as blocked:
+                error = str(blocked)
+        return types.SimpleNamespace(result=result, error=error, screen=screen, private=private,
+                                     output=output.getvalue())
+
+    def next_clicks(self, run):
+        return [click for click in run.screen.clicks if click[0] in ("review", "modal") and click[1] == 1]
+
+    def test_next_is_clicked_once_and_the_modal_is_confirmed(self):
+        run = self.run_flow()
+        self.assertIsNone(run.error)
+        self.assertTrue(run.result["ui_completed"])
+        self.assertEqual(len(self.next_clicks(run)), 1)
+        navigation = run.result["install_confirmation_navigation"]
+        self.assertEqual((navigation["retry"], navigation["label_clicks"], navigation["reached"]),
+                         (False, 1, True))
+        self.assertEqual(len(navigation["clicks"]), 1)
+        self.assertEqual(run.result["validation_page_navigation"]["retry"], True)
+
+    def test_a_modal_read_only_through_split_words_still_confirms(self):
+        run = self.run_flow(modal={
+            "lines": ["Ready to Install", "nstall 3 selected mods ?", "The snapshot needs", "Cancel",
+                      "snapshot and install"],
+            "buttons": {4: "installing"}, "outside": "review"})
+        self.assertIsNone(run.error)
+        self.assertEqual(len(self.next_clicks(run)), 1)
+        self.assertEqual(run.result["installation_start_navigation"]["clicks"][0]["matched"],
+                         "snapshot and install")
+
+    def test_modal_only_readable_at_the_cheaper_scale_is_still_confirmed(self):
+        run = self.run_flow(modal={
+            "lines": ["Ready to Install", "Install selected mods?", "Cancel",
+                      "Create snapshot and install"],
+            "buttons": {3: "installing"}, "outside": "review", "scales": {1}})
+        self.assertIsNone(run.error)
+        self.assertEqual(len(self.next_clicks(run)), 1)
+        self.assertIn(1, run.screen.scales)
+        installed = [click for click in run.screen.clicks if click[0] == "modal" and click[1] == 3]
+        self.assertEqual(len(installed), 1)
+
+    def test_a_dead_next_gets_one_guarded_reclick_after_the_interval_and_then_fails(self):
+        run = self.run_flow(review={"lines": ["Ready to Install", "Next"]})
+        self.assertEqual(run.error, "install_confirmation_not_reached")
+        clicks = self.next_clicks(run)
+        self.assertEqual(len(clicks), 2)
+        self.assertGreaterEqual(clicks[1][2] - clicks[0][2], gui_rust.CONFIRMATION_RECLICK_SECONDS)
+        navigation = run.result["install_confirmation_navigation"]
+        self.assertEqual(navigation["label_clicks"], 2)
+        self.assertIsNone(navigation["changed_frame"])
+
+    def test_a_changed_page_is_never_reclicked_and_the_failure_keeps_its_ocr_lines(self):
+        unreadable = ["Ready to Install"] + ["Dialog text %d" % number for number in range(200)]
+        run = self.run_flow(review={"lines": ["Ready to Install", "Next"], "buttons": {1: "modal"}},
+                            modal={"lines": unreadable})
+        self.assertEqual(run.error, "install_confirmation_not_reached")
+        self.assertEqual(len(self.next_clicks(run)), 1)
+        navigation = run.result["install_confirmation_navigation"]
+        self.assertEqual(navigation["label_clicks"], 1)
+        changed = navigation["changed_frame"]
+        self.assertGreater(changed["attempt"], 1)
+        self.assertEqual(changed["line_count"], 201)
+        self.assertEqual(len(changed["ocr_lines"]), gui_rust.CHANGED_FRAME_LOG_LINES)
+        self.assertEqual(changed["ocr_lines"][1], "Dialog text 0")
+        self.assertNotIn("Ready to Install", changed["new_lines"])
+        self.assertEqual(len(changed["new_lines"]), gui_rust.CHANGED_FRAME_LOG_LINES)
+        saved = json.loads((run.private / "install_confirmation-navigation.json").read_text(encoding="utf-8"))
+        self.assertEqual(saved["changed_frame"], changed)
+        self.assertIn("install_confirmation_not_reached", run.output)
+
+    def test_failure_before_the_frame_changes_records_no_changed_frame(self):
+        run = self.run_flow(review={"lines": ["Ready to Install"]})
+        self.assertEqual(run.error, "install_confirmation_not_reached")
+        self.assertEqual(run.result["install_confirmation_navigation"]["label_clicks"], 0)
+        self.assertGreater(run.result["install_confirmation_navigation"]["label_not_found"], 0)
+        self.assertIsNone(run.result["install_confirmation_navigation"]["changed_frame"])
 
 
 if __name__ == "__main__":

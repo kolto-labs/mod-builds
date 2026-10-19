@@ -83,7 +83,14 @@ VALIDATION_PAGE_MARKER = re.compile(r"Run\s*validation|Analyze\s*conflicts|Insta
 VALIDATION_STARTED_MARKER = re.compile(
     r"Validating\b|Starting\s*validation|Validation\s*(?:completed|passed)", re.IGNORECASE)
 INSTALL_REVIEW_MARKER = re.compile(r"Ready\s*to\s*Install", re.IGNORECASE)
-INSTALL_CONFIRMATION_MARKER = re.compile(r"Create\s*snapshot|snapshot\s*needs\s*space", re.IGNORECASE)
+INSTALL_CONFIRMATION_MARKER = re.compile(
+    r"Create\s*snap|snap\w*\s*needs|Install\s*selected\s*mods\s*\?", re.IGNORECASE)
+INSTALL_START_PATTERN = r"snap\w*\s*and\s*inst\w*|Create\s*snap\w*\s*and"
+CONFIRMATION_OCR_SCALES = (2, 1)
+CONFIRMATION_RECLICK_SECONDS = 45
+CONFIRMATION_RECLICKS = 1
+CONFIRMATION_NOISE_LINES = 3
+CHANGED_FRAME_LOG_LINES = 150
 INSTALLATION_STARTED_MARKER = re.compile(
     r"Installing\b(?!\s*multiple)|What.?s\s*Happening|Stop\s*Install|Installation\s*complete", re.IGNORECASE)
 NEXT_PATTERN = r"\bNext\b"
@@ -173,6 +180,31 @@ def nav_click_due(now, next_click, busy, busy_cleared, last_click):
     if busy:
         return now - last_click >= NAV_BUSY_PROBE_SECONDS
     return busy_cleared or now >= next_click
+
+
+def single_click_due(label_clicks, now, last_click, page_visible,
+                     reclick_seconds=CONFIRMATION_RECLICK_SECONDS, reclicks=CONFIRMATION_RECLICKS):
+    """Whether a control that must not be re-clicked on a cadence is due for its next click.
+
+    The first click is always due. Afterwards one guarded re-click is allowed, only once
+    `reclick_seconds` have passed since the last click and only while the page the control
+    lives on is still visible and unchanged (the click evidently did nothing).
+    """
+    if label_clicks == 0:
+        return True
+    return label_clicks <= reclicks and page_visible and now - last_click >= reclick_seconds
+
+
+def new_lines(baseline, read):
+    """Lines of `read` the baseline frame did not have."""
+    known = set(baseline)
+    return [text for text in read if text not in known]
+
+
+def changed_frame_record(attempt, baseline, read, limit=CHANGED_FRAME_LOG_LINES):
+    """Bounded record of a frame that differed from the baseline, for failure diagnostics."""
+    return {"attempt": attempt, "line_count": len(read),
+            "new_lines": new_lines(baseline, read)[:limit], "ocr_lines": read[:limit]}
 
 
 def filtered_ocr_tail(read):
@@ -621,7 +653,8 @@ def drive(args, private, result):
                     continue
             time.sleep(0.5)
 
-    def transition(name, label, marker, reason, pattern=None, window=NAV_WINDOW_SECONDS):
+    def transition(name, label, marker, reason, pattern=None, window=NAV_WINDOW_SECONDS,
+                   scales=(2,), retry=True, page_marker=None):
         """Click `label` until `marker` is read on screen, or block with `reason`.
 
         The desktop ignores clicks on disabled controls (it is busy loading, saving the
@@ -633,6 +666,13 @@ def drive(args, private, result):
         record (clicks with coordinates and matched text, a keyword-filtered OCR tail, busy
         text, and on failure every OCR line and the screenshot name) is kept in
         result["<name>_navigation"].
+
+        With retry=False the click is not repeated on a cadence (a second click can land on
+        the modal's backdrop and close what the first one opened): the control is pressed
+        once and the frames are only polled, apart from one guarded re-click after
+        CONFIRMATION_RECLICK_SECONDS when `page_marker` is still on screen. Each frame is OCRed
+        at the next of `scales`. On failure the last frame that differed from the first one
+        is kept in "changed_frame".
         """
         result["stage"] = name + "_navigation"
         mark()
@@ -640,7 +680,8 @@ def drive(args, private, result):
                                          re.findall(r"\w+|[^\w\s]", label))
         navigation = {"label": label, "attempts": 0, "reached": False,
                       "label_not_found": 0, "clicks": [], "ocr_tail": "",
-                      "window_seconds": window, "busy_waits": 0, "busy_text": ""}
+                      "window_seconds": window, "busy_waits": 0, "busy_text": "",
+                      "retry": retry, "label_clicks": 0}
         result[name + "_navigation"] = navigation
         evidence = name + "-navigation"
         started = time.monotonic()
@@ -649,6 +690,8 @@ def drive(args, private, result):
         last_pause = None
         last_click = started
         was_busy = False
+        baseline = None
+        changed = None
 
         def record(point, control):
             navigation["clicks"] = (navigation["clicks"] + [{
@@ -657,9 +700,14 @@ def drive(args, private, result):
                 "matched": last_hit.get("text", "")}])[-12:]
 
         while True:
-            shot, data, lines = observe()
+            scale = scales[navigation["attempts"] % len(scales)]
+            shot, data, lines = observe(scale=scale)
             navigation["attempts"] += 1
             read = clean_ocr_lines(lines)
+            if baseline is None:
+                baseline = read
+            elif new_lines(baseline, read):
+                changed = changed_frame_record(navigation["attempts"], baseline, read)
             relevant = [text for text in read if SUMMARY_TAIL_KEYWORDS.search(text)]
             navigation["ocr_tail"] = filtered_ocr_tail(read)
             status = busy_text(top_bar_lines(data, lines, frame["height"]))
@@ -692,16 +740,25 @@ def drive(args, private, result):
                 navigation["busy_text"] = status
                 navigation["busy_waits"] += 1
                 print("gui_rust: waiting: app busy (%s)" % status, flush=True)
-            if nav_click_due(now, next_click, bool(status), busy_cleared, last_click):
-                point = find_control(shot, data, lines, pattern)
+            if retry or navigation["label_clicks"] == 0:
+                click_due = nav_click_due(now, next_click, bool(status), busy_cleared, last_click)
+            else:
+                click_due = not status and single_click_due(
+                    navigation["label_clicks"], now, last_click,
+                    page_marker is not None and any(page_marker.search(text) for text in read)
+                    and len(new_lines(baseline, read)) <= CONFIRMATION_NOISE_LINES)
+            if click_due:
+                point = find_control(shot, data, lines, pattern, scale)
                 if point is not None:
                     next_click = now + NAV_RETRY_SECONDS
                     last_click = now
+                    navigation["label_clicks"] += 1
                     press(point, label)
                     record(point, label)
                     continue
                 navigation["label_not_found"] += 1
             if now >= limit:
+                navigation["changed_frame"] = changed
                 shot.save(private / (evidence + ".png"))
                 navigation["screenshot"] = evidence + ".png"
                 navigation["ocr_lines"] = read[:NAV_LOG_LINES]
@@ -757,9 +814,11 @@ def drive(args, private, result):
             transition("install_review", "Install selected mods", INSTALL_REVIEW_MARKER,
                        "install_review_not_reached")
             transition("install_confirmation", "Next", INSTALL_CONFIRMATION_MARKER,
-                       "install_confirmation_not_reached", pattern=NEXT_PATTERN)
+                       "install_confirmation_not_reached", pattern=NEXT_PATTERN,
+                       scales=CONFIRMATION_OCR_SCALES, retry=False, page_marker=INSTALL_REVIEW_MARKER)
             transition("installation_start", "Create snapshot and install",
-                       INSTALLATION_STARTED_MARKER, "installation_not_started")
+                       INSTALLATION_STARTED_MARKER, "installation_not_started",
+                       pattern=INSTALL_START_PATTERN, scales=CONFIRMATION_OCR_SCALES)
             result["stage"] = "installation"
             mark()
             locate("Installation complete", scales=BANNER_OCR_SCALES)
