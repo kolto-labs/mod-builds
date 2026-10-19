@@ -1303,6 +1303,12 @@
         "heading": "Character Startup Changes",
         "reason": "visible policy skip: the restored archive contains only an Override/ folder of loose files and no tslpatchdata folder, but the converted instruction is a Patcher step, so ModSync.ts reports that no tslpatchdata folder was found and cannot apply it; the Rust lane still installs it",
         "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Remove Duplicate TGA/TPC",
+        "reason": "visible policy skip: the converted Execute step runs the guide's interactive Windows batch script (DelDuplicateTGA-TPC.bat), which expects to live in the game root and prompts on stdin for the file type to delete; the K1 guide step is the same Extract, Execute *.bat, Move shape as K2, where the script under wine in CI prints 'Unknown Input, Exiting' and ModSync.ts reports an ExecuteError, so the step cannot be reproduced non-interactively and Execute is deliberately not quarantinable. The guide marks the duplicate removal as critical, so a green TypeScript lane is a PARTIAL install without it; the Rust lane keeps its own handling (reviewed unreviewed_draft deselect) and the guide's Linux .sh deduper is the non-interactive equivalent",
+        "lane": "typescript"
       }
     ],
     "k2": [
