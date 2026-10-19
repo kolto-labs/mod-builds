@@ -12,6 +12,10 @@ concurrency:
   group: meta
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  packages: read
+
 jobs:
   meta:
     runs-on: ubuntu-latest
