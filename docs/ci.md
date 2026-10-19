@@ -24,6 +24,7 @@ A new push to a pull request cancels its previous run. Other runs are not cancel
 game (k1, k2) ──┬──> install (k1|k2 × rust|typescript × cli|gui)   8 jobs
 mods ───────────┴──> manual (k1|k2)                                2 jobs
 p2p-loopback                                                       1 job, standalone
+mods ───> artstore refresh                                         schedule / dispatch only
 ```
 
 `install` and `manual` wait for `game` and `mods` but still run when either of
@@ -61,6 +62,14 @@ installs `7zip` (with `7zip-rar`), `megatools`, `libarchive-tools` (`bsdtar`),
 links and check RAR/7z archives. It is the only job that saves the cache or gets the
 R2 write credentials. It is an accelerator and `continue-on-error` is set (also on
 both refresh steps), so a failure never blocks an install. See [cache.md](cache.md).
+The refresh also uses and feeds the artifact store, and the job ends with the publish
+steps described in [Artifact store (artstore)](#artifact-store-artstore).
+
+**`artstore refresh`** — Runs only on the schedule and on manual dispatch (not for a
+`seed_archives` dispatch), after `mods`, in the same `mod-cache-writer` concurrency
+group. It renews artifact-store blobs that are close to expiry and prunes the store;
+see [Artifact store (artstore)](#artifact-store-artstore). It is not a dependency of
+any lane.
 
 **`install`** — Starts with the lane checks below, then checks out the ModSync
 source for the implementation (the repository named by `MODSYNC_RS_REPOSITORY` or
@@ -85,20 +94,23 @@ that works. Nothing is downloaded that is unchanged.
    Drive, some hosts) it is reused if checked within `--max-age-days` (14); older
    than that it is fetched again. A post that yields several files revalidates
    each file with its own validators.
-2. **R2 bucket**, for a missing or corrupt copy whose hash the manifest (or a seed
+2. **Artifact store**, for a missing or corrupt copy whose hash the manifest knows,
+   when a token is in the environment; see [Artifact store (artstore)](#artifact-store-artstore).
+   A miss is silent.
+3. **R2 bucket**, for a missing or corrupt copy whose hash the manifest (or a seed
    pin) knows, when its secrets exist (`--remote`). The bucket manifest is merged
    (the newer `checked_at` wins, so seeded pins survive) and only the missing
    objects are pulled one by one, never the whole bucket. An unreachable bucket is
    a warning and is skipped for the rest of the run. Lanes never write to it.
-3. **P2P**, same condition: `try_p2p(item, dest)` in `cache.py` runs
+4. **P2P**, same condition: `try_p2p(item, dest)` in `cache.py` runs
    `p2p_fetch.fetch` when `tools/modsync-ci/p2p_fetch.py` exists and the seed pin
    carries a `p2p` block with a magnet; otherwise it returns `False`. The result
    is re-hashed and archive-checked before use. A file that changed upstream has
    an unknown new hash, so it cannot come from here; it comes from the website.
-4. **The website** (DeadlyStream, MEGA, Google Drive, direct links). A link the
+5. **The website** (DeadlyStream, MEGA, Google Drive, direct links). A link the
    cache has never held is fetched here too. Nexus and GameFront need a pin: they
    have no headless adapter.
-5. **The last cached copy**, when a copy exists but the website cannot be reached or
+6. **The last cached copy**, when a copy exists but the website cannot be reached or
    rejects the request (`restore` only; `refresh` reports it as unresolved). A
    warning names the link by id prefix.
 
@@ -259,7 +271,7 @@ Names only.
 | `STEAM_USERNAME`, `STEAM_PASSWORD` | secret | Steam account that owns both games |
 | `STEAM_CONFIG_VDF` | secret, optional | Saved SteamCMD login, so CI needs no Steam Guard approval |
 | `STEAM_GUARD_CODES` | secret, optional | Single-use Steam backup codes, tried after the other sign-ins fail |
-| `CACHE_ENCRYPTION_KEY` | secret | Seals and unseals the game cache (not the archive bucket) |
+| `CACHE_ENCRYPTION_KEY` | secret | Seals and unseals the game cache and the artifact-store blobs (not the archive bucket) |
 | `DIAGNOSTICS_ENCRYPTION_KEY` | secret | Seals the `install` lane report and convert log before upload ([ports.md](ports.md#diagnosing-a-coverage-failure)) |
 | `MOD_CACHE_S3_ACCESS_KEY_ID`, `MOD_CACHE_S3_SECRET_ACCESS_KEY` | secret, optional | R2 read/write, `mods` job only |
 | `MOD_CACHE_S3_READ_ACCESS_KEY_ID`, `MOD_CACHE_S3_READ_SECRET_ACCESS_KEY` | secret, optional | R2 read only, `install` and `manual` |
@@ -304,6 +316,77 @@ applies the 10 GB cap asynchronously, and the prune runs right after the save to
 window short; it is the one place an eviction can still happen. If a game cache is evicted anyway, the lane
 fails with "game cache evicted — re-run the game job": re-run the `game` job, which
 refills it from Steam, then the failed lane.
+
+## Artifact store (artstore)
+
+An archive tier between the local Actions cache and the R2 bucket: mod archives
+are kept as encrypted GitHub Actions *artifacts* (up to 90 days of retention, outside the
+10 GB Actions cache cap), addressed by SHA-256. It only speeds things up. An empty
+store, a missing token or key, an expired pack or an API error is a silent miss and the
+next source (`--remote`, P2P, the website) supplies the archive. `.bik` movies are never
+stored. Code: `tools/modsync-ci/artstore.py` (CLI), `cache.py` (tier hook), and the
+local action `.github/actions/artstore-upload` (artifacts can only be uploaded from a
+JavaScript action, not from a `run:` step).
+
+How it is laid out:
+
+- A **pack** is an artifact `artstore-pack-<run>-<attempt>-<n>` holding `<stored_sha256>.part`
+  members: archives split into parts and sealed with `CACHE_ENCRYPTION_KEY`.
+- An **index** is a small artifact `artstore-index-<run>-<attempt>-<n>` holding
+  `index.json`, which maps each archive SHA-256 to its parts. A reader merges the newest
+  three index artifacts and checks them against the live artifact list, so a pack that
+  expired or failed to upload simply counts as missing.
+
+Restore. `cache.py` uses the store whenever `ARTSTORE_TOKEN`, `GITHUB_TOKEN` or `GH_TOKEN`
+is in the environment (there is no workflow toggle; `--no-artstore` turns it off by hand).
+It tries the store first for an object the manifest knows by hash, then `--remote`, then
+P2P. Every blob is re-verified against its SHA-256 after unsealing. `ci.yml` sets
+`GITHUB_TOKEN: ${{ github.token }}` and `CACHE_ENCRYPTION_KEY` on the `cache.py` steps
+of `mods`, `install` and `manual` only.
+
+Publish (in `mods`). `cache.py refresh` is run with `--emit-stage-manifest`, which writes
+`{path, sha256}` for the cached objects the store lacks or will lose soon. The steps after
+the cache prune then:
+
+1. `Stage artifact store packs` runs `artstore.py stage` into `$RUNNER_TEMP/artstore-pack`
+   with a 3 GiB pack budget. If everything is already stored it writes nothing.
+2. `Upload artifact store pack 1`, `2` and `3` upload `pack1`, `pack2` and `pack3` of the
+   stage output through `artstore-upload`, each only when that pack exists. The 2.5 GiB
+   cache limit normally fits one pack. A fourth pack is not uploaded; its blobs are
+   staged again by the next run.
+3. `Upload artifact store index` uploads the index fragment (named by `index_name`), only
+   when at least one pack uploaded.
+
+These steps run only on `push` (to `dev`), `schedule`, `release` and `workflow_dispatch`.
+Pull-request runs from this repository may restore from the store but never publish.
+Every publish step has `continue-on-error: true`, and a final step prints a
+`::warning::` when any of them failed, so a store problem never fails `mods` or a lane.
+The pack and index artifacts use `if-exists: skip`, so a re-run attempt that reuses a
+name is not an error. Without `CACHE_ENCRYPTION_KEY` staging is skipped with a notice.
+
+`artstore refresh` (schedule and dispatch). Archives are stored for at most 90 days and
+the store has no way to extend an artifact, so close-to-expiry blobs are copied into a
+new pack. The job runs `artstore.py refresh-plan --within-days 21`, fetches those blobs
+(at most 8 GiB per run; the rest wait for the next run), stages and uploads them as a new
+pack plus index exactly like `mods`, and finally runs `artstore.py prune --apply`, which
+deletes expired and superseded pack and index artifacts (with a 24 hour grace period,
+keeping the newest five indexes). The prune is skipped only when the run is cancelled. A
+failed delete fails the job, which is visible but affects nothing else.
+
+Permissions. The workflow-level `contents: read` stays. `install` and `manual` set
+`contents: read` and `actions: read` (list and download artifacts). `artstore refresh`
+sets `contents: read` and `actions: write` (delete artifacts). `mods` keeps the
+`actions: write` it already had for `gh cache delete`, which covers its reads; no other
+job gets `actions`. Secret values are only passed in `env:` of the steps that use them and
+`artstore.py` redacts the token and key from its messages.
+
+By hand, from a checkout with a token that has `actions: read` (`GITHUB_REPOSITORY` set):
+
+```sh
+python tools/modsync-ci/artstore.py list
+python tools/modsync-ci/artstore.py refresh-plan --within-days 21
+python tools/modsync-ci/artstore.py prune          # dry run; --apply deletes
+```
 
 ## Running it by hand
 

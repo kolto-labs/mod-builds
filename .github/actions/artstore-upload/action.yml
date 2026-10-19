@@ -1,0 +1,35 @@
+name: artstore-upload
+description: 'Upload every file under a directory as one runtime artifact and expose the result (id, size, digest, file list) to later steps.'
+inputs:
+  name:
+    description: 'Artifact name. Must not contain " : < > | * ? \ or /. Artifact names are immutable per workflow run.'
+    required: true
+  directory:
+    description: 'Directory whose regular files are all uploaded; it is also the artifact root.'
+    required: true
+  retention-days:
+    description: 'Retention in days (1-90; 0 uses the repository default).'
+    required: false
+    default: '90'
+  compression-level:
+    description: 'zlib compression level 0-9 (0 = store only; appropriate for already-encrypted data).'
+    required: false
+    default: '0'
+  result-file:
+    description: 'Optional path where a JSON document {name,id,size,digest,files} is written for later run steps.'
+    required: false
+    default: ''
+  if-exists:
+    description: 'What to do when an artifact with this name already exists in the run: "fail" (default) or "skip".'
+    required: false
+    default: 'fail'
+outputs:
+  artifact-id:
+    description: 'ID of the uploaded (or, with if-exists skip, the existing) artifact.'
+  size:
+    description: 'Size of the artifact in bytes.'
+  digest:
+    description: 'SHA-256 digest of the artifact.'
+runs:
+  using: node24
+  main: dist/index.js

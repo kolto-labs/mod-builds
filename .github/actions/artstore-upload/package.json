@@ -1,0 +1,22 @@
+{
+  "name": "artstore-upload",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Local GitHub Action: upload every file under a directory as one runtime artifact and expose the result to later run: steps.",
+  "main": "dist/index.js",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "build": "ncc build src/index.js -o dist --license licenses.txt",
+    "test": "node --test test/"
+  },
+  "license": "UNLICENSED",
+  "dependencies": {
+    "@actions/artifact": "6.3.1",
+    "@actions/core": "3.0.1"
+  },
+  "devDependencies": {
+    "@vercel/ncc": "0.45.0"
+  }
+}

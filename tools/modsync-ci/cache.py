@@ -51,6 +51,19 @@ PAGE_RETRY_SECONDS = 4
 PAGE_RETRY_CAP_SECONDS = 20
 MAX_LINK_BYTES = 20 * 1024 ** 3
 NEXUS_REASON = "nexus requires NEXUS_API_KEY (no headless adapter; CAPTCHA is never bypassed); blocked-pending-user-action"
+ARTSTORE_TOKEN_ENV = ("ARTSTORE_TOKEN", "GITHUB_TOKEN", "GH_TOKEN")
+SECRET_ENV = ("CACHE_ENCRYPTION_KEY", "DIAGNOSTICS_ENCRYPTION_KEY", "GITHUB_TOKEN", "GH_TOKEN", "ARTSTORE_TOKEN",
+              "ACTIONS_RUNTIME_TOKEN", "ACTIONS_ID_TOKEN_REQUEST_TOKEN")
+S3_ENV = ("MOD_CACHE_S3_", "AWS_", "RCLONE_CONFIG_")
+ARTSTORE_REFRESH_DAYS = 21
+ARTSTORE_STATE = {}
+
+
+def scrubbed_env(keep=()):
+    """os.environ minus every secret; names or prefixes in keep (rclone's S3_ENV) stay. Child processes get this."""
+    keep = tuple(keep)
+    return {name: value for name, value in os.environ.items()
+            if name.startswith(keep) or not (name in SECRET_ENV or name.startswith(S3_ENV))}
 
 
 def clean_url(url):
@@ -261,7 +274,7 @@ def validate(path, timeout, loose=False):
                             "import sys,zipfile; archive=zipfile.ZipFile(sys.argv[1]); "
                             "sys.exit(1 if archive.testzip() else 0)", str(path.resolve())],
                            stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                           stderr=subprocess.DEVNULL, timeout=timeout, check=True)
+                           stderr=subprocess.DEVNULL, timeout=timeout, check=True, env=scrubbed_env())
         except subprocess.CalledProcessError:
             if not integrity_tools(path, "zip"):
                 raise
@@ -298,7 +311,7 @@ def run_integrity_tools(path, kind, timeout):
     for name, command in tools:
         try:
             result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, timeout=timeout)
+                                    stderr=subprocess.DEVNULL, timeout=timeout, env=scrubbed_env())
         except OSError:
             continue
         if result.returncode == 0:
@@ -808,7 +821,8 @@ def fetch_with_tool(item, root, args):
         command = tool_command(item["provider"], workdir, item["url"])
         try:
             result = subprocess.run(command, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                                    stderr=subprocess.DEVNULL, timeout=args.download_timeout)
+                                    stderr=subprocess.DEVNULL, timeout=args.download_timeout,
+                                    env=scrubbed_env())
         except subprocess.TimeoutExpired:
             raise ValueError("total download timeout") from None
         except OSError:
@@ -1438,6 +1452,10 @@ def warn(message):
     print("::warning::" + message, file=sys.stderr)
 
 
+def notice(message):
+    print("::notice::" + message, file=sys.stderr)
+
+
 def remote_copy(args, source, destination):
     """Copy one remote file. False when it is absent; an unreachable remote is warned about once, then skipped."""
     if not args.remote:
@@ -1446,7 +1464,7 @@ def remote_copy(args, source, destination):
                "--contimeout", "20s", "--timeout", "60s"]
     try:
         subprocess.run(command, check=True, timeout=args.backend_timeout, stdin=subprocess.DEVNULL,
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=scrubbed_env(S3_ENV))
         return Path(destination).is_file()
     except subprocess.CalledProcessError as error:
         if error.returncode in (3, 4):
@@ -1486,7 +1504,10 @@ def try_p2p(item, dest):
     helper = Path(__file__).with_name("p2p_fetch.py")
     if not helper.is_file() or not isinstance(item.get("p2p"), dict):
         return False
+    live, safe = dict(os.environ), scrubbed_env()
     try:
+        os.environ.clear()
+        os.environ.update(safe)
         spec = importlib.util.spec_from_file_location("p2p_fetch", helper)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
@@ -1494,6 +1515,106 @@ def try_p2p(item, dest):
     except Exception:
         warn("p2p helper failed; continuing without it")
         return False
+    finally:
+        os.environ.clear()
+        os.environ.update(live)
+
+
+def artstore_token():
+    return any(os.environ.get(name) for name in ARTSTORE_TOKEN_ENV)
+
+
+def artstore_module():
+    """The sibling artstore.py, loaded once; None (with one message) when it is absent or broken."""
+    if "module" not in ARTSTORE_STATE:
+        helper = Path(__file__).with_name("artstore.py")
+        module = None
+        if not helper.is_file():
+            notice("artifact store unavailable; continuing without it")
+        else:
+            try:
+                spec = importlib.util.spec_from_file_location("artstore", helper)
+                module = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(module)
+                if not callable(getattr(module, "fetch", None)):
+                    raise AttributeError("fetch")
+            except Exception:
+                warn("artifact store helper failed; continuing without it")
+                module = None
+        ARTSTORE_STATE["module"] = module
+    return ARTSTORE_STATE["module"]
+
+
+def artstore_session():
+    """{client, index} for this process: the store's index is loaded once and shared by every fetch.
+
+    None (remembered, with one message) when the store has no token or repository, or its index cannot be read.
+    """
+    if "session" not in ARTSTORE_STATE:
+        session = None
+        module = artstore_module()
+        if module is not None:
+            try:
+                client = module.client_mod.from_environment()
+                if client is None:
+                    notice("artifact store unavailable (no token or repository); continuing without it")
+                else:
+                    session = {"client": client, "index": module.load_index(client)}
+            except Exception:
+                warn("artifact store index unavailable; continuing without it")
+        ARTSTORE_STATE["session"] = session
+    return ARTSTORE_STATE["session"]
+
+
+def is_bik(stored):
+    return any(isinstance(name, str) and name.lower().endswith(".bik")
+               for name in (stored.get("archive_name"), stored.get("listed_name")))
+
+
+def try_artstore(stored, dest, args):
+    """Artifact-store hook: fill dest with the blob whose SHA-256 is stored["sha256"]; False on any miss.
+
+    Skipped unless --artstore is on, and never used for .bik. The caller re-verifies whatever lands in dest.
+    """
+    if not getattr(args, "artstore", False) or is_bik(stored):
+        return False
+    module = artstore_module()
+    if module is None:
+        args.artstore = False
+        return False
+    session = artstore_session()
+    if session is None:
+        args.artstore = False
+        return False
+    try:
+        if module.fetch(stored["sha256"], Path(dest), client=session["client"], index=session["index"]):
+            return True
+    except Exception:
+        warn("artifact store failed; continuing without it")
+        args.artstore = False
+    Path(dest).unlink(missing_ok=True)
+    return False
+
+
+def stage_candidates(root, manifest):
+    """[{path, sha256}] for each live non-.bik cached object the artifact store lacks or will soon expire."""
+    session = artstore_session()
+    if session is None:
+        return []
+    try:
+        module, index = artstore_module(), session["index"]
+        found = {}
+        for entry in manifest["entries"].values():
+            for stored in entry_objects(entry):
+                path = object_path(root, stored)
+                if not is_bik(stored) and path.is_file() and path.stat().st_size == stored["size"]:
+                    found[stored["sha256"]] = path
+        wanted = set(module.core.blobs_missing(index, sorted(found)))
+        wanted.update(module.refresh_plan(index, time.time(), ARTSTORE_REFRESH_DAYS))
+        return [{"path": str(found[sha]), "sha256": sha} for sha in sorted(wanted) if sha in found]
+    except Exception:
+        warn("artifact store index unreadable; nothing staged")
+        return []
 
 
 def verified_object(item, stored, root, args):
@@ -1509,26 +1630,39 @@ def verified_object(item, stored, root, args):
 
 
 def recover_object(item, stored, root, args, pins):
-    """Fetch one object the manifest knows by hash: the optional remote, then P2P."""
+    """Fetch one object the manifest knows by hash: the artifact store, the optional remote, then P2P.
+
+    Returns the tier that supplied it ("artstore", "remote" or "p2p"), or "" when none did.
+    """
     path = object_path(root, stored)
+    if stored["size"] <= args.max_bytes and try_artstore(stored, path, args) and verified_object(
+            item, stored, root, args):
+        return "artstore"
     if args.remote and stored["size"] <= args.max_bytes and remote_copy(
             args, args.remote + "/objects/" + path.name, path) and verified_object(item, stored, root, args):
-        return True
+        return "remote"
     block = item.get("p2p") or pins.get(item["id"], {}).get("p2p")
     peer = {**item, "sha256": stored["sha256"], "size": stored["size"], "p2p": block}
-    return try_p2p(peer, path) and verified_object(item, stored, root, args)
+    return "p2p" if try_p2p(peer, path) and verified_object(item, stored, root, args) else ""
 
 
 def recover_objects(item, old, root, args, pins):
+    """The source label ("artstore" or "recovered") when every object is back, else ""."""
     objects = entry_objects(old)
     if not objects:
-        return False
+        return ""
     (root / "objects").mkdir(parents=True, exist_ok=True)
+    tiers = set()
     try:
-        return all(object_valid(root, stored) or recover_object(item, stored, root, args, pins)
-                   for stored in objects)
+        for stored in objects:
+            if not object_valid(root, stored):
+                tier = recover_object(item, stored, root, args, pins)
+                if not tier:
+                    return ""
+                tiers.add(tier)
     except (ValueError, KeyError, TypeError):
-        return False
+        return ""
+    return "artstore" if tiers == {"artstore"} else "recovered"
 
 
 def pin_as_entry(pin):
@@ -1561,14 +1695,15 @@ def acquire(item, old, root, args, pins):
 
     Valid local object: reused when pinned, or when it has no validators and was checked inside
     --max-age-days; otherwise one conditional request (304 reuses it). A missing, corrupt or changed
-    object comes from the optional remote, then P2P (both only for a hash the manifest knows), then
-    the website. When the website cannot be reached (restore and refresh alike, unless --force), the
+    object comes from the artifact store, the optional remote, then P2P (all only for a hash the manifest
+    knows; source "artstore" or "recovered"), then the website. When the website cannot be reached (restore and refresh alike, unless --force), the
     last valid local copy is returned unchanged with source "stale-local": its manifest entry keeps
     its old checked_at and validators, so the next run asks the website again.
     """
     if not (local_valid(root, old) and objects_match_selection(item, old)):
-        if recover_objects(item, old, root, args, pins) and objects_match_selection(item, old):
-            return old, "recovered"
+        source = recover_objects(item, old, root, args, pins)
+        if source and objects_match_selection(item, old):
+            return old, source
         return download(item, old, root, args), "website"
     if is_pinned(item, old, pins) or (
             not args.force and not has_validators(old) and upstream_current(old, args.max_age_days)):
@@ -1588,10 +1723,8 @@ def kept_objects(manifest, limit):
     sizes, pinned = {}, set()
     for entry in manifest["entries"].values():
         for stored in entry_objects(entry):
-            names = (stored.get("archive_name"), stored.get("listed_name"))
             if (isinstance(stored.get("sha256"), str) and SHA256.fullmatch(stored["sha256"])
-                    and isinstance(stored.get("size"), int)
-                    and not any(isinstance(name, str) and name.lower().endswith(".bik") for name in names)):
+                    and isinstance(stored.get("size"), int) and not is_bik(stored)):
                 sizes[stored["sha256"]] = stored["size"]
                 if entry.get("status") == "pinned":
                     pinned.add(stored["sha256"])
@@ -1631,6 +1764,12 @@ def main(argv=None):
                              "--archive-map; restored links only")
     parser.add_argument("--remote", help="optional read-only rclone remote:path: an extra source for objects the "
                                          "manifest knows by hash; unreachable means skipped; trusted operator input only")
+    parser.add_argument("--artstore", action=argparse.BooleanOptionalAction, default=None,
+                        help="restore/refresh: try the artifact store for objects the manifest knows by hash, "
+                             "before --remote and P2P (default: on when ARTSTORE_TOKEN, GITHUB_TOKEN or GH_TOKEN is set)")
+    parser.add_argument("--emit-stage-manifest", type=Path, metavar="FILE",
+                        help="restore/refresh: write [{path, sha256}] for cached non-.bik objects the artifact "
+                             "store lacks or will soon expire")
     parser.add_argument("--cache-limit-bytes", type=int,
                         help="refresh only: keep only the objects in --cache-dir that fit in this many bytes "
                              "(pinned first, then smallest) and skip links whose objects do not; sized for the "
@@ -1658,6 +1797,10 @@ def main(argv=None):
             parser.error(str(error))
     if args.archive_map and args.command != "restore":
         parser.error("--archive-map is only valid with restore")
+    if args.emit_stage_manifest and args.command not in ("restore", "refresh"):
+        parser.error("--emit-stage-manifest is only valid with restore or refresh")
+    if args.artstore is None:
+        args.artstore = artstore_token()
     if not 0 <= args.retries <= 5 or not 0 < args.max_age_days <= 14:
         parser.error("retries must be 0..5; max-age-days must be >0 and <=14")
     if any(value <= 0 for value in (args.timeout, args.download_timeout, args.integrity_timeout,
@@ -1801,6 +1944,10 @@ def main(argv=None):
                     manifest["entries"][item["id"]] = {**old, "status": "stale-unknown"}
                     atomic_json(manifest_path, manifest)
             report["entries"].append(entry)
+        if args.emit_stage_manifest:
+            atomic_json(args.emit_stage_manifest, stage_candidates(root, manifest))
+        sources = [each["source"] for each in report["entries"] if "source" in each]
+        report["sources"] = {name: sources.count(name) for name in sorted(set(sources))}
     if args.command != "import-existing":
         accepted = ("fresh", "verified", "restored", "pinned") + (
             (UNCACHED, OVER_LIMIT) if args.command == "refresh" else (UNCACHED_SKIPPED,) if args.command == "restore" else ())
