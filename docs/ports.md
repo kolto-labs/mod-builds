@@ -749,7 +749,9 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
     ignored. The driver therefore dismisses the `Telemetry preference` prompt (`Keep telemetry
     off`, up to 20 s, retried, and again whenever it reappears), clicks `Summary / selection`,
     and verifies the page by OCR (`Base build`, `Select all`, category controls) before polling,
-    re-locating and re-clicking every 10 s for up to 90 s. The page's edit gate
+    re-locating and re-clicking every 10 s for up to 300 s (90 s for later pages; a busy
+    indicator in the top bar such as `Loading` pauses the clicks and is logged as `waiting: app
+    busy`; the pointer hovers 0.3 s before pressing). The page's edit gate
     (`Pause sharing before editing`) is handled in the same loop by clicking `Pause sharing to
     edit`. Otherwise it fails with `summary_page_not_reached`; `summary_navigation` (also in
     `worker_diagnostics`) records the attempts, each click's coordinates and matched OCR text,
