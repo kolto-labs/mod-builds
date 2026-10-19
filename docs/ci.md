@@ -210,9 +210,18 @@ and `Execute` steps, and still require the reviewed manifest described below.
   - **NSS script compiler.** `CompileList` steps need a native compiler. Before
     ModSync.ts runs, each `typescript` lane builds the `bionsscomp` CLI with
     `cargo install --git https://github.com/holowan-biolabs/odynsscomp --rev $NSSCOMP_REV
-    bionsscomp-cli --root $RUNNER_TEMP/nsscomp --locked` (workflow-level env
+    --config 'patch."https://github.com/arrenkaetris/kotor-formats".kotor-ncs-isa.git="https://github.com/holowan-biolabs/kotor-formats"'
+    --config 'patch."https://github.com/arrenkaetris/kotor-formats".kotor-ncs-isa.tag="v0.1.0"'
+    bionsscomp-cli --root $RUNNER_TEMP/nsscomp` (workflow-level env
     `NSSCOMP_REV`, `00c53a9`; keep it equal to the rev in the Rust lanes'
-    `Cargo.lock`) and exports `MODSYNC_NSS_COMPILER` (path to the executable, called
+    `Cargo.lock`). There is no `--locked` and there are two `--config` patches
+    because odynsscomp's `bionsscomp` dev-dependency `kotor-ncs-isa` points at
+    `https://github.com/arrenkaetris/kotor-formats`, an account that no longer
+    exists (404; the locked commit `2d70164` is gone), so `--locked` cannot
+    resolve. The patches redirect that URL to `holowan-biolabs/kotor-formats`
+    tag `v0.1.0` (`d4ed9a8`). The proper long-term fix is an odynsscomp commit
+    repointing the dev-dependency; then bump `NSSCOMP_REV` together with the Rust
+    lanes' lock and drop the patches. The step also exports `MODSYNC_NSS_COMPILER` (path to the executable, called
     as `<bin> -c x.nss -o x.ncs -g 1|2 -n nwscript.nss -i <dir>`) and
     `MODSYNC_NSS_GAME` (`1` for k1, `2` for k2) for the install step. The install
     directory is cached with `actions/cache` keyed on runner OS and rev; the cache

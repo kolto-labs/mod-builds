@@ -33,6 +33,10 @@ env:
   MODSYNC_TS_REF: ${{ vars.MODSYNC_TS_REF || 'feat/physical-install' }}
   # odynsscomp rev the typescript install lanes build the bionsscomp NSS compiler from. Keep it equal to the
   # rev the Rust lanes' Cargo.lock pins.
+  # odynsscomp's bionsscomp dev-dependency kotor-ncs-isa still points at the deleted
+  # https://github.com/arrenkaetris/kotor-formats (404; its locked commit no longer exists), so the build cannot use
+  # --locked and patches that URL to holowan-biolabs/kotor-formats tag v0.1.0. Once odynsscomp repoints the
+  # dev-dependency, bump NSSCOMP_REV (with the Rust lanes' lock) and drop the patch.
   NSSCOMP_REV: 00c53a9
 
 concurrency:
@@ -771,7 +775,9 @@ jobs:
           root="$RUNNER_TEMP/nsscomp"
           if [[ "$CACHE_HIT" != true ]]; then
             cargo install --git https://github.com/holowan-biolabs/odynsscomp --rev "$NSSCOMP_REV" \
-              bionsscomp-cli --root "$root" --locked
+              --config 'patch."https://github.com/arrenkaetris/kotor-formats".kotor-ncs-isa.git="https://github.com/holowan-biolabs/kotor-formats"' \
+              --config 'patch."https://github.com/arrenkaetris/kotor-formats".kotor-ncs-isa.tag="v0.1.0"' \
+              bionsscomp-cli --root "$root"
             git config --global --remove-section "url.https://x-access-token:${SOURCE_TOKEN}@github.com/"
           fi
           if [[ ! -x "$root/bin/bionsscomp" ]] || ! "$root/bin/bionsscomp" --version >/dev/null; then
