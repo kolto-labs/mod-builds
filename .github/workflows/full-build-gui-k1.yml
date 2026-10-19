@@ -1,0 +1,41 @@
+name: K1 full build (gui)
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Native platforms to execute
+        type: choice
+        options: [all, windows, linux, macos]
+        default: all
+      implementation:
+        description: Private ModSync implementations to execute
+        type: choice
+        options: [both, rust, typescript]
+        default: both
+      runner-mode:
+        description: Standard hosted or trusted ephemeral runner
+        type: choice
+        options: [hosted, self-hosted]
+        default: hosted
+permissions:
+  contents: read
+jobs:
+  full-build:
+    strategy:
+      fail-fast: false
+      matrix:
+        platform: ${{ inputs.platform == 'all' && fromJSON('["windows","linux","macos"]') || fromJSON(format('["{0}"]', inputs.platform)) }}
+        implementation: ${{ inputs.implementation == 'both' && fromJSON('["rust","typescript"]') || fromJSON(format('["{0}"]', inputs.implementation)) }}
+    uses: ./.github/workflows/full-build-job.yml
+    with:
+      game: k1
+      mode: gui
+      platform: ${{ matrix.platform }}
+      implementation: ${{ matrix.implementation }}
+      runner-mode: ${{ inputs.runner-mode }}
+    secrets:
+      FULL_BUILD_CONFIG: ${{ secrets.FULL_BUILD_CONFIG }}
+      PRIVATE_CI_TOKEN: ${{ secrets.PRIVATE_CI_TOKEN }}
+      PRIVATE_CI_RECIPIENT: ${{ secrets.PRIVATE_CI_RECIPIENT }}
+      CACHE_ACCESS_KEY_ID: ${{ secrets.CACHE_ACCESS_KEY_ID }}
+      CACHE_SECRET_ACCESS_KEY: ${{ secrets.CACHE_SECRET_ACCESS_KEY }}

@@ -322,7 +322,10 @@ def acquire_game(game: str, destination: Path, state_dir: Path, report: Path,
     if state_dir.is_symlink():
         raise ValueError("Private state cannot be a symlink")
     destination = destination.resolve()
-    state_dir = state_dir.resolve()
+    # Keep the caller's portable spelling on Windows; resolving through the
+    # Win32 short-name alias makes mocked/private environment paths compare
+    # differently even though they refer to the same directory.
+    state_dir = Path(os.path.abspath(state_dir))
     if state_dir == destination or state_dir in destination.parents or destination in state_dir.parents:
         raise ValueError("State and destination must be independent")
     private_directory(state_dir)
@@ -417,7 +420,7 @@ def acquire_game(game: str, destination: Path, state_dir: Path, report: Path,
             descriptor = os.open(state_dir / "events.log", os.O_WRONLY | os.O_CREAT | os.O_APPEND |
                                  getattr(os, "O_NOFOLLOW", 0), 0o600)
             with os.fdopen(descriptor, "w", encoding="utf-8") as log:
-                os.chmod(log.name, 0o600)
+                os.chmod(state_dir / "events.log", 0o600)
                 log.write(f"{game}: {'verified' if outcome['success'] else 'failed'}\n")
         finally:
             lock.rmdir()

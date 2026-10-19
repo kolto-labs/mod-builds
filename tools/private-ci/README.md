@@ -172,3 +172,19 @@ logs, failure preservation, timeout cleanup, artifact restrictions, pinned calle
 and Steam admission/manifest checks. A separate local end-to-end check fetched a
 real private snapshot and verified real `age` encryption/decryption. Those checks
 establish the tooling, not a completed real-game build or publisher authorization.
+
+## Use Actions artifacts as a private cache backend
+
+GitHub does not expose a supported upload API for creating an artifact from an arbitrary process. The safe pattern is a two-phase workflow: a trusted job prepares encrypted files, `actions/upload-artifact` uploads a segment, and a second upload publishes a small index containing the segment artifact ID. `src/artifact_store.py` supplies content-addressed chunking, index validation, authenticated cross-run downloads, and garbage collection. It never uploads plaintext and never puts the token in a URL.
+
+Each source archive must be encrypted once and retained as a separate stable age object. Re-encrypting one large tarball on every refresh would randomize its age nonces and defeat deduplication. The private payload command should update only changed objects under `{output-dir}`. Stage that directory:
+
+```sh
+python tools/private-ci/src/artifact_store.py stage \
+  --input-dir "$RUNNER_TEMP/cache/objects" \
+  --output "$RUNNER_TEMP/cache/chunks"
+```
+
+Upload `cache/chunks` with `actions/upload-artifact` and capture its `artifact-id` output. Merge that ID into the prior index with `make_index` (or the equivalent small Python step), upload the JSON index as a new artifact, and retain the index artifact ID as the current generation. Unchanged chunk hashes continue pointing at their original segment, so a 14-day refresh only uploads changed payloads. A consumer downloads the index and then runs `fetch-chunks`; every chunk is checked by size and SHA-256 before it is exposed to an installer. `gc` deletes only artifacts not present in the retained index set.
+
+Artifacts remain subject to GitHub's repository quota and retention policy. Set a retention period that fits the account, keep only the current index plus the segment artifacts it references, and run garbage collection after a successful index publication. Artifact names, sizes, run metadata, and hashes remain visible to repository readers; the encrypted payload does not. This is an Actions-storage adapter, not a way to increase the account's quota or hide public repository metadata. The checked-in toolkit workflow proves the planner and integrity checks without credentials or game/mod data.
