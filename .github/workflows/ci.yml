@@ -50,6 +50,11 @@ jobs:
     if: ${{ !inputs.seed_archives && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    # A job-level block replaces the top-level one, so contents: read is repeated. actions: read is for
+    # listing and downloading the game-<game>-sealed backup artifact.
+    permissions:
+      contents: read
+      actions: read
     strategy:
       fail-fast: false
       max-parallel: 1  # one Steam account
@@ -72,8 +77,34 @@ jobs:
           restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
           lookup-only: true
 
+      # The cache can be evicted and K1 cannot be re-fetched headlessly (Steam Guard), so the sealed game is also
+      # kept as an encrypted artifact (same CACHE_ENCRYPTION_KEY seal, uploaded in sealed parts; the repository is
+      # public). A lookup or backup problem is a warning; only a game that no source can provide fails the job.
+      - name: Look up game backup artifact
+        id: backup
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/modsync-ci/game_backup.py status --game "$GAME"
+
+      - name: Restore game cache for the backup artifact
+        if: steps.cache.outputs.cache-matched-key != '' && (steps.backup.outputs.state == 'missing' || steps.backup.outputs.state == 'stale')
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/sealed/*.seal
+          key: game-${{ matrix.game }}-v1
+          restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
+
+      - name: Restore game from backup artifact
+        id: artifact
+        if: steps.cache.outputs.cache-matched-key == '' && steps.backup.outputs.artifact_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+          ARTIFACT_ID: ${{ steps.backup.outputs.artifact_id }}
+        run: python tools/modsync-ci/game_backup.py fetch --game "$GAME" --artifact-id "$ARTIFACT_ID" --seal-dir "$RUNNER_TEMP/sealed"
+
       - name: Download game with SteamCMD
-        if: steps.cache.outputs.cache-matched-key == ''
+        if: steps.cache.outputs.cache-matched-key == '' && steps.artifact.outputs.restored != 'true'
         timeout-minutes: 45
         env:
           STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
@@ -106,7 +137,8 @@ jobs:
             echo "Trying a Steam Guard backup code."
             "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "$STEAM_PASSWORD" "$code" "${install[@]}" </dev/null || echo "::warning::steamcmd (backup code) exited with status $?"
           done
-          test -f "$RUNNER_TEMP/game/chitin.key"
+          test -f "$RUNNER_TEMP/game/chitin.key" \
+            || { echo "::error::$GAME has no game cache, no game-$GAME-sealed backup artifact and SteamCMD could not download it; see docs/steam.md"; exit 1; }
           # A real Steam KOTOR install always ships modules/*.rim (K2 names the directory Modules/); fail the game job, never cache a partial download.
           python tools/modsync-ci/game_cache.py inventory --game "$GAME" --game-dir "$RUNNER_TEMP/game" \
             --label "after SteamCMD" --require-modules \
@@ -120,6 +152,25 @@ jobs:
         with:
           path: ${{ runner.temp }}/sealed/*.seal
           key: game-${{ matrix.game }}-v1
+
+      - name: Stage encrypted game backup
+        id: stage
+        if: (steps.cache.outputs.cache-matched-key != '' && (steps.backup.outputs.state == 'missing' || steps.backup.outputs.state == 'stale')) || (steps.cache.outputs.cache-matched-key == '' && steps.artifact.outputs.restored != 'true')
+        continue-on-error: true
+        env:
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+        run: python tools/modsync-ci/game_backup.py stage --game "$GAME" --seal-dir "$RUNNER_TEMP/sealed" --out-dir "$RUNNER_TEMP/game-backup"
+
+      - name: Upload encrypted game backup
+        if: steps.stage.outputs.staged == 'true'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: game-${{ matrix.game }}-sealed
+          path: ${{ runner.temp }}/game-backup
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
 
   mods:
     if: ${{ !inputs.seed_archives && (github.event_name != 'pull_request' || (github.event.pull_request.head.repo.full_name == github.repository && github.actor != 'dependabot[bot]')) }}

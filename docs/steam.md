@@ -14,8 +14,11 @@ Runs for `k1` and `k2`, one at a time (`max-parallel: 1`), because there is one
 Steam account. Fork and Dependabot pull requests get no secrets and skip it.
 
 1. Look up the Actions cache key `game-<game>-v1`. An older cache entry for the
-   same game is accepted as a fallback. A hit ends the job; Steam is not contacted.
-2. On a miss, run SteamCMD, forcing the Windows build, and stop at the first
+   same game is accepted as a fallback. A hit does not contact Steam.
+2. Look up the backup artifact (see [Game backup artifact](#game-backup-artifact)).
+   On a cache miss with a live artifact, rebuild the sealed game from it and
+   continue at step 6; Steam is not contacted.
+3. On a miss without an artifact, run SteamCMD, forcing the Windows build, and stop at the first
    attempt that leaves `chitin.key` in the install directory:
    1. With `STEAM_CONFIG_VDF` set, sign in with that saved login and the username
       only.
@@ -25,17 +28,18 @@ Steam account. Fork and Dependabot pull requests get no secrets and skip it.
       approvals have timed out this way).
    3. If that also failed, try each code in `STEAM_GUARD_CODES` in turn (see
       [Backup-code fallback](#backup-code-fallback)).
-3. `game_cache.py inventory --require-modules` prints the downloaded tree (see
+4. `game_cache.py inventory --require-modules` prints the downloaded tree (see
    [Game inventory](#game-inventory)) and fails the job when `modules/` holds no
    `.rim` file. A real Steam KOTOR install always ships `modules/*.rim`, so
    an empty `modules/` means a partial or wrong-depot download.
-4. `tools/modsync-ci/game_cache.py pack` repeats that check, drops every `*.bik`
+5. `tools/modsync-ci/game_cache.py pack` repeats that check, drops every `*.bik`
    movie, checks for `chitin.key`, `dialog.tlk`, and the game executable,
    records a SHA-256 inventory, and encrypts the tree with `CACHE_ENCRYPTION_KEY`.
-5. Save the result under `game-<game>-v1`.
+6. Save the result under `game-<game>-v1` and, unless it came from the artifact
+   or the cache already had a fresh backup, upload the backup artifact.
 
-The job fails if the game is still missing after these steps or has no module
-`.rim` files. Nothing partial is saved. Each SteamCMD attempt that exits nonzero
+The job fails if the game is still missing after these steps (no cache, no live
+artifact, SteamCMD gave nothing) or has no module `.rim` files. Nothing partial is saved. Each SteamCMD attempt that exits nonzero
 logs a `::warning::` with its status; the attempt loop still stops at the first
 one that leaves `chitin.key`, so a partial download that has `chitin.key` is
 caught by the `.rim` check, not retried.
@@ -52,6 +56,40 @@ by the `game` job's lookup, so a hit on a legacy entry ends the job without
 contacting Steam and without running the `.rim` check. If an install lane's
 inventory shows a legacy entry with no `.rim` files, delete that cache entry and
 re-run `game`.
+
+## Game backup artifact
+
+The Actions cache can be evicted and K1 cannot be re-fetched without a human (SteamCMD
+waits for a Steam Guard confirmation in the mobile app), so `game` also keeps the sealed
+game as the Actions artifact `game-<game>-sealed`. The repository is public and anyone
+can download artifacts, so only encrypted data is uploaded: the `baseline.seal` that
+`game_cache.py pack` writes (AES-256-CBC with an HMAC, key `CACHE_ENCRYPTION_KEY`) is cut by
+`tools/modsync-ci/game_backup.py` into parts of at most 2000 MiB, each sealed again with the
+artstore part envelope (same key), next to a `manifest.json` that holds the SHA-256 and
+size of the seal and the part list. The movies are not in it (`pack` drops every `*.bik`),
+and nothing is uploaded without the key.
+
+Per run, before the cache is used:
+
+- `status` finds the newest unexpired artifact with that exact name in this repository
+  (any run or branch; the job has `actions: read`).
+- Cache hit, and the artifact is missing or expires within 14 days: the job restores
+  the cache, stages the parts and uploads them (`retention-days: 90`, stored without
+  recompression). A fresh artifact costs no download. This is what creates the backup
+  from the cache that already exists.
+- Cache miss with a live artifact: `fetch` downloads `manifest.json` and the parts,
+  checks every part's HMAC and digest, and the SHA-256 and size of the joined seal, writes
+  `baseline.seal` and the job saves it to the Actions cache so the later jobs take the
+  fast path. Steam is not contacted. The install lanes still verify the SHA-256 inventory
+  when they unpack it.
+- Cache miss, no usable artifact: SteamCMD as before, then pack, save the cache and upload
+  the artifact.
+
+An artifact lookup, download, staging or upload failure only logs a `::warning::` (a failed
+restore falls through to SteamCMD). The job fails only when neither the cache, an artifact
+nor Steam provides the game. A key that differs from the one that sealed the artifact makes
+every part fail authentication, so after rotating `CACHE_ENCRYPTION_KEY` delete the old
+`game-*-sealed` artifacts and let `game` rebuild them.
 
 ## Game inventory
 
@@ -91,7 +129,8 @@ and Thursday 04:23 UTC); each scheduled run looks up both game caches in `game`
 and restores them in the `install` and `manual` jobs, so entries are read
 at least twice a week. That keeps them from the seven-day idle eviction; it does
 not protect against quota eviction. Eviction is not an error: the next run
-downloads the game again, which needs a Steam sign-in: an approval in the mobile
+rebuilds the cache from the `game-<game>-sealed` artifact when one is live. Only without
+one does it download the game again, which needs a Steam sign-in: an approval in the mobile
 app, unless `STEAM_CONFIG_VDF` is set or an unused backup code is available.
 
 ## Case normalization
@@ -141,7 +180,7 @@ Names only; set them as repository Actions secrets and never print or commit the
 | `STEAM_PASSWORD` | Password for that account; used when `STEAM_CONFIG_VDF` is unset or its login fails, and with each backup code |
 | `STEAM_CONFIG_VDF` | Optional. Base64 of an authenticated SteamCMD `config.vdf` |
 | `STEAM_GUARD_CODES` | Optional. Whitespace-separated Steam Guard backup codes; each works once |
-| `CACHE_ENCRYPTION_KEY` | Encrypts and decrypts the game cache |
+| `CACHE_ENCRYPTION_KEY` | Encrypts and decrypts the game cache and the backup artifact |
 
 ## STEAM_CONFIG_VDF: sign in once, locally
 

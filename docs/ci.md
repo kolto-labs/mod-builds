@@ -32,10 +32,16 @@ them failed, as long as `game` was not skipped. Each lane is independent
 (`fail-fast: false`).
 
 **`game`** — Looks up the sealed game in the Actions cache (nothing is downloaded
-on a hit). On a miss it downloads the game once with SteamCMD, removes `.bik`
-movies, seals it and saves it. If there is no complete game, or `modules/` holds
-no `.rim` file, at the end, the job fails (it prints a game inventory first). Runs k1, then k2, on one Steam account. The Monday/Thursday schedule keeps
-both game caches in use; see [steam.md](steam.md).
+on a hit) and the newest unexpired `game-<game>-sealed` backup artifact. On a miss it
+refills the cache from that artifact; only without an artifact does it download the game
+once with SteamCMD, remove `.bik` movies, seal it and save it. If there is no complete game,
+or `modules/` holds no `.rim` file, at the end, the job fails (it prints a game inventory
+first). A cache hit with no backup, or one that expires within 14 days, restores the cache
+and uploads the backup (90 days); a fresh SteamCMD download uploads it too. The backup is the
+`CACHE_ENCRYPTION_KEY` seal cut into sealed parts of at most 2000 MiB (artstore envelope, so
+the public artifact holds no game data in the clear) plus `manifest.json`. Backup problems
+are `::warning::`s. Runs k1, then k2, on one Steam account. The Monday/Thursday schedule keeps
+both game caches and backups fresh; see [steam.md](steam.md#game-backup-artifact).
 
 **`mods`** — Restores the newest `mod-archives-*` Actions cache, runs `cache.py
 refresh` over both guides, and saves the result under `mod-archives-<hash>` with
@@ -314,7 +320,7 @@ Names only.
 | `STEAM_USERNAME`, `STEAM_PASSWORD` | secret | Steam account that owns both games |
 | `STEAM_CONFIG_VDF` | secret, optional | Saved SteamCMD login, so CI needs no Steam Guard approval |
 | `STEAM_GUARD_CODES` | secret, optional | Single-use Steam backup codes, tried after the other sign-ins fail |
-| `CACHE_ENCRYPTION_KEY` | secret | Seals and unseals the game cache and the artifact-store blobs (not the archive bucket) |
+| `CACHE_ENCRYPTION_KEY` | secret | Seals and unseals the game cache, the `game-<game>-sealed` backup artifact and the artifact-store blobs (not the archive bucket) |
 | `DIAGNOSTICS_ENCRYPTION_KEY` | secret | Seals the `install` lane report and convert log before upload ([ports.md](ports.md#diagnosing-a-coverage-failure)) |
 | `MOD_CACHE_S3_ACCESS_KEY_ID`, `MOD_CACHE_S3_SECRET_ACCESS_KEY` | secret, optional | R2 read/write, `mods` job only |
 | `MOD_CACHE_S3_READ_ACCESS_KEY_ID`, `MOD_CACHE_S3_READ_SECRET_ACCESS_KEY` | secret, optional | R2 read only, `install` and `manual` |
@@ -371,7 +377,9 @@ entries coexist (~5.4 to 5.9 GB), so the total briefly reaches ~11.6 to 12 GB. G
 applies the 10 GB cap asynchronously, and the prune runs right after the save to keep that
 window short; it is the one place an eviction can still happen. If a game cache is evicted anyway, the lane
 fails with "game cache evicted — re-run the game job": re-run the `game` job, which
-refills it from Steam, then the failed lane.
+refills it from the `game-<game>-sealed` backup artifact (Actions artifacts do not count
+toward the 10 GB cache cap) and only falls back to Steam when there is no live artifact, then
+re-run the failed lane.
 
 ## Artifact store (artstore)
 
