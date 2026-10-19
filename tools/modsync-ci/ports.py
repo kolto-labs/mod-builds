@@ -560,32 +560,137 @@ def alias_candidates(segment, matcher, stem, source_name):
                 yield numbered
 
 
-def alias_source_name(pending, links, mapping, literal):
-    """(restored file name, None) for one unmatched pattern, or (None, reason).
+ALIAS_TOKEN = re.compile(r"[a-z0-9]+")
+ALIAS_NOISE_TOKEN = re.compile(r"[0-9]+|v[0-9]+|zip|rar|7z|exe")
+ALIAS_ARCHIVE_SUFFIX = re.compile(r"\.(?:zip|rar|7z|exe)$", re.IGNORECASE)
+ARCHIVE_MAGIC = (b"PK\x03\x04", b"PK\x05\x06", b"Rar!\x1a\x07", b"7z\xbc\xaf\x27\x1c", b"MZ")
 
-    `pending` is how many distinct patterns of the component are unmatched. A literal
-    basename is paired with the link whose URL ends in that name; otherwise the component
-    needs exactly one mapped file for exactly one unmatched pattern, since nothing else
-    ties several downloads to several globs.
+
+def mapped_archive_choices(path):
+    """archive_map.json as {canonical link: [file names]}: every file a link maps to, in map order."""
+    choices = {}
+    for link, value in json.loads(path.read_text(encoding="utf-8")).items():
+        names = choices.setdefault(canonical_link(link), [])
+        for name in value if isinstance(value, list) else [value]:
+            if isinstance(name, str) and name not in names:
+                names.append(name)
+    return choices
+
+
+def link_slug(link):
+    """Last non-empty path segment of a guide link ('.../2277-kiosk-hd/' -> '2277-kiosk-hd')."""
+    try:
+        segments = [part for part in unquote(urlsplit(str(link)).path).split("/") if part]
+    except ValueError:
+        return ""
+    return segments[-1] if segments else ""
+
+
+def alias_tokens(text):
+    """Lower-case word tokens of a name; versions, numbers, archive extensions and plural 's' ignored."""
+    tokens = set()
+    for token in ALIAS_TOKEN.findall(str(text).casefold()):
+        if not ALIAS_NOISE_TOKEN.fullmatch(token):
+            tokens.add(token[:-1] if len(token) > 3 and token.endswith("s") else token)
+    return tokens
+
+
+def alias_reference(segment):
+    """The mod-name text of an Extract glob: wildcards, a `{..}` group and the archive extension removed."""
+    text = re.sub(r"\{[^{}]*\}", "", segment).replace("*", " ").replace("?", " ")
+    return ALIAS_ARCHIVE_SUFFIX.sub("", text.strip(" .")).strip(" .")
+
+
+def alias_precision(reference, evidence):
+    """Share of the evidence tokens that are reference tokens, or None unless every reference token is present."""
+    wanted = alias_tokens(reference)
+    best = None
+    for text in evidence:
+        found = alias_tokens(text)
+        if wanted and wanted <= found:
+            best = max(best or 0.0, len(wanted) / len(found))
+    return best
+
+
+def alias_file_problem(archives, name):
+    """None when `name` is a restored regular archive that can be linked; otherwise the reason it cannot."""
+    source = archives / name
+    if (ALIAS_UNSAFE_NAME.search(name) or name in (".", "..") or not 0 < len(name) <= 255
+            or source.is_symlink() or not source.is_file()):
+        return "mapped_archive_missing_or_unsafe"
+    try:
+        with open(source, "rb") as handle:
+            header = handle.read(8)
+    except OSError:
+        return "mapped_archive_missing_or_unsafe"
+    return None if header.startswith(ARCHIVE_MAGIC) else "mapped_file_not_archive"
+
+
+def alias_identical_groups(archives, names):
+    """Group `names` by file content, so mirrors of one download count once."""
+    by_size = {}
+    for name in names:
+        by_size.setdefault((archives / name).stat().st_size, []).append(name)
+    groups = []
+    for same in by_size.values():
+        if len(same) == 1:
+            groups.append(same)
+            continue
+        by_content = {}
+        for name in same:
+            hasher = hashlib.sha256()
+            with open(archives / name, "rb") as handle:
+                for chunk in iter(lambda: handle.read(1 << 20), b""):
+                    hasher.update(chunk)
+            by_content.setdefault(hasher.digest(), []).append(name)
+        groups.extend(by_content.values())
+    return groups
+
+
+def alias_source_names(pending, links, choices, reference, literal, archives):
+    """([restored file names], None) for one unmatched pattern, or (None, reason).
+
+    `pending` is how many distinct patterns of the component are unmatched, `choices` is
+    `mapped_archive_choices`, `reference` the glob's mod-name text. Files that are missing,
+    unsafe or not archives are dropped; mirrors (identical content) count once. Then:
+    a literal basename is paired with the file or link URL that ends in that name; one file
+    serves one pattern; otherwise the files whose name (or, for a link that maps to just
+    that file, URL slug) contain every token of `reference` are the matches. A wildcard
+    pattern really matches all of them, so each is returned; a literal one needs exactly
+    one. Anything else stays unresolved with the reason, never guessed.
     """
-    mapped = {}
+    origins = {}
+    multi = False
     for link in links:
-        key = canonical_link(link)
-        if key in mapping:
-            mapped[link] = mapping[key]
-    names = {name for name in mapped.values() if name is not None}
+        names = choices.get(canonical_link(link), ())
+        multi = multi or len(names) > 1
+        for name in names:
+            origins.setdefault(name, []).append((link, len(names) == 1))
+    if not origins:
+        return None, "no_mapped_archive"
+    problems = {name: alias_file_problem(archives, name) for name in origins}
+    usable = [name for name in origins if not problems[name]]
+    if not usable:
+        return None, problems[next(iter(origins))]
     if literal is not None:
-        paired = {name for link, name in mapped.items()
-                  if name is not None and link_basename(link).casefold() == literal.casefold()}
+        paired = [name for name in usable
+                  if name.casefold() == literal.casefold() or any(
+                      single and link_basename(link).casefold() == literal.casefold()
+                      for link, single in origins[name])]
         if len(paired) == 1:
-            return paired.pop(), None
-    if len(names) == 1 and pending == 1:
-        return next(iter(names)), None
-    if len(names) > 1 or (names and pending > 1):
-        return None, "ambiguous_mapped_archives"
-    if mapped:
-        return None, "multi_file_map_entry"
-    return None, "no_mapped_archive"
+            return paired, None
+    precision = {name: alias_precision(
+        reference, [name] + [link_slug(link) for link, single in origins[name] if single])
+        for name in usable}
+    ordered = sorted(usable, key=lambda name: (-(precision[name] or 0.0), name))
+    groups = alias_identical_groups(archives, ordered)
+    representatives = sorted((min(group, key=ordered.index) for group in groups), key=ordered.index)
+    if len(representatives) == 1 and pending == 1:
+        return representatives, None
+    strong = [name for name in representatives if precision[name] is not None]
+    if strong and (literal is None or len(strong) == 1):
+        return strong, None
+    return None, "multi_file_map_entry" if multi else "ambiguous_mapped_archives"
 
 
 def link_alias(source, alias):
@@ -610,16 +715,20 @@ def alias_archives(converted, archive_map, archives, selected, report):
     (symlink if linking fails) in `archives` named so the glob matches. converted.toml is
     never changed. Links that cannot be made are recorded in `alias_unresolved`; validate
     then reports the missing download as before.
+
+    The validator reads `{zip,rar,7z}` literally, so a braced glob is only matched by a name
+    that ends in that literal group (`Name.{zip,rar,7z}`); it still opens the file by content,
+    which is why the source must be a real archive (`alias_file_problem`).
     """
     aliases, unresolved = [], []
     report["archive_aliases"] = {"count": 0, "aliases": aliases}
     report["alias_unresolved"] = unresolved
-    mapping, map_problem = {}, None
+    choices, map_problem = {}, None
     if archive_map is None:
         map_problem = "no_archive_map"
     else:
         try:
-            mapping = mapped_archives(archive_map.resolve(strict=True))
+            choices = mapped_archive_choices(archive_map.resolve(strict=True))
         except (OSError, ValueError, AttributeError):
             map_problem = "archive_map_unreadable"
             report[ALIAS_FAILED_KEY] = map_problem
@@ -652,43 +761,41 @@ def alias_archives(converted, archive_map, archives, selected, report):
                 continue
             segment = segments[0]
             wildcard = "*" in segment or "?" in segment
-            source_name, reason = alias_source_name(
-                len(missing), links, mapping, None if wildcard else segment)
-            if source_name is None:
+            source_names, reason = alias_source_names(
+                len(missing), links, choices, alias_reference(segment),
+                None if wildcard else segment, archives)
+            if source_names is None:
                 failures.append({"pattern": raw, "reason": map_problem or reason})
                 continue
-            source = archives / source_name
-            if (ALIAS_UNSAFE_NAME.search(source_name) or source_name in (".", "..")
-                    or not 0 < len(source_name) <= 255 or source.is_symlink() or not source.is_file()):
-                failures.append({"pattern": raw, "reason": "mapped_archive_missing_or_unsafe"})
-                continue
             matcher = glob_regex(segment)
-            placed = None
-            for candidate in alias_candidates(segment, matcher, alias_stem(name), source_name):
-                if ALIAS_UNSAFE_NAME.search(candidate) or not 0 < len(candidate) <= 255 \
-                        or candidate in (".", ".."):
-                    break
-                key = candidate.casefold()
-                if key in taken:
-                    if not wildcard and created.get(key) == source_name:
-                        placed = ""
+            for source_name in source_names:
+                source = archives / source_name
+                placed = None
+                for candidate in alias_candidates(segment, matcher, alias_stem(name), source_name):
+                    if ALIAS_UNSAFE_NAME.search(candidate) or not 0 < len(candidate) <= 255 \
+                            or candidate in (".", ".."):
                         break
-                    continue
-                try:
-                    method = link_alias(source, archives / candidate)
-                except FileExistsError:
+                    key = candidate.casefold()
+                    if key in taken:
+                        if not wildcard and created.get(key) == source_name:
+                            placed = ""
+                            break
+                        continue
+                    try:
+                        method = link_alias(source, archives / candidate)
+                    except FileExistsError:
+                        taken.add(key)
+                        continue
+                    except OSError:
+                        break
                     taken.add(key)
-                    continue
-                except OSError:
+                    created[key] = source_name
+                    aliases.append({"component": name, "component_guid": identity,
+                                    "alias": candidate, "source": source_name, "method": method})
+                    placed = candidate
                     break
-                taken.add(key)
-                created[key] = source_name
-                aliases.append({"component": name, "component_guid": identity,
-                                "alias": candidate, "source": source_name, "method": method})
-                placed = candidate
-                break
-            if placed is None:
-                failures.append({"pattern": raw, "reason": "alias_not_created"})
+                if placed is None:
+                    failures.append({"pattern": raw, "reason": "alias_not_created"})
         if failures:
             unresolved.append({"component": name, "component_guid": identity,
                                "reason": failures[0]["reason"], "patterns": failures})

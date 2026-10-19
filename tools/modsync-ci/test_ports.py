@@ -2689,8 +2689,8 @@ class ArchiveAliasTests(unittest.TestCase):
         self.archives.mkdir()
         self.map_path = self.root / "map.json"
 
-    def restored(self, name, data=b"payload"):
-        (self.archives / name).write_bytes(data)
+    def restored(self, name, data=None):
+        (self.archives / name).write_bytes(b"PK\x03\x04" + name.encode() if data is None else data)
         return name
 
     def alias(self, blocks, mapping, selected=(ALIAS_A, ALIAS_B), write_map=True):
@@ -2798,6 +2798,94 @@ class ArchiveAliasTests(unittest.TestCase):
         pairs = {item["alias"]: item["source"] for item in report["archive_aliases"]["aliases"]}
         self.assertEqual(pairs, {"Second Part.zip": "two.zip", "First Part.zip": "one.zip"})
 
+    def test_a_multi_file_entry_is_split_by_which_file_names_the_whole_mod(self):
+        patch = self.restored("KOTOR 1 Community Patch - Compatibility Patch-1282-4-1.rar")
+        main = self.restored("Ultimate Character Overhaul -REDUX- ( LITE ) - TPC Version-1282-4-1.rar")
+        nexus = "https://www.nexusmods.com/kotor/mods/1282"
+        report = self.alias(
+            [alias_component("Ultimate Character Overhaul", ALIAS_A, [nexus],
+                             ["<<modDirectory>>\\Ultimate Character Overhaul*.{zip,rar,7z}"]),
+             alias_component("Ultimate Character Overhaul Patches", ALIAS_B, [nexus + "?tab=files"],
+                             ["<<modDirectory>>\\Ultimate Character Overhaul Patches*.{zip,rar,7z}"])],
+            {nexus: [patch, main]})
+        self.assertEqual([(item["alias"], item["source"]) for item in report["archive_aliases"]["aliases"]],
+                         [("Ultimate Character Overhaul.{zip,rar,7z}", main)])
+        self.assertEqual([(item["component_guid"], item["reason"]) for item in report["alias_unresolved"]],
+                         [(ALIAS_B, "multi_file_map_entry")])
+
+    def test_separate_downloads_are_told_apart_by_the_link_slug(self):
+        self.restored("opaque-1.zip")
+        self.restored("opaque-2.zip")
+        kiosk = "https://deadlystream.com/files/file/2277-kiosk-hd/"
+        fix = "https://deadlystream.com/files/file/2909-kiosk-model-fix-for-k1/"
+        report = self.alias(
+            [alias_component("HD Kiosk", ALIAS_A, [kiosk, fix], ["<<modDirectory>>\\HD Kiosk*.{zip,rar,7z}"])],
+            {kiosk: "opaque-1.zip", fix: "opaque-2.zip"})
+        self.assertEqual(report["alias_unresolved"], [])
+        self.assertEqual([(item["alias"], item["source"]) for item in report["archive_aliases"]["aliases"]],
+                         [("HD Kiosk.{zip,rar,7z}", "opaque-1.zip")])
+
+    def test_every_download_the_glob_names_gets_its_own_alias(self):
+        self.restored("Taris Reskin v1.zip")
+        self.restored("Taris Reskin Patch.zip")
+        self.restored("Unrelated.zip")
+        report = self.alias(
+            [alias_component("Taris Reskin", ALIAS_A, [ALIAS_URL_A, ALIAS_URL_B],
+                             ["<<modDirectory>>\\Taris Reskin*.{zip,rar,7z}"])],
+            {ALIAS_URL_A: ["Taris Reskin v1.zip", "Unrelated.zip"], ALIAS_URL_B: "Taris Reskin Patch.zip"})
+        self.assertEqual(report["alias_unresolved"], [])
+        pairs = {item["alias"]: item["source"] for item in report["archive_aliases"]["aliases"]}
+        self.assertEqual(pairs, {"Taris Reskin.{zip,rar,7z}": "Taris Reskin v1.zip",
+                                 "Taris Reskin (2).{zip,rar,7z}": "Taris Reskin Patch.zip"})
+        matcher = ports.glob_regex("Taris Reskin*.{zip,rar,7z}")
+        self.assertTrue(all(matcher.fullmatch(alias) for alias in pairs))
+
+    def test_a_braced_glob_is_matched_only_by_the_literal_group_the_validator_sees(self):
+        self.restored("Mod files-1086.7z")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], [BRACED])], {ALIAS_URL_A: "Mod files-1086.7z"})
+        alias = report["archive_aliases"]["aliases"][0]["alias"]
+        matcher = ports.glob_regex("Generic Mod*.{zip,rar,7z}")
+        self.assertEqual(alias, "Generic Mod.{zip,rar,7z}")
+        self.assertIsNone(matcher.fullmatch("Generic Mod.7z"))
+        self.assertIsNone(matcher.fullmatch("Generic Mod.zip"))
+        self.assertTrue(matcher.fullmatch(alias))
+
+    def test_mirrors_with_identical_content_count_as_one_download(self):
+        self.restored("from-deadlystream.zip", b"PK\x03\x04same")
+        self.restored("from-mega.zip", b"PK\x03\x04same")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A, ALIAS_URL_B], ["<<modDirectory>>\\Wanted*.zip"])],
+            {ALIAS_URL_A: "from-mega.zip", ALIAS_URL_B: "from-deadlystream.zip"})
+        self.assertEqual(report["alias_unresolved"], [])
+        self.assertEqual(len(report["archive_aliases"]["aliases"]), 1)
+        self.assertEqual(report["archive_aliases"]["aliases"][0]["source"], "from-deadlystream.zip")
+
+    def test_a_mapped_file_that_is_not_an_archive_is_never_aliased(self):
+        self.restored("tar02_duelorg021.dlg", b"GFF V3.2 not an archive")
+        self.restored("Bendak Option.7z", b"7z\xbc\xaf\x27\x1cdata")
+        loose = self.alias(
+            [alias_component("Bendak Non-Darkside Option", ALIAS_A, [ALIAS_URL_A], [
+                "<<modDirectory>>\\Bendak Non-Darkside Option*.{zip,rar,7z}"])],
+            {ALIAS_URL_A: "tar02_duelorg021.dlg"})
+        self.assertEqual(loose["archive_aliases"]["count"], 0)
+        self.assertEqual(loose["alias_unresolved"][0]["reason"], "mapped_file_not_archive")
+        self.assertEqual(self.names(), ["Bendak Option.7z", "tar02_duelorg021.dlg"])
+        mixed = self.alias(
+            [alias_component("Bendak Option", ALIAS_B, [ALIAS_URL_B], ["<<modDirectory>>\\Bendak Option*.{zip,rar,7z}"])],
+            {ALIAS_URL_B: ["tar02_duelorg021.dlg", "Bendak Option.7z"]})
+        self.assertEqual(mixed["alias_unresolved"], [])
+        self.assertEqual([item["source"] for item in mixed["archive_aliases"]["aliases"]], ["Bendak Option.7z"])
+
+    def test_a_literal_name_shared_by_two_matching_downloads_stays_unresolved(self):
+        self.restored("Wanted Name v1.zip")
+        self.restored("Wanted Name v2.zip")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>\\Wanted Name.zip"])],
+            {ALIAS_URL_A: ["Wanted Name v1.zip", "Wanted Name v2.zip"]})
+        self.assertEqual(report["archive_aliases"]["count"], 0)
+        self.assertEqual(report["alias_unresolved"][0]["reason"], "multi_file_map_entry")
+
     def test_unsafe_symlinked_missing_and_escaping_inputs_are_refused(self):
         outside = self.root / "outside.zip"
         outside.write_bytes(b"x")
@@ -2857,7 +2945,7 @@ class ArchiveAliasTests(unittest.TestCase):
         link = self.archives / "Wanted.zip"
         self.assertTrue(link.is_symlink())
         self.assertEqual(os.readlink(link), "opaque-1.zip")
-        self.assertEqual(link.read_bytes(), b"payload")
+        self.assertEqual(link.read_bytes(), (self.archives / "opaque-1.zip").read_bytes())
 
     def test_a_missing_or_unreadable_map_records_why_nothing_was_aliased(self):
         blocks = [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>\\Wanted.zip"])]
@@ -2901,7 +2989,7 @@ class ArchiveAliasLaneTests(unittest.TestCase):
         args.archive_map = root / "map.json"
         args.archive_map.write_text(json.dumps(mapping), encoding="utf-8")
         for name in restored:
-            (args.archives / name).write_bytes(b"payload")
+            (args.archives / name).write_bytes(b"PK\x03\x04" + name.encode())
         args.guide.write_text(GUIDE.replace("## CRITICAL: Platform Notes\n\n### Platform Fix A\n\n", ""),
                               encoding="utf-8")
         text = document(

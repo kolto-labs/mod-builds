@@ -79,7 +79,7 @@ re-run the game job") and unpacks it, restores
 the Actions cache that `mods` saved in the same run (key from
 `needs.mods.outputs.archive_cache_key`, falling back to the `mod-archives-` prefix when
 `mods` failed or was skipped; a miss is not an error), restores the archives for `content/<game>/full.md` from the chain
-below, and runs `ports.py` to install the full guide. `gui` lanes run under Xvfb.
+below, and runs `ports.py` to install the full guide. `gui` lanes run under Xvfb and install `python3-tk` so the runner's `python` can import `tkinter` (PyAutoGUI/MouseInfo needs it; `gui_rust.py` runs under the same interpreter via `sys.executable`).
 See [ports.md](ports.md).
 
 ### Mod archive sources
@@ -143,7 +143,7 @@ named section or step may pass it. Checked against the lane code on the current
 | `rust` + `cli` | Yes. `ports.py` runs `install --phase all`; the converter leaves widescreen components selected (`IsSelected = true`, `WidescreenOnly = true`) | Not allowed |
 | `rust` + `gui` | No. `ports.py` passes `--exclude-widescreen` to `gui_rust.py`, which deselects every widescreen-only component in a private copy of the converted TOML and reports it as not covered | Not wired |
 | `typescript` + `cli`/`gui` | Not selected for install (`select_base_components`). Reviewed policy skips are left out by `--select` of the non-skipped component GUIDs (TypeScript has no `--deselect`), and both lanes require a reviewed manifest that does not exist yet. The `cli` lane now attempts a physical install (`--ci-physical-install`, see below); the `gui` lane does not | Not wired |
-| `manual` | Unknown: depends on the human-reviewed `ci/<game>-manual-plan.json`, which does not exist | Not wired |
+| `manual` | Unknown: depends on the human-reviewed `ci/<game>-manual-plan.json`, which does not exist. The job is non-gating: without the plan it installs nothing, ends green with a `::warning::` and a `$GITHUB_STEP_SUMMARY` line ("manual lane skipped: no reviewed plan; draft attached"), and uploads `draft_plan.py` output as artifact `manual-drafts-<game>` (14 days) | Not wired |
 
 Reviewed policy (step-scoped, never a whole section). **Wired for all four install
 lanes** (`rust`/`typescript` x `cli`/`gui`) in the `Restore required mod archives`
@@ -258,9 +258,15 @@ and the `typescript` lanes make no P2P claim.
 
 **`manual`** — Installs the same guide step by step with each mod's original
 patcher under Wine, from a human-reviewed plan at `ci/<game>-manual-plan.json`.
-The job fails at its first step if the plan is missing; it never passes without
-one. It restores the game and archives the same way as `install`, with the same
-same restore. See [manual-lane.md](manual-lane.md).
+The job is non-gating while the plan is missing: the `Require the reviewed manual
+plan` step emits a `::warning::` and a step summary ("manual lane skipped: no reviewed
+plan; draft attached"), runs `draft_plan.py --out-dir "$RUNNER_TEMP/drafts"` and uploads
+the drafts as `manual-drafts-<game>` (14 days), skips every install step and ends green.
+Nothing is installed or verified in that case, so the lane is not evidence of a manual
+install. When the plan exists, the job restores the game and archives the same way as
+`install` and runs `manual.py`, which still fails the job if the plan fails validation
+or the game or archives are missing. `report.json` is uploaded as `manual-report-<game>`
+(`if: always()`, 14 days). See [manual-lane.md](manual-lane.md).
 
 ## Secrets and variables
 
