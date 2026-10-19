@@ -66,12 +66,17 @@ same text to `$GITHUB_STEP_SUMMARY`:
 - `override/`: recursive file count and bytes;
 - `data/*.bif`: count and bytes;
 - sizes of `chitin.key` and `dialog.tlk`;
+- `case normalization:` whether [Case normalization](#case-normalization) has been
+  applied (every canonical top-level directory and every `modules/`/`override/`
+  file name is lowercase), or how many names are still not lowercase, or `BLOCKED`
+  with the first problem (collision or symlink). The `game` job's inventory always
+  says `NOT applied` for a Steam K2 tree: the packed cache keeps Steam's spelling;
 - the `steamapps/appmanifest_*.acf` state (`StateFlags`, `buildid`) when it
   still exists, which is only right after SteamCMD.
 
 It runs in the `game` job right after SteamCMD (label `after SteamCMD`), and in
 every `install` lane (label `<implementation> <mode>`) and the `manual` lane
-(label `manual`) right after `Unpack game`, so a failure such as a TS
+(label `manual`) right after `Normalize game case`, so a failure such as a TS
 `GFFList ... not found in modules/<name>.mod` can be read against what the cached
 game really holds. The output is never an input to any cache key.
 
@@ -88,6 +93,43 @@ at least twice a week. That keeps them from the seven-day idle eviction; it does
 not protect against quota eviction. Eviction is not an error: the next run
 downloads the game again, which needs a Steam sign-in: an approval in the mobile
 app, unless `STEAM_CONFIG_VDF` is set or an unused backup code is available.
+
+## Case normalization
+
+Evidence (run 39240372283, k2 lanes): the Steam K2 tree has `Modules/` (capital M)
+with 82 `*.rim`, 82 `*_s.rim`, 82 `*_dlg.erf` and no `*.mod`, `override` with 60
+files, and `data/` with 11 `*.bif`. On the case-sensitive Linux runner that broke
+two things. The TypeScript CLI retry died with `Checkpoint baseline failed before
+mutation: Checkpoint path has inconsistent case spelling`, and mod installers write
+`modules/<name>.mod` (lowercase, as TSLPatcher does on case-insensitive Windows), so
+Linux lookups missed `Modules/`.
+
+`game_cache.py normalize-case --game-dir <dir> [--game <k1|k2>] [--label <text>]`
+fixes this on Linux (elsewhere it prints a skip and exits 0):
+
+- Renames a top-level directory that is a case-variant of `modules`, `override`,
+  `lips`, `streamsounds`, `streammusic`, `streamwaves`, `streamvoice`,
+  `texturepacks`, `data`, `movies` or `saves` to the lowercase name. Other
+  directories (for example `SaveGames`) keep their name.
+- Lowercases every file name inside `modules/` and `override/` (recursively; subdirectory
+  names are left alone).
+- Never renames the executable, `chitin.key`, `dialog.tlk` or `swkotor*.ini`.
+- Plans everything first and renames nothing when a problem is found. A hard error
+  names both entries when two names collide case-insensitively (`Modules` and
+  `modules`, or `A.TXT` and `a.txt`), and for any symlink in those trees or at the
+  game root, or a game directory that is itself a symlink. It never follows a
+  symlink and every path it touches is checked to stay inside the game directory.
+- Is idempotent: a second run renames nothing and says `already normalized`.
+- Prints, flushed, the counts (top-level directories renamed, files lowercased of
+  files scanned per tree) and at most 20 per-rename lines, then `... and N more`.
+  The same text goes to `$GITHUB_STEP_SUMMARY`.
+
+It is an install-time step only. The `install` lanes and the `manual` lane run it
+after `Unpack game` has decrypted the cache and checked every file against the SHA-256
+inventory, and before `Game inventory`; the `game` job never runs it, so the cache
+is packed, and verified, with Steam's original spelling. Mod installers
+therefore see a case-normalized tree, the same view a case-insensitive Windows
+install gives them (`Modules/` and `modules/` are one directory there).
 
 ## Secrets
 

@@ -21,7 +21,10 @@ For each game:
    fails validation, or a missing game or archive, still fails the job.
 2. Installs Wine, Xvfb and archive tools.
 3. Restores `game-<game>-v1` and runs `game_cache.py unpack`, which verifies every
-   file. See [steam.md](steam.md).
+   file, then `game_cache.py normalize-case` (lowercases `Modules/` and the file names
+   in `modules/` and `override/`; the plan's installs see a case-normalized,
+   Windows-equivalent tree), then prints the game inventory. See
+   [steam.md](steam.md#case-normalization).
 4. Restores archives with `cache.py restore` using the read-only cache credentials.
    Restore is fail-closed: if any archive of the guide is not in the cache (or fails
    verification), the step exits non-zero and the lane stops before any install

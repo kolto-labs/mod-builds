@@ -75,8 +75,13 @@ any lane.
 source for the implementation (the repository named by `MODSYNC_RS_REPOSITORY` or
 `MODSYNC_TS_REPOSITORY`, read with `MODSYNC_SOURCE_TOKEN`; empty values fail the
 job). It restores the game cache (a miss fails the job with "game cache evicted —
-re-run the game job") and unpacks it, prints a game inventory (also in
-`$GITHUB_STEP_SUMMARY`; see [steam.md](steam.md#game-inventory)), restores
+re-run the game job") and unpacks it (the unpack verifies the SHA-256 inventory), runs
+`game_cache.py normalize-case` (install-time only: lowercases `Modules/` and the other
+canonical top-level directories and the file names in `modules/` and `override/`, so
+mod installers see a case-normalized, Windows-equivalent tree; see
+[steam.md](steam.md#case-normalization)), prints a game inventory (also in
+`$GITHUB_STEP_SUMMARY`; it states whether the normalization has been applied; see
+[steam.md](steam.md#game-inventory)), restores
 the Actions cache that `mods` saved in the same run (key from
 `needs.mods.outputs.archive_cache_key`, falling back to the `mod-archives-` prefix when
 `mods` failed or was skipped; a miss is not an error), restores the archives for `content/<game>/full.md` from the chain

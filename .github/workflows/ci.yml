@@ -796,6 +796,10 @@ jobs:
         run: |
           python tools/modsync-ci/game_cache.py unpack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
+      - name: Normalize game case
+        run: |
+          python tools/modsync-ci/game_cache.py normalize-case --game "$GAME" --game-dir "$RUNNER_TEMP/game" \
+            --label "${{ matrix.implementation }} ${{ matrix.mode }}"
       - name: Game inventory
         run: |
           python tools/modsync-ci/game_cache.py inventory --game "$GAME" --game-dir "$RUNNER_TEMP/game" \
@@ -964,6 +968,10 @@ jobs:
         run: |
           python tools/modsync-ci/game_cache.py unpack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
+      - name: Normalize game case
+        if: steps.plan.outputs.present == 'true'
+        run: |
+          python tools/modsync-ci/game_cache.py normalize-case --game "$GAME" --game-dir "$RUNNER_TEMP/game" --label manual
       - name: Game inventory
         if: steps.plan.outputs.present == 'true'
         run: |

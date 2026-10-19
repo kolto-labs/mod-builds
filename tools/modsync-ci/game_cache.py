@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
-"""Pack a SteamCMD game install into an encrypted cache, unpack and verify one, or print an inventory.
+"""Pack a SteamCMD game install into an encrypted cache, unpack and verify one, print an inventory, or normalize case.
 
 `inventory` is read-only and is never part of a cache key.
+
+`normalize-case` is an install-time step that runs after `unpack` has verified the cache and never before `pack`:
+on Linux it renames the game's canonical top-level directories (Steam ships K2 as Modules/) and the file names inside
+modules/ and override/ to lowercase, the Windows-equivalent view that mod installers expect.
 
 The cache never contains *.bik movies. Layout inside the seal:
   baseline-<game>/       game files
   baseline-<game>.json   {relative path: {size, sha256}} inventory
 """
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -20,6 +25,11 @@ from pathlib import Path
 
 SEAL = Path(__file__).with_name("seal.py")
 EXECUTABLE = {"k1": "swkotor.exe", "k2": "swkotor2.exe"}
+CANONICAL_DIRS = ("modules", "override", "lips", "streamsounds", "streammusic", "streamwaves", "streamvoice",
+                  "texturepacks", "data", "movies", "saves")
+LOWERCASED_TREES = ("modules", "override")
+PROTECTED_NAMES = ("chitin.key", "dialog.tlk", "swkotor*.exe", "swkotor*.ini")
+DETAIL_LIMIT = 20
 
 
 def inventory(directory):
@@ -96,6 +106,7 @@ def survey(directory):
         facts[name] = found.stat().st_size if found and found.is_file() else None
     steamapps = directory / "steamapps"
     manifests = sorted(steamapps.glob("appmanifest_*.acf")) if steamapps.is_dir() else []
+    facts["case"] = case_status(directory)
     facts["steam"] = []
     for manifest in manifests:
         text = manifest.read_text(errors="replace")
@@ -103,6 +114,77 @@ def survey(directory):
         facts["steam"].append(manifest.name + " " + " ".join(
             f"{key}={match.group(1)}" for key, match in fields.items() if match))
     return facts
+
+
+def is_protected(name):
+    lowered = name.lower()
+    return any(fnmatch.fnmatchcase(lowered, pattern) for pattern in PROTECTED_NAMES)
+
+
+def inside(root, path):
+    resolved = Path(os.path.realpath(path))
+    return resolved == root or root in resolved.parents
+
+
+def case_collisions(directory, root, names, problems):
+    groups = {}
+    for name in names:
+        groups.setdefault(name.lower(), []).append(name)
+    for variants in groups.values():
+        if len(variants) > 1:
+            where = directory.relative_to(root).as_posix() if directory != root else "."
+            problems.append(f"case-insensitive collision in {where}/: {' and '.join(sorted(variants))}")
+
+
+def plan_case(root):
+    """Read-only plan of the renames normalize-case makes: {dirs, files, scanned, problems}."""
+    plan = {"dirs": [], "files": [], "scanned": {name: 0 for name in LOWERCASED_TREES}, "problems": []}
+    problems = plan["problems"]
+    with os.scandir(root) as listing:
+        top = sorted(listing, key=lambda entry: entry.name)
+    canonical = [entry for entry in top if entry.name.lower() in CANONICAL_DIRS]
+    case_collisions(root, root, [entry.name for entry in canonical], problems)
+    trees = {}
+    for entry in canonical:
+        if entry.is_symlink():
+            problems.append(f"symlink {entry.name} at the game root (refusing to follow it)")
+        elif entry.is_dir(follow_symlinks=False):
+            lowered = entry.name.lower()
+            if entry.name != lowered:
+                plan["dirs"].append((root / entry.name, root / lowered))
+            if lowered in LOWERCASED_TREES:
+                trees[lowered] = root / entry.name
+    for tree_name, tree in sorted(trees.items()):
+        stack = [tree]
+        while stack:
+            directory = stack.pop()
+            if not inside(root, directory):
+                problems.append(f"{directory} resolves outside the game directory")
+                continue
+            with os.scandir(directory) as listing:
+                entries = sorted(listing, key=lambda entry: entry.name)
+            case_collisions(directory, root, [entry.name for entry in entries], problems)
+            for entry in entries:
+                path = directory / entry.name
+                if entry.is_symlink():
+                    problems.append(f"symlink {path.relative_to(root).as_posix()} (refusing to follow it)")
+                elif entry.is_dir(follow_symlinks=False):
+                    stack.append(path)
+                elif entry.is_file(follow_symlinks=False):
+                    plan["scanned"][tree_name] += 1
+                    if entry.name != entry.name.lower() and not is_protected(entry.name):
+                        plan["files"].append((tree_name, path, directory / entry.name.lower()))
+    return plan
+
+
+def case_status(root):
+    plan = plan_case(root)
+    if plan["problems"]:
+        return "BLOCKED (" + "; ".join(plan["problems"][:3]) + (" ..." if len(plan["problems"]) > 3 else "") + ")"
+    if not plan["dirs"] and not plan["files"]:
+        return "applied (canonical top-level directories and modules/override file names are lowercase)"
+    return (f"NOT applied ({len(plan['dirs'])} top-level directories and {len(plan['files'])} file names are not "
+            "lowercase; normalize-case runs at install time, the packed cache keeps Steam's spelling)")
 
 
 def format_bytes(size):
@@ -132,20 +214,70 @@ def render_survey(game, directory, facts, label=""):
         f"  override dir: {facts['override_dir'] or 'MISSING'}, files (recursive): {counted('override_files')}",
         f"  data dir: {facts['data_dir'] or 'MISSING'}, *.bif: {counted('bif')}",
         f"  {sizes}",
+        f"  case normalization: {facts['case']}",
         f"  steam manifest: {'; '.join(facts['steam']) or 'none (steamapps/ removed or never present)'}",
     ]
 
 
-def report_survey(game, directory, label=""):
-    facts = survey(directory)
-    lines = render_survey(game, directory, facts, label)
+def emit(title, lines):
     print("\n".join(lines), flush=True)
     target = os.environ.get("GITHUB_STEP_SUMMARY")
     if target:
         with open(target, "a", encoding="utf-8") as stream:
-            stream.write(f"#### Game inventory: {game}{' ' + label if label else ''}\n\n```\n"
-                         + "\n".join(lines[1:]) + "\n```\n\n")
+            stream.write(f"#### {title}\n\n```\n" + "\n".join(lines[1:]) + "\n```\n\n")
+
+
+def report_survey(game, directory, label=""):
+    facts = survey(directory)
+    emit(f"Game inventory: {game}{' ' + label if label else ''}", render_survey(game, directory, facts, label))
     return facts
+
+
+def normalize_case(game, game_dir, label=""):
+    title = f"Case normalization: {game or 'game'}{' ' + label if label else ''}"
+    if game_dir.is_symlink():
+        raise SystemExit(f"Game directory is a symlink; refusing to follow it: {game_dir}")
+    if not game_dir.is_dir():
+        raise SystemExit(f"{game or 'game'} game directory is missing: {game_dir}")
+    root = game_dir.resolve()
+    if not sys.platform.startswith("linux"):
+        emit(title, [f"case normalization {game or 'game'}: skipped, {sys.platform} is not Linux: {root}"])
+        return
+    plan = plan_case(root)
+    if plan["problems"]:
+        emit(title, [f"case normalization {game or 'game'} REFUSED, nothing renamed: {root}"]
+             + [f"  {problem}" for problem in plan["problems"]])
+        raise SystemExit(f"Case normalization refused for {root}: " + "; ".join(plan["problems"]))
+    for _, source, target in plan["files"]:
+        if not inside(root, source.parent) or (os.path.lexists(target) and not os.path.samefile(source, target)):
+            raise SystemExit(f"Refusing to rename {source} to {target}")
+        os.rename(source, target)
+    for source, target in plan["dirs"]:
+        if os.path.lexists(target) and not os.path.samefile(source, target):
+            raise SystemExit(f"Refusing to rename {source} to {target}")
+        os.rename(source, target)
+    leftover = plan_case(root)
+    if leftover["problems"] or leftover["dirs"] or leftover["files"]:
+        raise SystemExit(f"Case normalization left {len(leftover['dirs']) + len(leftover['files'])} names "
+                         f"not lowercase under {root}")
+    if game:
+        require_game(game, root)
+    per_tree = {name: sum(1 for tree, _, _ in plan["files"] if tree == name) for name in LOWERCASED_TREES}
+    renamed = len(plan["dirs"]) + len(plan["files"])
+    details = [f"{source.relative_to(root).as_posix()} -> {target.name}" for source, target in plan["dirs"]]
+    details += [f"{source.relative_to(root).as_posix()} -> {target.name}" for _, source, target in plan["files"]]
+    lines = [
+        f"case normalization {game or 'game'}{' ' + label if label else ''}: {root}",
+        f"  top-level directories renamed: {len(plan['dirs'])}"
+        + (f" ({', '.join(source.name + ' -> ' + target.name for source, target in plan['dirs'])})" if plan["dirs"] else ""),
+    ]
+    lines += [f"  {name}/ file names lowercased: {per_tree[name]} of {plan['scanned'][name]} files"
+              for name in LOWERCASED_TREES]
+    lines += [f"    renamed {detail}" for detail in details[:DETAIL_LIMIT]]
+    if len(details) > DETAIL_LIMIT:
+        lines.append(f"    ... and {len(details) - DETAIL_LIMIT} more")
+    lines.append("  result: " + (f"{renamed} names renamed" if renamed else "already normalized, nothing to rename"))
+    emit(title, lines)
 
 
 def require_modules(game, facts):
@@ -200,15 +332,21 @@ def unpack(game, sealed, destination):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("pack", "unpack", "inventory"))
-    parser.add_argument("--game", choices=tuple(EXECUTABLE), required=True)
+    parser.add_argument("command", choices=("pack", "unpack", "inventory", "normalize-case"))
+    parser.add_argument("--game", choices=tuple(EXECUTABLE), help="required except for normalize-case")
     parser.add_argument("--game-dir", type=Path, required=True)
     parser.add_argument("--seal", type=Path)
-    parser.add_argument("--label", default="", help="inventory: lane name shown in the log and step summary")
+    parser.add_argument("--label", default="",
+                        help="inventory, normalize-case: lane name shown in the log and step summary")
     parser.add_argument("--require-modules", action="store_true",
                         help="inventory: exit nonzero when modules/ holds no .rim files")
     parser.add_argument("--quiet", action="store_true", help="inventory: print nothing, only set the exit status")
     args = parser.parse_args()
+    if args.command == "normalize-case":
+        normalize_case(args.game, args.game_dir, args.label)
+        return
+    if args.game is None:
+        parser.error(f"--game is required for {args.command}")
     if args.command == "inventory":
         if not args.game_dir.is_dir():
             raise SystemExit(f"{args.game} game directory is missing: {args.game_dir}")
