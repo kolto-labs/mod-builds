@@ -2,6 +2,7 @@
 """Private-source, fail-closed full-guide port runner (Python 3.11+)."""
 
 import argparse
+from cache import link_key
 import gui_diag
 import hashlib
 import json
@@ -331,16 +332,9 @@ INTERRUPTED = "command_interrupted_or_timed_out"
 
 
 def canonical_link(url):
-    """Guide link as cache.py keys it: query, fragment and userinfo dropped, host lowercased."""
-    text = str(url).strip()
-    try:
-        parts = urlsplit(text)
-        host = parts.hostname or ""
-        if parts.port:
-            host += ":" + str(parts.port)
-    except ValueError:
-        return text
-    return urlunsplit((parts.scheme, host, parts.path, "", ""))
+    """Guide link as cache.py keys it (cache.link_key): query, fragment and userinfo dropped, host lowercased;
+    a mega link identified only by its fragment keeps a digest of it."""
+    return link_key(url)
 
 
 def mapped_archives(path):

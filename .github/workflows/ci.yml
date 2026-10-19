@@ -184,6 +184,7 @@ jobs:
           status=0
           python tools/modsync-ci/cache.py refresh --cache-dir "$RUNNER_TEMP/mod-cache" \
             --cache-limit-bytes 2684354560 --emit-stage-manifest "$RUNNER_TEMP/stage-manifest.json" \
+            --stage-max-bytes 3221225472 --stage-total-bytes 9663676416 \
             "${remote[@]}" > "$RUNNER_TEMP/refresh-report.json" || status=$?
           python -c 'import collections,json,sys; print(dict(collections.Counter(e.get("status") for e in json.load(open(sys.argv[1]))["entries"])))' "$RUNNER_TEMP/refresh-report.json" || true
           exit "$status"

@@ -28,6 +28,7 @@ from urllib.request import HTTPCookieProcessor, Request, build_opener
 import zipfile
 
 
+MEGA_FRAGMENT_ROOT = "/modsync-fragment/"
 ARCHIVE = re.compile(r"\.(zip|7z|rar)$", re.I)
 LINK = re.compile(r'\[[^\]]*\]\(\s*(<[^>]+>|[^\s)]+)(?:\s+[^)]*)?\)|<((?:https?)://[^>]+)>|^\s*\[[^\]]+\]:\s*(\S+)', re.M)
 HTTP = build_opener(HTTPCookieProcessor(CookieJar()))
@@ -74,6 +75,23 @@ def clean_url(url):
     if parsed.port:
         host += ":" + str(parsed.port)
     return urlunsplit((parsed.scheme, host, parsed.path, "", ""))
+
+
+def link_key(url):
+    """Archive-map key of a guide link: clean_url, except that a mega link whose only identity is its
+    fragment (host root plus '#!ID!KEY' or '#F!ID!KEY') keeps it as a short sha256 digest in the path.
+    Distinct files then never share one key, and the key carries no decryption material.
+    ports.canonical_link is this function, so the writer and the readers of the map agree."""
+    text = str(url).strip()
+    try:
+        key = clean_url(text)
+        parsed = urlsplit(text)
+        if parsed.fragment and not parsed.path.strip("/") and provider(text)[0] == "mega":
+            digest = hashlib.sha256(parsed.fragment.encode()).hexdigest()[:16]
+            return urlunsplit(urlsplit(key)._replace(path=MEGA_FRAGMENT_ROOT + digest))
+    except ValueError:
+        return text
+    return key
 
 
 def key_for(url):
@@ -2056,20 +2074,26 @@ def main(argv=None):
     if args.report:
         atomic_json(args.report, report)
     if args.archive_map:
-        atomic_json(args.archive_map, archive_map(report))
+        atomic_json(args.archive_map, archive_map(report, {item["id"]: item["url"] for item in items}))
     print(json.dumps(report, indent=2, sort_keys=True))
     return 0 if report["ok"] else 1
 
 
-def archive_map(report):
-    mapping = {}
+def archive_map(report, links=None):
+    """{link key: file | [files]} for restored entries. `links` maps entry id to the full guide link, which
+    keeps the fragment that report urls drop. A bare host root shared by different files is left out."""
+    links = links or {}
+    mapping, claims = {}, {}
     for entry in report["entries"]:
         if entry.get("status") != "restored":
             continue
         names = [each["file"] for each in entry["files"]] if "files" in entry else [entry["file"]]
-        merged = mapping.setdefault(entry["url"], [])
+        url = link_key(links.get(entry.get("id"), entry["url"]))
+        merged = mapping.setdefault(url, [])
         merged.extend(name for name in names if name not in merged)
-    return {url: names[0] if len(names) == 1 else names for url, names in mapping.items()}
+        claims.setdefault(url, set()).add(tuple(names))
+    return {url: names[0] if len(names) == 1 else names for url, names in mapping.items()
+            if urlsplit(url).path.strip("/") or len(claims[url]) == 1}
 
 
 def safe_reason(error):

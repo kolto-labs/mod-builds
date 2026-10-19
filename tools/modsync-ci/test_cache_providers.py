@@ -2182,5 +2182,64 @@ class CommentFormRecaptchaTests(unittest.TestCase):
                                              '<div class="g-recaptcha" data-sitekey="k"></div>', cache.re.I))
 
 
+class SharedHostLinkKeyTests(unittest.TestCase):
+    ROOT_ONE = "https://mega.nz/#!AAAAAAAA!first-share-key-stand-in"
+    ROOT_TWO = "https://mega.nz/#!CCCCCCCC!second-share-key-stand-in"
+    FOLDER = "https://mega.nz/#F!DDDDDDDD!folder-share-key-stand-in"
+
+    def entry(self, url, name):
+        return {"id": cache.key_for(url), "status": "restored", "url": cache.clean_url(url), "file": name}
+
+    def links(self, *urls):
+        return {cache.key_for(url): url for url in urls}
+
+    def test_mega_root_links_with_different_fragments_keep_different_files(self):
+        urls = (self.ROOT_ONE, self.ROOT_TWO, self.FOLDER)
+        report = {"entries": [self.entry(url, name) for url, name in zip(urls, ("one.zip", "two.rar", "three.7z"))]}
+        mapping = cache.archive_map(report, self.links(*urls))
+        self.assertEqual(mapping, {cache.link_key(url): name for url, name in zip(urls, ("one.zip", "two.rar", "three.7z"))})
+        self.assertEqual(len(mapping), 3)
+        self.assertNotIn("https://mega.nz/", mapping)
+
+    def test_mega_root_keys_carry_a_digest_and_no_fragment_text(self):
+        key = cache.link_key(self.ROOT_ONE)
+        self.assertEqual(key, "https://mega.nz/modsync-fragment/"
+                         + hashlib.sha256(self.ROOT_ONE.split("#", 1)[1].encode()).hexdigest()[:16])
+        self.assertNotIn("AAAAAAAA", key)
+        self.assertNotIn("share-key", key)
+        self.assertNotEqual(key, cache.link_key(self.ROOT_TWO))
+        self.assertEqual(cache.link_key(key), key)
+        self.assertEqual(cache.link_key("HTTPS://Mega.NZ/" + self.ROOT_ONE.split("nz/", 1)[1]), key)
+
+    def test_mega_links_with_a_path_and_other_hosts_keep_the_plain_key(self):
+        self.assertEqual(cache.link_key(MEGA_URL), "https://mega.nz/file/AAAAAAAA")
+        self.assertEqual(cache.link_key(DS_DOWNLOAD), DS_PAGE)
+        self.assertEqual(cache.link_key("https://example.invalid/#section"), "https://example.invalid/")
+
+    def test_bare_host_url_shared_by_different_files_is_not_merged(self):
+        report = {"entries": [
+            {"status": "restored", "url": "https://mega.nz/", "file": "one.zip"},
+            {"status": "restored", "url": "https://mega.nz/", "file": "two.zip"},
+            {"status": "restored", "url": "https://mega.nz/", "file": "three.rar"},
+            {"status": "restored", "url": DS_PAGE, "file": "main_file.zip"}]}
+        self.assertEqual(cache.archive_map(report), {DS_PAGE: "main_file.zip"})
+
+    def test_bare_host_url_of_one_multi_file_link_is_kept(self):
+        report = {"entries": [{"status": "restored", "url": "https://example.invalid/",
+                               "files": [{"file": "a.zip"}, {"file": "b.zip"}]}]}
+        self.assertEqual(cache.archive_map(report), {"https://example.invalid/": ["a.zip", "b.zip"]})
+
+    def test_same_non_mega_url_still_merges_main_file_and_tab_files(self):
+        tab = DS_PAGE + "?tab=files"
+        report = {"entries": [self.entry(DS_PAGE, "main_file.zip"), self.entry(tab, "extra_file.zip")]}
+        self.assertEqual(cache.archive_map(report, self.links(DS_PAGE, tab)),
+                         {DS_PAGE: ["main_file.zip", "extra_file.zip"]})
+
+    def test_restore_writes_the_map_keyed_by_the_fragment_digest(self):
+        key = cache.link_key(self.ROOT_ONE)
+        report = {"entries": [self.entry(self.ROOT_ONE, "one.zip")]}
+        self.assertEqual(json.loads(json.dumps(cache.archive_map(report, self.links(self.ROOT_ONE)))), {key: "one.zip"})
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -164,6 +164,11 @@ python tools/modsync-ci/cache.py restore --guide content/<game>/full.md \
 
 `--archive-map <path>` (restore only) also writes `{guide link URL: restored filename
 or [filenames]}` for restored links, for `modsync convert --archive-map`.
+Keys carry no query or fragment, except for old-style mega links at the host root
+(`https://mega.nz/#!<id>!<key>`), which are keyed
+`https://mega.nz/modsync-fragment/<sha256(fragment)[:16]>` (`cache.link_key`) so distinct
+files never share a key and no share key is written to the map. A bare shared-host
+entry whose links map to different files is left unresolved on purpose.
 
 Install and manual jobs restore the Actions cache first (key
 `needs.mods.outputs.archive_cache_key`, else the `mod-archives-` prefix when `mods`
@@ -379,7 +384,8 @@ same host as the guide link; `file` is the filesystem-safe name restore writes;
 to `url` without fetching the landing page, and a download whose hash or size
 differs from the entry is rejected (re-review the entry). A link not yet
 in the cache is fetched from this URL by `restore` or `refresh`. The archive map
-key is the guide link without its query, as for every link.
+key is the guide link without its query or fragment, as for every link (see above for
+old-style mega links).
 
 ## Operator seed (Nexus Mods and GameFront)
 

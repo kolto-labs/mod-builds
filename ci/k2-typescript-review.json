@@ -3,27 +3,18 @@
   "reviewer": "delegated-by-owner (orchestrator, 2026-10-18)",
   "unresolved": [],
   "guide_sha256": "f442bdf574031623ed577609730d887069b9bc8e38e8e2f38ecc43a7e7487d5f",
-  "converted_sha256": "9bc0d5f951a64655dec905cf8c1d521db762641d0ca585121be484b846e04ba4",
+  "converted_sha256": "352db2e7bdf5aa4aceeff09791def383ebb86d1b0e0b1bbf64a1838f7c723b33",
   "components": [
     {
       "guid": "b6422393-ae5e-5224-ab84-d6a3e55501ef",
       "instructions": [
         {
           "Guid": "{E3BBC779-F8F0-53D0-A7A9-9F43F1F335B6}",
-          "Action": "Extract",
-          "Description": "auto-generated",
-          "Overwrite": true,
-          "Source": [
-            "<<modDirectory>>\\3C-FD Patcher*.{zip,rar,7z}"
-          ]
-        },
-        {
-          "Guid": "{09B997EE-ECBF-57EA-9C79-E9C3228C3FF0}",
           "Action": "Execute",
           "Description": "auto-generated",
           "Overwrite": true,
           "Source": [
-            "<<modDirectory>>\\3C-FD Patcher*\\*.exe"
+            "<<modDirectory>>\\3C-FD Patcher*.exe"
           ]
         }
       ],
@@ -32,7 +23,7 @@
       "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
       "unresolved": [],
       "choices": {
-        "09b997ee-ecbf-57ea-9c79-e9c3228c3ff0": "yes"
+        "e3bbc779-f8f0-53d0-a7a9-9f43f1f335b6": "yes"
       }
     },
     {
@@ -98,20 +89,11 @@
       "instructions": [
         {
           "Guid": "{FEB9697A-CF81-5FE0-8D9A-8BB7C32859D8}",
-          "Action": "Extract",
-          "Description": "auto-generated",
-          "Overwrite": true,
-          "Source": [
-            "<<modDirectory>>\\4GB Patcher*.{zip,rar,7z}"
-          ]
-        },
-        {
-          "Guid": "{5ACDA67D-77A3-5061-A53E-7E23A4B8A9FF}",
           "Action": "Execute",
           "Description": "auto-generated",
           "Overwrite": true,
           "Source": [
-            "<<modDirectory>>\\4GB Patcher*\\*.exe"
+            "<<modDirectory>>\\4GB Patcher*.exe"
           ]
         }
       ],
@@ -120,7 +102,7 @@
       "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
-        "5acda67d-77a3-5061-a53e-7e23a4b8a9ff": "yes"
+        "feb9697a-cf81-5fe0-8d9a-8bb7c32859d8": "yes"
       }
     },
     {
@@ -128,20 +110,11 @@
       "instructions": [
         {
           "Guid": "{0D525958-207A-539C-9ABC-F7F90DBB2336}",
-          "Action": "Extract",
-          "Description": "auto-generated",
-          "Overwrite": true,
-          "Source": [
-            "<<modDirectory>>\\TSLRCM*.{zip,rar,7z}"
-          ]
-        },
-        {
-          "Guid": "{BE9E32AA-541F-5BA4-B8DC-C1C49DD069DB}",
           "Action": "Execute",
           "Description": "auto-generated",
           "Overwrite": true,
           "Source": [
-            "<<modDirectory>>\\TSLRCM*\\*.exe"
+            "<<modDirectory>>\\TSLRCM*.exe"
           ]
         }
       ],
@@ -150,7 +123,7 @@
       "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
-        "be9e32aa-541f-5ba4-b8dc-c1c49dd069db": "yes"
+        "0d525958-207a-539c-9abc-f7f90dbb2336": "yes"
       }
     },
     {
@@ -168,12 +141,68 @@
         {
           "Guid": "{51A5C210-07D6-5AF3-BA71-CF760A908BC5}",
           "Action": "Patcher",
-          "Description": "auto-generated",
+          "Description": "auto-generated; multi-run 1 of 6 (namespace index 0)",
           "Overwrite": true,
           "Source": [
             "<<modDirectory>>\\TSLRCM Tweak Pack*"
           ],
-          "Destination": "<<kotorDirectory>>"
+          "Destination": "<<kotorDirectory>>",
+          "Arguments": "0"
+        },
+        {
+          "Guid": "{0F43B9E7-8658-59FA-83FA-D43D1D6E351A}",
+          "Action": "Patcher",
+          "Description": "auto-generated; multi-run 2 of 6 (namespace index 1)",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TSLRCM Tweak Pack*"
+          ],
+          "Destination": "<<kotorDirectory>>",
+          "Arguments": "1"
+        },
+        {
+          "Guid": "{1FF9E011-B3A8-5FBC-991D-AC23A722D1F5}",
+          "Action": "Patcher",
+          "Description": "auto-generated; multi-run 3 of 6 (namespace index 2)",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TSLRCM Tweak Pack*"
+          ],
+          "Destination": "<<kotorDirectory>>",
+          "Arguments": "2"
+        },
+        {
+          "Guid": "{08BA82E7-356D-570D-A5E9-891145970AD7}",
+          "Action": "Patcher",
+          "Description": "auto-generated; multi-run 4 of 6 (namespace index 3)",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TSLRCM Tweak Pack*"
+          ],
+          "Destination": "<<kotorDirectory>>",
+          "Arguments": "3"
+        },
+        {
+          "Guid": "{0C7BF0F5-561C-5CA9-803F-7E482200DD77}",
+          "Action": "Patcher",
+          "Description": "auto-generated; multi-run 5 of 6 (namespace index 4)",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TSLRCM Tweak Pack*"
+          ],
+          "Destination": "<<kotorDirectory>>",
+          "Arguments": "4"
+        },
+        {
+          "Guid": "{4BF821A9-3046-59C8-B191-CA540FE9505B}",
+          "Action": "Patcher",
+          "Description": "auto-generated; multi-run 6 of 6 (namespace index 5)",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\TSLRCM Tweak Pack*"
+          ],
+          "Destination": "<<kotorDirectory>>",
+          "Arguments": "5"
         }
       ],
       "options": [],
@@ -181,7 +210,12 @@
       "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
-        "51a5c210-07d6-5af3-ba71-cf760a908bc5": "0"
+        "51a5c210-07d6-5af3-ba71-cf760a908bc5": "0",
+        "0f43b9e7-8658-59fa-83fa-d43d1d6e351a": "0",
+        "1ff9e011-b3a8-5fbc-991d-ac23a722d1f5": "0",
+        "08ba82e7-356d-570d-a5e9-891145970ad7": "0",
+        "0c7bf0f5-561c-5ca9-803f-7e482200dd77": "0",
+        "4bf821a9-3046-59c8-b191-ca540fe9505b": "0"
       }
     },
     {
@@ -1445,7 +1479,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "95e82003-a040-53d5-b2bf-fa8c4d38362e": "0"
@@ -4232,7 +4266,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "fa1e23fe-01fb-5020-b451-eaf4d0ef0411": "0"
@@ -4341,13 +4375,22 @@
         },
         {
           "Guid": "{7837C6C3-82BB-5CCC-8B6A-5ED5A04EE3B4}",
-          "Action": "Patcher",
+          "Action": "Execute",
           "Description": "auto-generated",
           "Overwrite": true,
           "Source": [
-            "<<modDirectory>>\\Remove Duplicate TGATPC*"
+            "<<modDirectory>>\\Remove Duplicate TGATPC*\\*.bat"
+          ]
+        },
+        {
+          "Guid": "{11C9444E-D342-5529-B675-703E6C8DF169}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Remove Duplicate TGATPC*\\*"
           ],
-          "Destination": "<<kotorDirectory>>"
+          "Destination": "<<kotorDirectory>>\\Override"
         }
       ],
       "options": [],
@@ -4355,7 +4398,7 @@
       "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
       "unresolved": [],
       "choices": {
-        "7837c6c3-82bb-5ccc-8b6a-5ed5a04ee3b4": "0"
+        "7837c6c3-82bb-5ccc-8b6a-5ed5a04ee3b4": "yes"
       }
     },
     {
@@ -4481,22 +4524,12 @@
       "instructions": [
         {
           "Guid": "{08D35F22-3F9B-57AA-8D7B-147E433866DB}",
-          "Action": "Extract",
+          "Action": "Execute",
           "Description": "auto-generated",
           "Overwrite": true,
           "Source": [
-            "<<modDirectory>>\\K2 Remastered Cutscenes*.{zip,rar,7z}"
+            "<<modDirectory>>\\K2 Remastered Cutscenes*.exe"
           ]
-        },
-        {
-          "Guid": "{F94D8E90-101B-5ED2-B5D2-23AD7EDBD6BD}",
-          "Action": "Patcher",
-          "Description": "auto-generated",
-          "Overwrite": true,
-          "Source": [
-            "<<modDirectory>>\\K2 Remastered Cutscenes*"
-          ],
-          "Destination": "<<kotorDirectory>>"
         }
       ],
       "options": [],
@@ -4504,7 +4537,7 @@
       "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
       "unresolved": [],
       "choices": {
-        "f94d8e90-101b-5ed2-b5d2-23ad7edbd6bd": "0"
+        "08d35f22-3f9b-57aa-8d7b-147e433866db": "yes"
       }
     },
     {

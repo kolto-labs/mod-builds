@@ -1479,8 +1479,13 @@ class ArchiveAliasRuleTableTests(unittest.TestCase):
                     self.assertTrue(rule["reason"])
         self.assertEqual(
             sorted(rule["heading"] for rule in ports.load_archive_aliases("k2", SHIPPED_LANE_SKIPS).values()),
-            ["Handmaiden Fit Model", "Korriban Sith Art", "Relighting TSL", "Replacement Loadscreens",
-             "Ultimate Character Overhaul", "Ultimate Character Overhaul Patches"])
+            ["Bao-Dur/Darth Maul", "Handmaiden Fit Model", "Korriban Sith Art", "Relighting TSL",
+             "Replacement Loadscreens", "Ultimate Character Overhaul", "Ultimate Character Overhaul Patches",
+             "Worn-Out Mando Armor"])
+        self.assertEqual(
+            sorted(rule["heading"] for rule in ports.load_archive_aliases("k1", SHIPPED_LANE_SKIPS).values()),
+            ["HQ Skyboxes II", "Korriban Sith Art", "Ultimate Character Overhaul",
+             "Ultimate Character Overhaul Patches"])
 
 
 class LaneSkipTableTests(unittest.TestCase):
@@ -1549,9 +1554,12 @@ class LaneSkipTableTests(unittest.TestCase):
         self.assertEqual([(skip["section"], skip["heading"]) for skip in skips][:2], [FOUR_GB, ("Mod List", "TSLRCM")])
         self.assertEqual(len({skip["heading"] for skip in skips}), len(skips))
         self.assertIn("tslrcm2022.exe", skips[1]["reason"])
-        self.assertEqual(len(skips), 2 + 18)
+        self.assertEqual(len(skips), 2 + 18 + 2)
+        self.assertEqual([skip["heading"] for skip in skips][-2:],
+                         ["PFHC03 Restoration", "Alignment Affects Force Powers"])
         self.assertEqual([skip["heading"] for skip in ports.load_lane_skips("k1", SHIPPED_LANE_SKIPS, "typescript")],
-                         ["4GB Patcher"])
+                         ["4GB Patcher", "CineMalak", "Bendak Non-Darkside Option",
+                          "Alignment Affects Force Powers", "Character Startup Changes"])
 
     def test_shipped_reasons_are_the_generated_reviewed_text(self):
         for game in ("k1", "k2"):
@@ -3651,6 +3659,28 @@ class ArchiveAliasLaneTests(unittest.TestCase):
             with self.assertRaises(ports.Blocked):
                 ports.execute(args, report)
         alias.assert_not_called()
+
+
+class SharedHostMapKeyTests(unittest.TestCase):
+    ROOT_ONE = "https://mega.nz/#!AAAAAAAA!first-share-key-stand-in"
+    ROOT_TWO = "https://mega.nz/#!CCCCCCCC!second-share-key-stand-in"
+
+    def test_guide_links_and_archive_map_keys_agree_for_fragment_only_links(self):
+        self.assertNotEqual(ports.canonical_link(self.ROOT_ONE), ports.canonical_link(self.ROOT_TWO))
+        self.assertNotEqual(ports.canonical_link(self.ROOT_ONE), "https://mega.nz/")
+        self.assertEqual(ports.canonical_link(ports.canonical_link(self.ROOT_ONE)), ports.canonical_link(self.ROOT_ONE))
+        self.assertEqual(ports.canonical_link("https://mega.nz/file/AAAAAAAA#key-stand-in"),
+                         "https://mega.nz/file/AAAAAAAA")
+
+    def test_mapped_archives_keeps_each_fragment_only_link_on_its_own_file(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory, "archive-map.json")
+            path.write_text(json.dumps({ports.canonical_link(self.ROOT_ONE): "one.zip",
+                                        ports.canonical_link(self.ROOT_TWO): "two.rar"}), encoding="utf-8")
+            mapping = ports.mapped_archives(path)
+        self.assertEqual(mapping[ports.canonical_link(self.ROOT_ONE)], "one.zip")
+        self.assertEqual(mapping[ports.canonical_link(self.ROOT_TWO)], "two.rar")
+        self.assertEqual(ports.component_archive({"ResourceRegistry": {self.ROOT_TWO: {}}}, mapping), "two.rar")
 
 
 if __name__ == "__main__":

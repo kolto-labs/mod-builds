@@ -1279,6 +1279,30 @@
         "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
         "guid": "e75d7430-9865-8cbf-a574-773a147cabee",
         "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "CineMalak",
+        "reason": "visible policy skip: the guide installs this post as a Loose-File Mod (the download is the single loose N_DarthMalak01.tga, selections 2787, moved straight to Override), so there is no archive for the converted Extract step; the restored file is not an archive and is not aliased as one; nothing lists it as a dependency",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Bendak Non-Darkside Option",
+        "reason": "visible policy skip: the guide says this is not a file archive but a single pre-extracted file placed directly in Override (the Google Drive download is the loose tar02_duelorg021.dlg, tool_selections), so there is no archive for the converted Extract step; the restored file is not an archive and is not aliased as one; nothing lists it as a dependency",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Alignment Affects Force Powers",
+        "reason": "visible policy skip: the restored archive holds two sibling tslpatchdata variants (Main Install and Patch - K2 Force Powers for K1) and the guide names neither as the converted Patcher step's source, so the step cannot choose one and ModSync.ts reports an ambiguous tslpatchdata error; the Rust lane still installs it",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Character Startup Changes",
+        "reason": "visible policy skip: the restored archive contains only an Override/ folder of loose files and no tslpatchdata folder, but the converted instruction is a Patcher step, so ModSync.ts reports that no tslpatchdata folder was found and cannot apply it; the Rust lane still installs it",
+        "lane": "typescript"
       }
     ],
     "k2": [
@@ -2233,6 +2257,18 @@
         "heading": "Fixed Hologram Models",
         "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
         "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "PFHC03 Restoration",
+        "reason": "visible policy skip: the single restored archive (Effixians_PFHC03_Restoration.zip) holds two sibling tslpatchdata variants (Movie Style Sith Eyes and Vanilla Zombie) and the guide names neither, so the converted Patcher step cannot choose one and ModSync.ts reports an ambiguous tslpatchdata error; the Rust lane still installs it",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Alignment Affects Force Powers",
+        "reason": "visible policy skip: the restored archive holds two sibling tslpatchdata variants (Main Install and Patch - K2 Force Powers for K1) and the guide names neither as the converted Patcher step's source, so the step cannot choose one and ModSync.ts reports an ambiguous tslpatchdata error; the Rust lane still installs it",
+        "lane": "typescript"
       }
     ]
   },
@@ -2245,6 +2281,15 @@
           "Ultimate Character Overhaul -REDUX- ( LITE ) - TPC Version-1282-4-1-1628550322.rar"
         ],
         "reason": "guide: download just the main .tpc package and ignore the patches; the compatibility patches of nexus mods/1282?tab=files are the next step and share this link's canonical map key"
+      },
+      {
+        "heading": "Ultimate Character Overhaul Patches",
+        "guid": "3c1619b0-143a-5951-b461-350f13dac801",
+        "files": [
+          "JC_s Minor Fixes - Compatibility Patch-1282-4-1-1629713341.rar",
+          "KOTOR 1 Community Patch - Compatibility Patch-1282-4-1-1629713397.rar"
+        ],
+        "reason": "guide: install, in order, the compatch for JC's Minor Fixes and the one for the K1CP, both named; the guide also installs the remaining compatches that match content of this build, which is not determinable from the guide text, so only the named files are declared and the rest of the five files of nexus mods/1282?tab=files (Miscellaneous, JC's Mandalorian Armor advised against, Republic Soldier's New Shade skipped by name) are left out; the guide's per-file deletions (N_CommM02-08 and PLC_SSldCrps.tpc before moving to override) are not expressed by the converted Move step"
       },
       {
         "heading": "Korriban Sith Art",
@@ -2323,6 +2368,22 @@
           "relightingtsl_298TELk_1.0.zip"
         ],
         "reason": "guide: download and apply all files; the TSLRCM-only file is included because the build uses TSLRCM (same four files as selections 2752)"
+      },
+      {
+        "heading": "Bao-Dur/Darth Maul",
+        "guid": "9c676b12-fe2a-5bba-adc3-6e101b142ad1",
+        "files": [
+          "Bao-Dur - Darth Maul.rar"
+        ],
+        "reason": "guide: the single mega.nz download of this post; the converter's Extract glob drops the '/' of the heading (Bao-DurDarth Maul*) and cannot match, and the mega.nz link maps to several restored files (multi_file_map_entry), so the map evidence alone cannot choose; the restore report lists exactly this file as restored for the post"
+      },
+      {
+        "heading": "Worn-Out Mando Armor",
+        "guid": "def892ea-6e67-5fc7-8ee0-bb6fc8f13c8b",
+        "files": [
+          "Mandalorian Worn-Out Armour Reskin.rar"
+        ],
+        "reason": "guide: the single mega.nz download of this post (Mandalorian Worn-Out Armor); the converted Extract glob (Worn-Out Mando Armor*) shares no name with the file and the mega.nz link maps to several restored files (multi_file_map_entry), so the map evidence alone cannot choose; the restore report lists exactly this file as restored for the post"
       }
     ]
   }

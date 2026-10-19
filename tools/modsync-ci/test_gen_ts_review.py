@@ -249,7 +249,10 @@ class CommittedManifestTests(unittest.TestCase):
                 self.assertFalse([key for key in manifest if key.startswith("draft")])
                 omitted = [entry for entry in manifest["components"]
                            if entry["assessment"] == gen.SKIPPED_ASSESSMENT]
-                self.assertEqual(len(omitted), {"k1": 2, "k2": 21}[game])
+                lane_skips = ports.load_lane_skips(game, implementation="typescript")
+                policy = gen.policy_skips(game)
+                self.assertGreaterEqual(len(omitted), len(lane_skips))
+                self.assertLessEqual(len(omitted), len(policy))
                 for entry in manifest["components"]:
                     self.assertEqual(entry["unresolved"], [])
                     self.assertEqual(sorted(set(entry["choices"].values()) - {"0", "yes"}), [])

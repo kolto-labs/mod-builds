@@ -3,7 +3,7 @@
   "reviewer": "delegated-by-owner (orchestrator, 2026-10-18)",
   "unresolved": [],
   "guide_sha256": "44067788c6cb7a83b38d468817f273ce5cc901cd5e000c0f9ff65f8af15fc6ed",
-  "converted_sha256": "9e366c40a578ef9e14c986ec5bb5053d8a7ffaa8844a8050cce2de099f441cf3",
+  "converted_sha256": "353c5a49cd06caf3aa50e46442fcc9a32585647deb2e1500c504373c13b16b0e",
   "components": [
     {
       "guid": "eb3a5dc1-7e7d-50c3-a2fb-1b54aee37751",
@@ -59,7 +59,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "8754e234-db11-571a-841a-17e892525e44": "0"
@@ -1204,7 +1204,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {}
     },
@@ -4067,12 +4067,24 @@
         {
           "Guid": "{B64D7920-4953-5274-8E9B-B070AA42BF6A}",
           "Action": "Patcher",
-          "Description": "auto-generated",
+          "Description": "auto-generated; multi-run 1 of 2 (namespace index 0)",
           "Overwrite": true,
           "Source": [
             "<<modDirectory>>\\Crashed Republic Cruiser*"
           ],
-          "Destination": "<<kotorDirectory>>"
+          "Destination": "<<kotorDirectory>>",
+          "Arguments": "0"
+        },
+        {
+          "Guid": "{E70A6732-77D2-5A7B-92D4-41A60AA8AC60}",
+          "Action": "Patcher",
+          "Description": "auto-generated; multi-run 2 of 2 (namespace index 1)",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Crashed Republic Cruiser*"
+          ],
+          "Destination": "<<kotorDirectory>>",
+          "Arguments": "1"
         }
       ],
       "options": [],
@@ -4080,7 +4092,8 @@
       "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
       "unresolved": [],
       "choices": {
-        "b64d7920-4953-5274-8e9b-b070aa42bf6a": "0"
+        "b64d7920-4953-5274-8e9b-b070aa42bf6a": "0",
+        "e70a6732-77d2-5a7b-92d4-41a60aa8ac60": "0"
       }
     },
     {
@@ -4449,7 +4462,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {}
     },
@@ -5344,7 +5357,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "fa1e23fe-01fb-5020-b451-eaf4d0ef0411": "0"
@@ -5395,13 +5408,22 @@
         },
         {
           "Guid": "{7837C6C3-82BB-5CCC-8B6A-5ED5A04EE3B4}",
-          "Action": "Patcher",
+          "Action": "Execute",
           "Description": "auto-generated",
           "Overwrite": true,
           "Source": [
-            "<<modDirectory>>\\Remove Duplicate TGATPC*"
+            "<<modDirectory>>\\Remove Duplicate TGATPC*\\*.bat"
+          ]
+        },
+        {
+          "Guid": "{11C9444E-D342-5529-B675-703E6C8DF169}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\Remove Duplicate TGATPC*\\*"
           ],
-          "Destination": "<<kotorDirectory>>"
+          "Destination": "<<kotorDirectory>>\\Override"
         }
       ],
       "options": [],
@@ -5409,7 +5431,7 @@
       "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
       "unresolved": [],
       "choices": {
-        "7837c6c3-82bb-5ccc-8b6a-5ed5a04ee3b4": "0"
+        "7837c6c3-82bb-5ccc-8b6a-5ed5a04ee3b4": "yes"
       }
     },
     {
@@ -5535,20 +5557,11 @@
       "instructions": [
         {
           "Guid": "{FEB9697A-CF81-5FE0-8D9A-8BB7C32859D8}",
-          "Action": "Extract",
-          "Description": "auto-generated",
-          "Overwrite": true,
-          "Source": [
-            "<<modDirectory>>\\4GB Patcher*.{zip,rar,7z}"
-          ]
-        },
-        {
-          "Guid": "{5ACDA67D-77A3-5061-A53E-7E23A4B8A9FF}",
           "Action": "Execute",
           "Description": "auto-generated",
           "Overwrite": true,
           "Source": [
-            "<<modDirectory>>\\4GB Patcher*\\*.exe"
+            "<<modDirectory>>\\4GB Patcher*.exe"
           ]
         }
       ],
@@ -5557,7 +5570,7 @@
       "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
-        "5acda67d-77a3-5061-a53e-7e23a4b8a9ff": "yes"
+        "feb9697a-cf81-5fe0-8d9a-8bb7c32859d8": "yes"
       }
     },
     {
@@ -5603,13 +5616,22 @@
         },
         {
           "Guid": "{7FD1AAE8-339A-5C93-BAC9-516291EAEA29}",
-          "Action": "Patcher",
+          "Action": "Execute",
           "Description": "auto-generated",
           "Overwrite": true,
           "Source": [
-            "<<modDirectory>>\\HR Menus*"
+            "<<modDirectory>>\\HR Menus*\\*.bat"
+          ]
+        },
+        {
+          "Guid": "{B90B73D8-3F8C-5EDE-ADEC-D0E010A35E2D}",
+          "Action": "Move",
+          "Description": "auto-generated",
+          "Overwrite": true,
+          "Source": [
+            "<<modDirectory>>\\HR Menus*\\*"
           ],
-          "Destination": "<<kotorDirectory>>"
+          "Destination": "<<kotorDirectory>>\\Override"
         }
       ],
       "options": [],
@@ -5617,7 +5639,7 @@
       "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
       "unresolved": [],
       "choices": {
-        "7fd1aae8-339a-5c93-bac9-516291eaea29": "0"
+        "7fd1aae8-339a-5c93-bac9-516291eaea29": "yes"
       }
     },
     {

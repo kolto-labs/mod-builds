@@ -119,8 +119,12 @@ before `ports.py`. Each report entry has a `source` (`local`, `revalidated`,
 `recovered`, `website`, `stale-local`). `.bik` is never cached. The install job's
 restore also writes
 `$RUNNER_TEMP/archive-map.json` (`cache.py restore --archive-map`): a flat
-`{guide link URL: filename | [filenames]}` object, URLs without query or fragment,
-filenames relative to the archives directory, restored links only. `ports.py
+`{guide link URL: filename | [filenames]}` object, URLs without query or fragment
+(one exception: an old-style mega link at the host root, whose only identity is its
+fragment, is keyed `https://mega.nz/modsync-fragment/<sha256(fragment)[:16]>`, so the
+key carries no share key; see `cache.link_key`), filenames relative to the archives
+directory, restored links only. `ports.py` looks links up with the same key. A bare
+shared-host entry that maps to different files is left unresolved on purpose. `ports.py
 --archive-map` passes it to the Rust `modsync convert --archive-map`; the
 TypeScript lanes ignore it. A guide link that is uncached by policy
 (Nexus Mods, GameFront and the K2 cutscene post, reported as `uncached-by-policy`;
