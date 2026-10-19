@@ -126,6 +126,14 @@ EVIDENCE_LINE_WIDTH = 600
 ERROR_LINE = re.compile(r"(?:\bError|\bException):|\[Error\]")
 STOP_MARKER = re.compile(r"(?:install(?:ation)?|cli command)\s+stopped", re.IGNORECASE)
 FAILURE_WORDS = re.compile(r"error|failed", re.IGNORECASE)
+VALIDATE_EVIDENCE_MAX_BYTES = 128 * 1024
+VALIDATE_DOWNLOAD_KINDS = frozenset(("missing-source", "missing-archive"))
+VALIDATE_SECTION = re.compile(r"^(?P<severity>[A-Za-z]+) \((?P<count>\d+)\)\s*$")
+VALIDATE_ERROR_TAG = re.compile(r"^\s*\[(?:patcher-error|missing-source|missing-archive)\]\s")
+VALIDATE_COMPONENT_ERROR = re.compile(
+    r"^\s*\[(?P<kind>patcher-error|missing-source|missing-archive)\]\s+"
+    r"(?P<component>.+?): (?P=component)"
+    r"(?: / (?P<action>[^\s(:]+)(?: \((?P<detail>.*?)\))?)?: (?P<message>.*?)\s*$")
 COMPONENT_FAILURE = re.compile(
     r"(?:Error|Exception): (?:Install stopped\. Restore before retrying; snapshot: .+?: )?"
     r"(?P<component>.+?) / step (?P<step>\d+) "
@@ -220,24 +228,126 @@ def parse_component_failure(text):
     return None if found is None else component_failure_fields(found)
 
 
+def validate_error_lines(text):
+    """Every error-severity line of a TypeScript `validate` report, in order.
+
+    The report groups lines under `ERROR (n)` / `INFO (n)` headings: everything under an ERROR
+    heading is an error line, and a tagged line (`[patcher-error]`, `[missing-source]`,
+    `[missing-archive]`) is one wherever no other severity heading is in force. The `FAILED:`
+    trailer closes the section. Nothing is dropped by count, only by the caller's byte cap.
+    """
+    lines = []
+    severity = None
+    for raw in text.splitlines():
+        line = ANSI_ESCAPE.sub("", raw).rstrip()
+        section = VALIDATE_SECTION.match(line)
+        if section:
+            severity = section.group("severity").upper()
+            continue
+        if line.startswith("FAILED"):
+            severity = None
+            continue
+        if not line.strip():
+            continue
+        if VALIDATE_ERROR_TAG.match(line):
+            if severity is None or severity.startswith("ERROR"):
+                lines.append(line)
+        elif severity is not None and severity.startswith("ERROR"):
+            lines.append(line)
+    return lines
+
+
+def validate_error_excerpt(text, max_bytes=VALIDATE_EVIDENCE_MAX_BYTES):
+    """All validate error-severity lines, scrubbed, capped by bytes (not by line count)."""
+    lines = [clean_line(line) for line in validate_error_lines(text)]
+    kept = []
+    used = 0
+    for index, line in enumerate(lines):
+        size = len(line.encode("utf-8")) + 1
+        if used + size > max_bytes:
+            kept.append(f"[{len(lines) - index} further error line(s) omitted: {max_bytes} byte evidence cap]")
+            break
+        kept.append(line)
+        used += size
+    return kept
+
+
+def parse_validate_errors(text):
+    """(failures, unattributed) of a validate report's error lines.
+
+    A failure is a `[kind] <Component>: <Component> / <Action> (<detail>): <message>` line; its step
+    is None. An error line of any other shape (a global or ambiguous error) is returned as-is
+    in `unattributed`.
+    """
+    failures = []
+    unattributed = []
+    for line in validate_error_lines(text):
+        match = VALIDATE_COMPONENT_ERROR.match(line)
+        if match is None:
+            unattributed.append(clean_line(line))
+            continue
+        failures.append({
+            "component": match.group("component").strip(), "step": None,
+            "action": match.group("action"), "kind": match.group("kind"),
+            "message": clean_line(match.group("message")),
+            "error_line": clean_line(line.strip())})
+    return failures, unattributed
+
+
+def distinct_failures(failures):
+    """The first failure of each distinct component name (case-insensitive), in order."""
+    found = {}
+    for item in failures:
+        found.setdefault(item["component"].casefold(), item)
+    return list(found.values())
+
+
+def failure_location(failure):
+    """Where a recorded failure happened, for the CI log."""
+    if failure.get("component"):
+        step = f", step {failure['step']}" if failure.get("step") is not None else ""
+        action = f" ({failure['action']})" if failure.get("action") else ""
+        return f"component '{failure['component']}'{step}{action}"
+    names = failure.get("components")
+    if names:
+        shown = ", ".join(f"'{clean_line(name)}'" for name in names[:5])
+        more = f" and {len(names) - 5} more" if len(names) > 5 else ""
+        return f"{len(names)} component(s) attributed ({shown}{more})"
+    return "no component could be attributed"
+
+
 def record_failure(text, stage, code, report, print_excerpt=False):
     """Write the failing component/step into the lane report and, optionally, the excerpt into the CI log."""
     failure = {"stage": stage, "exit_code": code, "component": None, "step": None,
                "action": None, "error_line": None}
     parsed = parse_component_failure(text)
+    tagged, unattributed = parse_validate_errors(text) if stage.startswith("validate") else ([], [])
     if parsed:
         failure.update(parsed)
+    if tagged:
+        names = [item["component"] for item in distinct_failures(tagged)]
+        failure["components"] = names
+        failure["error_line_count"] = len(tagged) + len(unattributed)
+        if not parsed and len(names) == 1:
+            first = tagged[0]
+            failure.update({"component": first["component"], "action": first["action"],
+                            "error_line": first["error_line"]})
     report["failure"] = failure
     if print_excerpt:
         excerpt = failure_excerpt(text)
+        if stage.startswith("validate"):
+            excerpt += validate_error_excerpt(text)
         print(f"::group::{stage} failure evidence (bounded excerpt, {len(excerpt)} lines)",
               file=sys.stderr)
-        print("\n".join(excerpt) if excerpt else "(no Error/Exception line or install-stopped marker in the output)",
+        print("\n".join(excerpt) if excerpt
+              else "(no Error/Exception line or install-stopped marker in the output)",
               file=sys.stderr)
         print("::endgroup::", file=sys.stderr)
         if parsed:
             print(f"ports: {stage} failed at component '{parsed['component']}', step {parsed['step']} "
                   f"({parsed['action']})", file=sys.stderr)
+        elif failure.get("component") or failure.get("components"):
+            print(f"ports: {stage} failed at {failure_location(failure)}", file=sys.stderr)
     return failure
 
 
@@ -364,15 +474,45 @@ def component_archive(component, mapping):
     return names.pop() if len(names) == 1 and None not in names else None
 
 
-def resolved_archive_bindings(converted, mapping, archives):
-    """--resolved-archives entries for components whose links map to exactly one archive present in `archives`."""
+def component_heading(component):
+    """The guide `###` heading: the Rust converter keeps it as `Heading` when the Name field differs."""
+    heading = component.get("Heading", component.get("Name"))
+    return heading if isinstance(heading, str) else None
+
+
+def declared_archive(component, headings, rules, archives):
+    """The one file of the reviewed `archive_aliases` rule for this component's heading, else None.
+
+    The Rust converter derives GUIDs differently from the TypeScript one, so the rule (keyed by
+    the TypeScript GUID) is found by the guide heading, which must identify exactly one component.
+    Only a single-file rule for a component without instructions applies, so the binding keeps its
+    sha256/size check; the file must be a restored archive.
+    """
+    heading = component_heading(component)
+    rule = rules.get(heading)
+    if (rule is None or headings.get(heading) != 1 or component.get("Instructions")
+            or len(rule["files"]) != 1 or alias_file_problem(archives, rule["files"][0])):
+        return None
+    return rule["files"][0]
+
+
+def resolved_archive_bindings(converted, mapping, archives, rules=None):
+    """--resolved-archives entries for components whose links map to exactly one archive present in `archives`.
+
+    A component the map cannot resolve falls back to its reviewed `archive_aliases` rule
+    (`load_archive_aliases`), matched by heading (`declared_archive`).
+    """
     components = components_of(converted)
-    seen = {}
+    seen, headings = {}, {}
     for component in components:
         seen[component.get("Guid")] = seen.get(component.get("Guid"), 0) + 1
+        headings[component_heading(component)] = headings.get(component_heading(component), 0) + 1
+    by_heading = {rule["heading"]: rule for rule in (rules or {}).values()}
     bindings = []
     for component in components:
         guid, name = component.get("Guid"), component_archive(component, mapping)
+        if name is None and by_heading:
+            name = declared_archive(component, headings, by_heading, archives)
         if (not isinstance(guid, str) or not guid or seen[guid] != 1 or name is None
                 or not 0 < len(name) <= 255 or name in (".", "..") or BIND_UNSAFE_NAME.search(name)
                 or not name.lower().endswith(BIND_SUFFIXES)):
@@ -415,7 +555,8 @@ def bound_result(before, after):
                if (item.get("DraftReview") or {}).get("Generator") == BIND_GENERATOR), None
 
 
-def bind_archives(command, source, guide, converted, archives, archive_map, private, report, env):
+def bind_archives(command, source, guide, converted, archives, archive_map, private, report, env,
+                  rules=None):
     """Bind method-only loose-file components to their one mapped archive (convert --resolved-archives).
 
     --resolved-archives only touches components without instructions and conflicts with
@@ -430,7 +571,7 @@ def bind_archives(command, source, guide, converted, archives, archive_map, priv
         return converted
     try:
         bindings = resolved_archive_bindings(
-            converted, mapped_archives(archive_map.resolve(strict=True)), archives)
+            converted, mapped_archives(archive_map.resolve(strict=True)), archives, rules)
     except (OSError, ValueError, AttributeError):
         review["bind_failed"] = "archive_map_unreadable"
         return converted
@@ -1122,9 +1263,44 @@ def read_stage_log(private, stage, report):
     return text, code
 
 
+def attribute_validate_failures(text, components, deselect, report, stage, failure):
+    """The distinct failing components a validate log names, or a recorded quarantine stop.
+
+    A log with no tagged lines keeps the one-component rule (the last `Error: <Component> /
+    step N (<Action>)` line). A log with tagged lines (`[patcher-error]`, `[missing-source]`,
+    `[missing-archive]`) names every failing component in one pass. Nothing is attributed, and
+    nothing quarantined, when any error line has another shape (a global or ambiguous error), when a
+    missing download is not already covered by the reviewed policy, or when a tagged line's action
+    is not in INSTALL_QUARANTINE_ACTIONS.
+    """
+    tagged, unattributed = parse_validate_errors(text)
+    if not tagged:
+        parsed = parse_component_failure(text)
+        if parsed is None:
+            quarantine_stop(report, "validate", stage, "error_not_attributable", None, failure)
+        return [parsed]
+    if unattributed:
+        quarantine_stop(report, "validate", stage, "unattributed_error_lines", None, failure)
+    taken = deselected_guids(deselect)
+    candidates = []
+    for item in tagged:
+        if item["kind"] in VALIDATE_DOWNLOAD_KINDS:
+            match, _ = find_failing_component(components, item["component"])
+            if match is not None and match[0] in taken:
+                continue
+            quarantine_stop(report, "validate", stage, "missing_download_not_quarantinable", item, failure)
+        if (item["action"] or "").casefold() not in INSTALL_QUARANTINE_ACTIONS:
+            quarantine_stop(report, "validate", stage, "action_not_quarantinable", item, failure)
+        candidates.append(item)
+    candidates += parse_component_failures(text)
+    if not candidates:
+        quarantine_stop(report, "validate", stage, "error_not_attributable", None, failure)
+    return distinct_failures(candidates)
+
+
 def validate_with_quarantine(command, directories, deselect, converted, game, source, private, report,
                              env, max_iterations=QUARANTINE_MAX_ITERATIONS,
-                             max_fraction=QUARANTINE_MAX_FRACTION):
+                             max_fraction=QUARANTINE_MAX_FRACTION, arguments=None, selectable=None):
     """Run `validate`; quarantine each component it names as failing and re-run, visibly and bounded.
 
     `deselect` is the --deselect flag list shared with install and the GUI driver; quarantined
@@ -1134,8 +1310,21 @@ def validate_with_quarantine(command, directories, deselect, converted, game, so
     the iteration cap nor max_fraction of the selected components would be exceeded. Anything
     else leaves the lane failed. Every quarantined component is listed in
     report["quarantined_validate_failures"].
+
+    When the log is a TypeScript validate report, every distinct component its tagged error lines
+    name is quarantined in the same pass, one `quarantine_failure` per component against the same
+    budget, all or none (a refused pass rolls back what it had recorded and deselected). The
+    pass is refused as a whole for global or ambiguous errors, for missing downloads, and for
+    actions outside INSTALL_QUARANTINE_ACTIONS (see `attribute_validate_failures`).
+
+    `arguments(deselect)` replaces `directories + deselect` as the validate arguments (TypeScript
+    selects with --select, not --deselect) and `selectable` limits the components the budget and
+    the name lookup see to those GUIDs.
     """
     components = converted_components(converted)
+    if selectable is not None:
+        components = [component for component in components
+                      if normalized_reference(component.get("Guid")) in selectable]
     report.setdefault(QUARANTINE_KEY, [])
     start_quarantine(components, deselect, report, max_iterations, max_fraction)
     policy = report["quarantine"]
@@ -1144,16 +1333,27 @@ def validate_with_quarantine(command, directories, deselect, converted, game, so
         stage = "validate" if iterations == 0 else f"validate_retry_{iterations}"
         policy["attempts"] = iterations + 1
         try:
-            run(command + ["validate"] + directories + deselect, source, private, stage, report, env)
+            run(command + ["validate"] + (arguments(deselect) if arguments else directories + deselect),
+                source, private, stage, report, env)
         except Blocked as failure:
             if str(failure) != stage + "_failed":
                 raise
             text, code = read_stage_log(private, stage, report)
-            parsed = parse_component_failure(text)
             record_failure(text, stage, code, report)
-            if parsed is None:
-                quarantine_stop(report, "validate", stage, "error_not_attributable", None, failure)
-            quarantine_failure("validate", parsed, stage, components, deselect, game, report, failure)
+            failing = attribute_validate_failures(text, components, deselect, report, stage, failure)
+            recorded = list(report[QUARANTINE_KEY])
+            flags = list(deselect)
+            already = deselected_guids(deselect)
+            try:
+                for parsed in failing:
+                    match, _ = find_failing_component(components, parsed["component"])
+                    if match is not None and match[0] in deselected_guids(deselect) - already:
+                        continue
+                    quarantine_failure("validate", parsed, stage, components, deselect, game, report, failure)
+            except Blocked:
+                report[QUARANTINE_KEY][:] = recorded
+                deselect[:] = flags
+                raise
             iterations += 1
             continue
         report.pop("failure", None)
@@ -1353,8 +1553,9 @@ def print_diagnostics(report):
               f"{outcome}, so a green lane is a PARTIAL install", file=sys.stderr)
         for item in quarantined:
             if item["kind"] == settings["kind"]:
+                at_step = f" at step {item['step']}" if item["step"] is not None else ""
                 print(f"::warning::ports: quarantined {item['name']} [{item['component_guid']}]: "
-                      f"{phase} failed at step {item['step']} ({item['action']}): {item['error_line']}",
+                      f"{phase} failed{at_step} ({item['action']}): {item['error_line']}",
                       file=sys.stderr)
             else:
                 print(f"::warning::ports: quarantined {item['name']} [{item['component_guid']}]: "
@@ -1370,8 +1571,7 @@ def print_diagnostics(report):
               + (f": {stopped['error_line']}" if stopped.get("error_line") else ""), file=sys.stderr)
     failure = report.get("failure")
     if failure and report.get("status") != "installed":
-        where = (f"component '{failure['component']}', step {failure['step']} ({failure['action']})"
-                 if failure.get("component") else "no component could be attributed")
+        where = failure_location(failure)
         print(f"::error::ports: {failure['stage']} failed (exit {failure['exit_code']}): {where}",
               file=sys.stderr)
     uncovered = report.get("steps_without_instructions")
@@ -1836,7 +2036,8 @@ def execute(args, report):
             record_convert_skips(private / "convert.log", report)
         reviewed = private / "converted-reviewed.toml"
         review_input = bind_archives(command, source, guide, converted, archives,
-                                     args.archive_map, private, report, env)
+                                     args.archive_map, private, report, env,
+                                     load_archive_aliases(guide.parent.name))
         try:
             run(command + ["convert", str(review_input), str(reviewed), "--format", "toml",
                            "--source-path", str(archives), "--review-verified-drafts"],
@@ -1902,10 +2103,29 @@ def execute(args, report):
         report["installable_component_count"] = len(installable)
         alias_archives(converted, args.archive_map, archives, set(installable), report,
                        load_archive_aliases(guide.parent.name))
-        directories = [str(converted), "--kotor", str(game),
-                       "--mods", str(archives), "--select", ",".join(installable)]
-        run(command + ["validate"] + directories,
-            source, private, "validate", report, env)
+        def validate_arguments(taken):
+            blocked = deselected_guids(taken)
+            chosen = [each for each in installable if normalized_reference(each) not in blocked]
+            return [str(converted), "--kotor", str(game),
+                    "--mods", str(archives), "--select", ",".join(chosen)]
+
+        directories = validate_arguments(deselect)
+        validate_with_quarantine(
+            command, directories, deselect, converted, game, source, private, report, env,
+            getattr(args, "max_quarantine", QUARANTINE_MAX_ITERATIONS),
+            getattr(args, "max_quarantine_fraction", QUARANTINE_MAX_FRACTION),
+            arguments=validate_arguments,
+            selectable={normalized_reference(each) for each in installable})
+        quarantined_guids = {item["component_guid"] for item in quarantined_entries(report)}
+        if quarantined_guids:
+            report["installable_before_quarantine_count"] = len(installable)
+            installable = [each for each in installable
+                           if normalized_reference(each) not in quarantined_guids]
+            report["installable_component_count"] = len(installable)
+            directories = validate_arguments(deselect)
+            selected_input = private / "converted-policy.toml"
+            report["selected_after_policy_count"] = select_base_components(
+                converted, policy_guids | quarantined_guids, selected_input)
         if args.mode == "gui":
             if (digest(guide) != report["guide_sha256"]
                     or digest(converted) != report["converted_sha256"]):
@@ -2054,11 +2274,12 @@ def main(argv=None):
                              "TypeScript --select of the rest). Both implementations also apply the reviewed "
                              "lane_skips of archive_selections.json (TypeScript: the unpinned entries only)")
     parser.add_argument("--max-quarantine", type=int, default=QUARANTINE_MAX_ITERATIONS,
-                        help="Rust lanes: most validate and install failures together to quarantine "
+                        help="most validate and install failures together to quarantine (Rust), or validate "
+                             "failures (TypeScript) "
                              "(deselect and re-run) before the lane fails; 0 disables quarantine "
                              "(default %(default)s)")
     parser.add_argument("--max-quarantine-fraction", type=float, default=QUARANTINE_MAX_FRACTION,
-                        help="Rust lanes: most quarantined components (validate and install failures plus "
+                        help="most quarantined components (validate and install failures plus "
                              "dependents) as a fraction of the selected components (default %(default)s)")
     for name in ("source", "guide", "game-dir", "archives", "work-dir", "report"):
         parser.add_argument("--" + name, type=Path, required=True)

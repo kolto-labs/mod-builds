@@ -2269,6 +2269,12 @@
         "heading": "Alignment Affects Force Powers",
         "reason": "visible policy skip: the restored archive holds two sibling tslpatchdata variants (Main Install and Patch - K2 Force Powers for K1) and the guide names neither as the converted Patcher step's source, so the step cannot choose one and ModSync.ts reports an ambiguous tslpatchdata error; the Rust lane still installs it",
         "lane": "typescript"
+      },
+      {
+        "section": "Enhanced Widescreen Support Mods",
+        "heading": "K2 Remastered Cutscenes",
+        "reason": "visible policy skip: the restored archive set is two zips whose combination is unknown, and the converted Execute step's exe glob (K2 Remastered Cutscenes*.exe) matches no restored file, so ModSync.ts reports 'executable not found'; the Rust lane keeps its own handling",
+        "lane": "typescript"
       }
     ]
   },

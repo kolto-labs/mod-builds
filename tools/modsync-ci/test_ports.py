@@ -1227,6 +1227,55 @@ class ArchiveBindingTests(unittest.TestCase):
         blocks = [linked("Mod One", BIND_ONE, LINK_ONE), linked("Mod Again", BIND_ONE, LINK_ONE)]
         self.assertEqual(self.bindings(blocks, mapping, one_zip=b"one"), [])
 
+    def declared_bindings(self, rule_files, blocks, mapping=None, **files):
+        archives = self.archives(**files)
+        path = self.write(document(*blocks))
+        rules = {"90000000-0000-0000-0000-000000000001": {
+            "heading": "Guide Heading", "guid": "90000000-0000-0000-0000-000000000001",
+            "files": rule_files, "reason": "reviewed"}}
+        return ports.resolved_archive_bindings(path, mapping or {}, archives, rules)
+
+    def heading_block(self, guid, name="Name Field", heading="Guide Heading", instructed=False, **links):
+        block = component(name, guid, Heading='"' + heading + '"',
+                          ResourceRegistry="{" + ", ".join('"' + link + '" = {}' for link in links.values()) + "}")
+        return block if instructed else block[:block.index("[[thisMod.Instructions]]")]
+
+    def test_a_reviewed_alias_binds_by_heading_when_the_map_cannot_choose(self):
+        blocks = [self.heading_block(BIND_ONE, one=LINK_ONE)]
+        mapping = {ports.canonical_link(LINK_ONE): None}
+        content = b"Rar!\x1a\x07generic"
+        self.assertEqual(self.declared_bindings(["generic.rar"], blocks, mapping, generic_rar=content), [{
+            "componentGuid": BIND_ONE, "filenames": ["generic.rar"],
+            "sha256": hashlib.sha256(content).hexdigest(), "sizeBytes": len(content)}])
+
+    def test_a_reviewed_alias_never_binds_an_unsafe_or_ambiguous_component(self):
+        mapping = {ports.canonical_link(LINK_ONE): None}
+        good = b"PK\x03\x04generic"
+        cases = {
+            "several files": (["generic.zip", "other.zip"], [self.heading_block(BIND_ONE, one=LINK_ONE)],
+                              dict(generic_zip=good, other_zip=good)),
+            "has instructions": (["generic.zip"], [self.heading_block(BIND_ONE, instructed=True, one=LINK_ONE)],
+                                 dict(generic_zip=good)),
+            "heading shared": (["generic.zip"], [self.heading_block(BIND_ONE, one=LINK_ONE),
+                                                 self.heading_block(BIND_TWO, name="Other", one=LINK_TWO)],
+                               dict(generic_zip=good)),
+            "heading differs": (["generic.zip"], [self.heading_block(BIND_ONE, heading="Other Heading",
+                                                                    one=LINK_ONE)], dict(generic_zip=good)),
+            "file missing": (["generic.zip"], [self.heading_block(BIND_ONE, one=LINK_ONE)], {}),
+            "not an archive": (["generic.zip"], [self.heading_block(BIND_ONE, one=LINK_ONE)],
+                               dict(generic_zip=b"text")),
+        }
+        for label, (rule_files, blocks, files) in cases.items():
+            with self.subTest(label):
+                self.assertEqual(self.declared_bindings(rule_files, blocks, mapping, **files), [])
+
+    def test_a_mapped_archive_wins_over_a_reviewed_alias(self):
+        blocks = [self.heading_block(BIND_ONE, one=LINK_ONE)]
+        mapping = {ports.canonical_link(LINK_ONE): "mapped.zip"}
+        found = self.declared_bindings(["generic.zip"], blocks, mapping,
+                                       mapped_zip=b"PK\x03\x04m", generic_zip=b"PK\x03\x04g")
+        self.assertEqual([item["filenames"] for item in found], [["mapped.zip"]])
+
     def test_bound_result_counts_bound_components_and_accepts_the_normal_changes(self):
         before = self.write(document(linked("Mod One", BIND_ONE, LINK_ONE, instructed=False),
                                      linked("Mod Two", BIND_TWO, LINK_TWO)))
@@ -1554,9 +1603,9 @@ class LaneSkipTableTests(unittest.TestCase):
         self.assertEqual([(skip["section"], skip["heading"]) for skip in skips][:2], [FOUR_GB, ("Mod List", "TSLRCM")])
         self.assertEqual(len({skip["heading"] for skip in skips}), len(skips))
         self.assertIn("tslrcm2022.exe", skips[1]["reason"])
-        self.assertEqual(len(skips), 2 + 18 + 2)
-        self.assertEqual([skip["heading"] for skip in skips][-2:],
-                         ["PFHC03 Restoration", "Alignment Affects Force Powers"])
+        self.assertEqual(len(skips), 2 + 18 + 3)
+        self.assertEqual([skip["heading"] for skip in skips][-3:],
+                         ["PFHC03 Restoration", "Alignment Affects Force Powers", "K2 Remastered Cutscenes"])
         self.assertEqual([skip["heading"] for skip in ports.load_lane_skips("k1", SHIPPED_LANE_SKIPS, "typescript")],
                          ["4GB Patcher", "CineMalak", "Bendak Non-Darkside Option",
                           "Alignment Affects Force Powers", "Character Startup Changes"])
@@ -2434,11 +2483,14 @@ class ValidateQuarantineTests(unittest.TestCase):
         self.assertEqual(self.deselected(staged["validate_retry_1"]), [quarantine_guid(5)])
         self.assertEqual(self.deselected(staged["gui"]), [quarantine_guid(5)])
 
-    def test_the_typescript_lane_never_quarantines(self):
+    def run_helper_typescript_lane(self, log, populated):
         root, args = self.prepare("k1")
+        args.max_quarantine_fraction = 0.5
         args.guide.write_text(GUIDE_WITH_HELPER, encoding="utf-8")
         args.implementation = "typescript"
         args.review_manifest = root / "review.json"
+        if populated:
+            (args.game_dir / "chitin.key").write_text("x", encoding="utf-8")
         commands = []
 
         def fake_run(command, source, private, stage, report, env):
@@ -2447,16 +2499,34 @@ class ValidateQuarantineTests(unittest.TestCase):
                 (private / "converted.toml").write_text(helper_document(movies_instructions=True),
                                                         encoding="utf-8")
             if stage == "validate":
-                (private / "validate.log").write_text(validate_error("Mod One"), encoding="utf-8")
+                (private / "validate.log").write_text(log, encoding="utf-8")
                 raise ports.Blocked("validate_failed")
 
         report = {"commands": []}
+        error = None
         with mock.patch.object(ports, "run", fake_run), \
                 mock.patch.object(ports, "review_manifest", lambda *arguments: []):
-            with self.assertRaisesRegex(ports.Blocked, "^validate_failed$"):
+            try:
                 ports.execute(args, report)
-        self.assertEqual([stage for stage in commands if stage.startswith("validate")], ["validate"])
-        self.assertNotIn("quarantined_validate_failures", report)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        return commands, report, error
+
+    def test_the_typescript_lane_quarantines_only_a_single_attributed_failure_in_a_populated_game(self):
+        commands, report, error = self.run_helper_typescript_lane(validate_error("Mod One"), populated=True)
+        self.assertNotEqual(error, "validate_failed")
+        self.assertIn("validate_retry_1", commands)
+        self.assertEqual([item["name"] for item in report["quarantined_validate_failures"]], ["Mod One"])
+
+        for log, populated, reason in (
+                (validate_error("Mod One"), False, "game_missing"),
+                ("Error: the converted document could not be read\n", True, "error_not_attributable")):
+            with self.subTest(reason=reason):
+                commands, report, error = self.run_helper_typescript_lane(log, populated)
+                self.assertEqual(error, "validate_failed")
+                self.assertEqual([stage for stage in commands if stage.startswith("validate")], ["validate"])
+                self.assertEqual(report["quarantined_validate_failures"], [])
+                self.assertEqual(report["quarantine"]["stopped"]["reason"], reason)
 
     def test_the_log_and_the_report_list_every_quarantined_component_as_warnings(self):
         converted = quarantine_document(dependencies={7: [quarantine_guid(5)]})
@@ -3681,6 +3751,356 @@ class SharedHostMapKeyTests(unittest.TestCase):
         self.assertEqual(mapping[ports.canonical_link(self.ROOT_ONE)], "one.zip")
         self.assertEqual(mapping[ports.canonical_link(self.ROOT_TWO)], "two.rar")
         self.assertEqual(ports.component_archive({"ResourceRegistry": {self.ROOT_TWO: {}}}, mapping), "two.rar")
+
+
+def tagged_error(name, kind="patcher-error", action="Patcher", detail="auto-generated",
+                 message="[InstallList] install_folder0: references section [override] which does not exist"):
+    return f"  [{kind}] {name}: {name} / {action} ({detail}): {message}"
+
+
+def validate_report(*lines, info=0):
+    prompts = [f"  [prompt-required] Info Stand-In {number}: Info Stand-In {number}: choose an "
+               f'installation option: the installer will ask "auto-generated" (3 choices)'
+               for number in range(info)]
+    return "\n".join([
+        "Validated /work/converted.toml: 20 mods, 20 selected, 20 in install order",
+        f"ERROR ({len(lines)})", *lines, f"INFO ({info})", *prompts, "FAILED: errors found.", ""])
+
+
+class ValidateTaggedErrorParsingTests(unittest.TestCase):
+    def test_tagged_lines_become_component_failures_with_actions_and_kinds(self):
+        text = validate_report(
+            tagged_error("Mod 01"),
+            tagged_error("Mod 02", message="changes ini not found: /archives/Mod 02/tslpatchdata/changes_1.ini "
+                                           "(*.ini in /archives/Mod 02/tslpatchdata: )"),
+            tagged_error("Mod 03", detail="auto-generated; multi-run 1 of 2 (namespace index 0)"),
+            tagged_error("Mod 03", detail="auto-generated; multi-run 2 of 2 (namespace index 1)"),
+            tagged_error("Mod 04", message="2DAList feat.2da: RangeError: read of 8 bytes at offset 0 "
+                                           "exceeds buffer of 0 bytes"),
+            tagged_error("Stand-In: Colon Name"),
+            tagged_error("Mod 05", kind="missing-source", action="Execute",
+                         message='executable not found: "<<modDirectory>>/Mod 05*.exe"'),
+            tagged_error("Mod 06", kind="missing-archive", action="Extract",
+                         message="no archive matches Mod 06*.{zip,rar,7z}"),
+            info=3)
+        failures, unattributed = ports.parse_validate_errors(text)
+        self.assertEqual(unattributed, [])
+        self.assertEqual([item["component"] for item in failures],
+                         ["Mod 01", "Mod 02", "Mod 03", "Mod 03", "Mod 04", "Stand-In: Colon Name",
+                          "Mod 05", "Mod 06"])
+        self.assertEqual([item["kind"] for item in failures],
+                         ["patcher-error"] * 6 + ["missing-source", "missing-archive"])
+        self.assertEqual([item["action"] for item in failures],
+                         ["Patcher"] * 6 + ["Execute", "Extract"])
+        self.assertTrue(all(item["step"] is None for item in failures))
+        self.assertIn("RangeError", failures[4]["message"])
+        self.assertEqual(len(ports.distinct_failures(failures)), 7)
+
+    def test_only_error_severity_lines_count(self):
+        warned = ("Validated x\nWARNING (1)\n" + tagged_error("Mod 01") + "\nINFO (1)\n"
+                  "  [prompt-required] Mod 02: Mod 02: choose an installation option\nFAILED: errors found.\n")
+        self.assertEqual(ports.validate_error_lines(warned), [])
+        tail_only = tagged_error("Mod 01") + "\n" + tagged_error("Mod 02") + "\nFAILED: errors found.\n"
+        self.assertEqual(len(ports.validate_error_lines(tail_only)), 2)
+
+    def test_an_error_line_of_another_shape_is_unattributed(self):
+        text = validate_report(tagged_error("Mod 01"), "  something global went wrong",
+                               "  [patcher-error] no repeated component here")
+        failures, unattributed = ports.parse_validate_errors(text)
+        self.assertEqual([item["component"] for item in failures], ["Mod 01"])
+        self.assertEqual(unattributed, ["  something global went wrong",
+                                        "  [patcher-error] no repeated component here"])
+
+    def test_evidence_keeps_every_error_line_and_is_capped_by_bytes_not_lines(self):
+        lines = [tagged_error(f"Stand-In {number:03d}") for number in range(300)]
+        text = validate_report(*lines, info=100)
+        excerpt = ports.validate_error_excerpt(text)
+        self.assertEqual(excerpt, lines)
+        small = ports.validate_error_excerpt(text, max_bytes=2000)
+        self.assertEqual(small[:-1], lines[:len(small) - 1])
+        self.assertLess(len(small), len(lines))
+        self.assertRegex(small[-1], r"^\[\d+ further error line\(s\) omitted: 2000 byte evidence cap\]$")
+        self.assertLessEqual(sum(len(line.encode()) + 1 for line in small[:-1]), 2000)
+
+    def test_a_failed_validate_prints_all_error_lines_even_beyond_the_eighty_line_tail(self):
+        lines = [tagged_error(f"Stand-In {number:03d}") for number in range(120)]
+        text = validate_report(*lines, info=100)
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        report = {"commands": []}
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr), self.assertRaises(ports.Blocked):
+            ports.run([__import__("sys").executable, "-c",
+                       "import sys; sys.stdout.write(sys.argv[1]); sys.exit(1)", text],
+                      root, root, "validate", report, {})
+        output = stderr.getvalue()
+        evidence = output.split("validate failure evidence", 1)[1]
+        for number in (0, 59, 119):
+            self.assertIn(f"[patcher-error] Stand-In {number:03d}: Stand-In {number:03d} / Patcher", evidence)
+        self.assertEqual(len(report["failure"]["components"]), 120)
+        self.assertEqual(report["failure"]["error_line_count"], 120)
+        self.assertIsNone(report["failure"]["component"])
+        self.assertIn("ports: validate failed at 120 component(s) attributed", output)
+
+    def test_one_distinct_tagged_component_is_recorded_as_the_failing_component(self):
+        text = validate_report(tagged_error("Mod 01"), tagged_error("Mod 01", detail="auto-generated; multi-run 2"))
+        failure = ports.record_failure(text, "validate", 1, {})
+        self.assertEqual((failure["component"], failure["step"], failure["action"]),
+                         ("Mod 01", None, "Patcher"))
+        self.assertEqual(failure["components"], ["Mod 01"])
+        self.assertEqual(ports.failure_location(failure), "component 'Mod 01' (Patcher)")
+
+    def test_the_final_error_names_the_attributed_components(self):
+        report = {"failure": {"stage": "validate", "exit_code": 1, "component": None, "step": None,
+                              "action": None, "error_line": None,
+                              "components": [f"Mod {number:02d}" for number in range(1, 8)]}}
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        text = stderr.getvalue()
+        self.assertIn("::error::ports: validate failed (exit 1): 7 component(s) attributed "
+                      "('Mod 01', 'Mod 02', 'Mod 03', 'Mod 04', 'Mod 05' and 2 more)", text)
+        self.assertNotIn("no component could be attributed", text)
+
+
+class ValidateMultiComponentQuarantineTests(unittest.TestCase):
+    def validate(self, logs, converted=None, deselect=None, report=None, **options):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        converted_path = root / "converted.toml"
+        converted_path.write_text(converted or quarantine_document(), encoding="utf-8")
+        game = root / "game"
+        game.mkdir()
+        (game / "chitin.key").write_text("x", encoding="utf-8")
+        (root / "work").mkdir()
+        pending = list(logs)
+        seen = []
+
+        def fake_run(command, source, private, stage, report, env):
+            seen.append((stage, list(command)))
+            if pending:
+                (private / (stage + ".log")).write_text(pending.pop(0), encoding="utf-8")
+                report["commands"].append({"stage": stage, "exit_code": 1})
+                raise ports.Blocked(stage + "_failed")
+            report["commands"].append({"stage": stage, "exit_code": 0})
+
+        deselect = [] if deselect is None else deselect
+        report = {"commands": []} if report is None else report
+        error = None
+        with mock.patch.object(ports, "run", fake_run):
+            try:
+                ports.validate_with_quarantine(["modsync"], ["converted"], deselect, converted_path, game,
+                                               root / "source", root / "work", report, {}, **options)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        self.assertEqual(pending, [])
+        return seen, report, deselect, error
+
+    def test_every_distinct_failing_component_is_quarantined_in_one_pass(self):
+        log = validate_report(tagged_error("Mod 03"), tagged_error("Mod 07"),
+                              tagged_error("Mod 07", detail="auto-generated; multi-run 2 of 2"), info=2)
+        seen, report, deselect, error = self.validate([log])
+        self.assertIsNone(error)
+        self.assertEqual([stage for stage, _ in seen], ["validate", "validate_retry_1"])
+        self.assertEqual([item["name"] for item in report["quarantined_validate_failures"]],
+                         ["Mod 03", "Mod 07"])
+        self.assertEqual({item["kind"] for item in report["quarantined_validate_failures"]},
+                         {ports.VALIDATE_FAILURE_KIND})
+        self.assertEqual(deselect, ["--deselect", quarantine_guid(3), "--deselect", quarantine_guid(7)])
+        self.assertEqual(report["quarantine"]["attempts"], 2)
+        self.assertIsNone(report["quarantine"]["stopped"])
+        self.assertNotIn("failure", report)
+
+    def test_a_failing_component_and_its_dependent_in_one_pass_are_recorded_once(self):
+        converted = quarantine_document(dependencies={2: [quarantine_guid(1)]})
+        log = validate_report(tagged_error("Mod 01"), tagged_error("Mod 02"))
+        _, report, deselect, error = self.validate([log], converted=converted)
+        self.assertIsNone(error)
+        self.assertEqual([(item["name"], item["kind"]) for item in report["quarantined_validate_failures"]],
+                         [("Mod 01", ports.VALIDATE_FAILURE_KIND), ("Mod 02", ports.QUARANTINE_DEPENDENT_KIND)])
+        self.assertEqual(deselect.count(quarantine_guid(2)), 1)
+
+    def test_the_cap_is_shared_with_install_and_a_refused_pass_quarantines_nothing(self):
+        installed = [{"kind": ports.INSTALL_FAILURE_KIND, "component_guid": quarantine_guid(number),
+                      "name": f"Mod {number}"} for number in (19, 20)]
+        log = validate_report(tagged_error("Mod 01"), tagged_error("Mod 02"))
+        seen, report, deselect, error = self.validate(
+            [log], report={"commands": [], ports.INSTALL_QUARANTINE_KEY: installed})
+        self.assertEqual(error, "validate_quarantine_cap_exceeded")
+        self.assertEqual([stage for stage, _ in seen], ["validate"])
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "component_cap_exceeded")
+        self.assertEqual(report["quarantine"]["stopped"]["component"], "Mod 02")
+        self.assertEqual(report[ports.QUARANTINE_KEY], [])
+        self.assertEqual(deselect, [])
+        self.assertEqual(report["failure"]["components"], ["Mod 01", "Mod 02"])
+
+    def test_more_components_than_fifteen_percent_are_refused_whole(self):
+        log = validate_report(*[tagged_error(f"Mod {number:02d}") for number in range(1, 5)])
+        seen, report, deselect, error = self.validate([log])
+        self.assertEqual(error, "validate_quarantine_cap_exceeded")
+        self.assertEqual(report[ports.QUARANTINE_KEY], [])
+        self.assertEqual(deselect, [])
+        self.assertEqual(report["quarantine"]["max_components"], 3)
+
+    def test_a_missing_download_is_never_quarantined(self):
+        for kind, action in (("missing-source", "Execute"), ("missing-archive", "Extract")):
+            with self.subTest(kind=kind):
+                log = validate_report(tagged_error("Mod 03"), tagged_error(
+                    "Mod 04", kind=kind, action=action, message="nothing found for the download"))
+                seen, report, deselect, error = self.validate([log])
+                self.assertEqual(error, "validate_failed")
+                self.assertEqual([stage for stage, _ in seen], ["validate"])
+                stopped = report["quarantine"]["stopped"]
+                self.assertEqual((stopped["reason"], stopped["component"]),
+                                 ("missing_download_not_quarantinable", "Mod 04"))
+                self.assertEqual(report[ports.QUARANTINE_KEY], [])
+                self.assertEqual(deselect, [])
+                self.assertEqual(report["failure"]["components"], ["Mod 03", "Mod 04"])
+
+    def test_a_missing_download_already_covered_by_policy_is_not_a_reason_to_refuse(self):
+        log = validate_report(tagged_error("Mod 03"), tagged_error(
+            "Mod 05", kind="missing-source", action="Execute", message="executable not found"))
+        covered = ["--deselect", quarantine_guid(5)]
+        _, report, deselect, error = self.validate([log], deselect=list(covered))
+        self.assertIsNone(error)
+        self.assertEqual([item["name"] for item in report[ports.QUARANTINE_KEY]], ["Mod 03"])
+        self.assertEqual(deselect, covered + ["--deselect", quarantine_guid(3)])
+
+    def test_a_global_or_ambiguous_error_line_refuses_the_whole_pass(self):
+        log = validate_report(tagged_error("Mod 03"), "  game directory is not a KOTOR install")
+        seen, report, deselect, error = self.validate([log])
+        self.assertEqual(error, "validate_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "unattributed_error_lines")
+        self.assertEqual(report[ports.QUARANTINE_KEY], [])
+        self.assertEqual(deselect, [])
+
+    def test_an_unlisted_action_refuses_the_whole_pass(self):
+        log = validate_report(tagged_error("Mod 03"), tagged_error("Mod 04", action="Execute"))
+        _, report, deselect, error = self.validate([log])
+        self.assertEqual(error, "validate_failed")
+        stopped = report["quarantine"]["stopped"]
+        self.assertEqual((stopped["reason"], stopped["component"]), ("action_not_quarantinable", "Mod 04"))
+        self.assertEqual(deselect, [])
+
+    def test_a_name_in_no_converted_component_refuses_the_whole_pass(self):
+        log = validate_report(tagged_error("Mod 03"), tagged_error("Not A Component"))
+        _, report, deselect, error = self.validate([log])
+        self.assertEqual(error, "validate_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "component_unknown")
+        self.assertEqual(report[ports.QUARANTINE_KEY], [])
+        self.assertEqual(deselect, [])
+
+
+class TypeScriptValidateQuarantineTests(unittest.TestCase):
+    prepare = ExecuteCommandTests.prepare
+
+    def run_lane(self, failures=(), mode="cli", max_fraction=None):
+        root, args = self.prepare("k1")
+        args.guide.write_text(QUARANTINE_GUIDE, encoding="utf-8")
+        args.implementation = "typescript"
+        args.mode = mode
+        args.review_manifest = root / "review.json"
+        (args.game_dir / "chitin.key").write_text("x", encoding="utf-8")
+        if max_fraction is not None:
+            args.max_quarantine_fraction = max_fraction
+        pending = list(failures)
+        commands = []
+        inputs = {}
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append((stage, list(command)))
+            if stage == "convert":
+                (private / "converted.toml").write_text(quarantine_document(), encoding="utf-8")
+            if stage.startswith("validate") and pending:
+                (private / (stage + ".log")).write_text(pending.pop(0), encoding="utf-8")
+                report["stage"] = stage
+                report["commands"].append({"stage": stage, "exit_code": 1})
+                raise ports.Blocked(stage + "_failed")
+            if stage == "gui":
+                inputs["gui"] = tomllib.loads(
+                    Path(command[command.index("--input") + 1]).read_text(encoding="utf-8"))
+                raise ports.Blocked("gui_stopped_by_test")
+
+        report = {"commands": []}
+        error = None
+        with mock.patch.object(ports, "run", fake_run), \
+                mock.patch.object(ports, "review_manifest", return_value=[]):
+            try:
+                ports.execute(args, report)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        self.assertEqual(pending, [])
+        return commands, report, error, inputs
+
+    def selected(self, command):
+        return [value for flag, value in zip(command, command[1:]) if flag == "--select"][0].split(",")
+
+    def test_the_typescript_validate_quarantines_every_named_component_and_installs_the_rest(self):
+        log = validate_report(tagged_error("Mod 03"), tagged_error("Mod 07"), info=4)
+        commands, report, error, _ = self.run_lane([log])
+        self.assertIsNone(error)
+        stages = [stage for stage, _ in commands if stage.startswith(("validate", "install"))]
+        self.assertEqual(stages, ["validate", "validate_retry_1", "install_base", "install_widescreen"])
+        by_stage = dict(commands)
+        everyone = [quarantine_guid(number) for number in range(1, 21)]
+        self.assertEqual(self.selected(by_stage["validate"]), everyone)
+        remaining = [guid for guid in everyone if guid not in (quarantine_guid(3), quarantine_guid(7))]
+        for stage in ("validate_retry_1", "install_base", "install_widescreen"):
+            self.assertEqual(self.selected(by_stage[stage]), remaining, stage)
+            self.assertNotIn("--deselect", by_stage[stage], stage)
+        self.assertEqual([item["name"] for item in report["quarantined_validate_failures"]],
+                         ["Mod 03", "Mod 07"])
+        self.assertEqual(report["installable_before_quarantine_count"], 20)
+        self.assertEqual(report["installable_component_count"], 18)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        text = stderr.getvalue()
+        self.assertIn("::warning::ports: 2 component(s) QUARANTINED after validate failures", text)
+        self.assertIn("PARTIAL install", text)
+        self.assertIn("::warning::ports: quarantined Mod 03 [", text)
+        self.assertNotIn("step None", text)
+
+    def test_the_gui_input_leaves_the_quarantined_components_unselected(self):
+        log = validate_report(tagged_error("Mod 03"))
+        _, report, error, inputs = self.run_lane([log], mode="gui")
+        self.assertEqual(error, "gui_stopped_by_test")
+        selected = {item["Guid"]: item["IsSelected"] for item in inputs["gui"]["thisMod"]}
+        self.assertFalse(selected[quarantine_guid(3)])
+        self.assertTrue(all(value for guid, value in selected.items() if guid != quarantine_guid(3)))
+        self.assertEqual(report["selected_after_policy_count"], 19)
+
+    def test_a_missing_download_keeps_the_lane_red_with_visible_evidence(self):
+        log = validate_report(tagged_error("Mod 03"), tagged_error(
+            "Mod 04", kind="missing-source", action="Execute", message="executable not found"))
+        commands, report, error, _ = self.run_lane([log])
+        self.assertEqual(error, "validate_failed")
+        self.assertEqual([stage for stage, _ in commands if stage.startswith(("validate", "install"))],
+                         ["validate"])
+        self.assertEqual(report["quarantined_validate_failures"], [])
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "missing_download_not_quarantinable")
+        self.assertEqual(report["failure"]["components"], ["Mod 03", "Mod 04"])
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        text = stderr.getvalue()
+        self.assertIn("2 component(s) attributed ('Mod 03', 'Mod 04')", text)
+        self.assertIn("validate failure not quarantined (missing_download_not_quarantinable)", text)
+
+    def test_the_cap_applies_to_the_installable_components_in_one_pass(self):
+        log = validate_report(*[tagged_error(f"Mod {number:02d}") for number in range(1, 5)])
+        commands, report, error, _ = self.run_lane([log])
+        self.assertEqual(error, "validate_quarantine_cap_exceeded")
+        self.assertEqual(report["quarantined_validate_failures"], [])
+        self.assertEqual(report["quarantine"]["max_components"], 3)
+        self.assertNotIn("install_base", dict(commands))
+
+    def test_a_passing_typescript_validate_runs_once_and_reports_an_empty_quarantine(self):
+        commands, report, error, _ = self.run_lane()
+        self.assertIsNone(error)
+        self.assertEqual([stage for stage, _ in commands if stage.startswith("validate")], ["validate"])
+        self.assertEqual(report["quarantined_validate_failures"], [])
+        self.assertNotIn("installable_before_quarantine_count", report)
 
 
 if __name__ == "__main__":

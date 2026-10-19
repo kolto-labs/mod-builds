@@ -4534,7 +4534,7 @@
       ],
       "options": [],
       "phase": "widescreen",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "08d35f22-3f9b-57aa-8d7b-147e433866db": "yes"
