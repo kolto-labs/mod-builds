@@ -2312,6 +2312,10 @@ def print_diagnostics(report):
                   f"lane (reviewed lane skip, temporary, so a green lane is a PARTIAL install): "
                   f"{record['reason']}; converter diagnostic: {record.get('bind_diagnostic_reason')}",
                   file=sys.stderr)
+        elif record.get("source") == "lane_skips" and not record.get("kind"):
+            print(f"::warning::ports: OMITTED {record['heading']} [{record['component_guid']}] from this "
+                  f"lane (reviewed lane skip, so a green lane is a PARTIAL install): {record['reason']}",
+                  file=sys.stderr)
     for item in report.get(UNAPPLIED_BIND_SKIPS_KEY) or ():
         outcome = ("the converter now gives it instructions, so it is NOT skipped; remove the entry"
                    if item["state"] == "stale"

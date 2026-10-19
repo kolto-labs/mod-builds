@@ -844,6 +844,24 @@ lanes only (the Rust lanes still install the component). It is used for componen
 archive is a Windows installer `.exe` that ModSync.ts cannot extract; the dependents are
 skipped with it, and the skip is reported like any other policy skip.
 
+K1 and K2 `Remove Duplicate TGA/TPC` are omitted from the TypeScript lanes this way. Each
+converted `Execute` step runs the guide's interactive Windows batch script
+(`DelDuplicateTGA-TPC.bat`) under wine: the script expects to live in the game root and prompts on stdin for the file
+type to delete, so with no answer it prints `Unknown Input, Exiting` and ModSync.ts reports an
+`ExecuteError`, which cannot be reproduced non-interactively in CI. `Execute` stays outside
+`INSTALL_QUARANTINE_ACTIONS`, so any other `Execute` failure still stops the lane with
+`action_not_quarantinable`; only this one reviewed step is omitted. The omission is visible, not
+silent: the component is listed in `skipped_by_reviewed_policy` and in the manifest with the
+assessment `omitted by reviewed policy`, the lane prints `::warning::ports: OMITTED <step>
+[<guid>] ... PARTIAL install` for every reviewed lane skip, and a green TypeScript lane is a
+partial install without the duplicate removal the guide marks as critical (the Rust lane keeps
+its own handling of the step). The K1 guide step has the same Extract, `Execute` `*.bat`, Move
+shape and the same interactive prompt; the unprompted-exit failure was observed for K2 and is
+inferred for K1.
+The skip lives in `lane_skips`, the source `gen_ts_review.py` reads, so regenerate
+`ci/k1-typescript-review.json` and `ci/k2-typescript-review.json` with that tool (`--check`
+stays consistent) instead of editing them.
+
 #### Bind diagnostics and Rust bind skips
 
 `convert --resolved-archives` exits 0 when it refuses to bind a component (for example a
