@@ -31,6 +31,9 @@ env:
   # ModSync.ts ref the typescript install lanes build. Physical install
   # (--ci-physical-install) exists only on this branch, not on the repository default branch.
   MODSYNC_TS_REF: ${{ vars.MODSYNC_TS_REF || 'feat/physical-install' }}
+  # odynsscomp rev the typescript install lanes build the bionsscomp NSS compiler from. Keep it equal to the
+  # rev the Rust lanes' Cargo.lock pins.
+  NSSCOMP_REV: 00c53a9
 
 concurrency:
   group: ci-${{ github.event_name }}-${{ github.ref }}
@@ -740,8 +743,16 @@ jobs:
           path: .modsync-source
           persist-credentials: false
 
+      - name: Restore the NSS script compiler cache
+        id: nsscomp
+        if: matrix.implementation == 'typescript'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/nsscomp
+          key: nsscomp-${{ runner.os }}-${{ env.NSSCOMP_REV }}
+
       - name: Let cargo fetch private git dependencies
-        if: matrix.implementation == 'rust'
+        if: matrix.implementation == 'rust' || steps.nsscomp.outputs.cache-hit != 'true'
         env:
           SOURCE_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
         run: |
@@ -749,6 +760,33 @@ jobs:
           echo "::add-mask::$SOURCE_TOKEN"
           git config --global url."https://x-access-token:${SOURCE_TOKEN}@github.com/".insteadOf "https://github.com/"
           echo "CARGO_NET_GIT_FETCH_WITH_CLI=true" >> "$GITHUB_ENV"
+
+      - name: Provide the NSS script compiler
+        if: matrix.implementation == 'typescript'
+        env:
+          CACHE_HIT: ${{ steps.nsscomp.outputs.cache-hit }}
+          SOURCE_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+        run: |
+          set -euo pipefail
+          root="$RUNNER_TEMP/nsscomp"
+          if [[ "$CACHE_HIT" != true ]]; then
+            cargo install --git https://github.com/holowan-biolabs/odynsscomp --rev "$NSSCOMP_REV" \
+              bionsscomp-cli --root "$root" --locked
+            git config --global --remove-section "url.https://x-access-token:${SOURCE_TOKEN}@github.com/"
+          fi
+          if [[ ! -x "$root/bin/bionsscomp" ]] || ! "$root/bin/bionsscomp" --version >/dev/null; then
+            echo "::error::The NSS script compiler is missing or does not run; TypeScript CompileList steps cannot succeed."
+            exit 1
+          fi
+          echo "MODSYNC_NSS_COMPILER=$root/bin/bionsscomp" >> "$GITHUB_ENV"
+          echo "MODSYNC_NSS_GAME=$([[ "$GAME" == k1 ]] && echo 1 || echo 2)" >> "$GITHUB_ENV"
+
+      - name: Save the NSS script compiler cache
+        if: matrix.implementation == 'typescript' && steps.nsscomp.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/nsscomp
+          key: ${{ steps.nsscomp.outputs.cache-primary-key }}
 
       - name: Install tools and free disk space
         run: |
