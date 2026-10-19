@@ -207,6 +207,23 @@ and `Execute` steps, and still require the reviewed manifest described below.
     and adds an opt-in, CI-only physical install; the default branch
     (`claude/modsync-nodejs-typescript-0ea3qs` at the time of writing) throws for
     any non-dry-run install. The Rust lanes keep the repository's default branch.
+  - **NSS script compiler.** `CompileList` steps need a native compiler. Before
+    ModSync.ts runs, each `typescript` lane builds the `bionsscomp` CLI with
+    `cargo install --git https://github.com/holowan-biolabs/odynsscomp --rev $NSSCOMP_REV
+    bionsscomp-cli --root $RUNNER_TEMP/nsscomp --locked` (workflow-level env
+    `NSSCOMP_REV`, `00c53a9`; keep it equal to the rev in the Rust lanes'
+    `Cargo.lock`) and exports `MODSYNC_NSS_COMPILER` (path to the executable, called
+    as `<bin> -c x.nss -o x.ncs -g 1|2 -n nwscript.nss -i <dir>`) and
+    `MODSYNC_NSS_GAME` (`1` for k1, `2` for k2) for the install step. The install
+    directory is cached with `actions/cache` keyed on runner OS and rev; the cache
+    only speeds things up. On a miss the step builds, and a build failure, or a
+    binary that is missing or fails `--version`, fails the lane. The repository is
+    private, so the build reuses the Rust lanes' token step (below): on a cache miss
+    `git` is pointed at `MODSYNC_SOURCE_TOKEN` through the same `insteadOf` rewrite,
+    and the rewrite is removed again from the global git config once `cargo install`
+    succeeds. On a cache hit the token step is skipped. The token is masked and never
+    printed or cached; the cache holds only the installed binary. The engine-side use
+    of the two variables lives in ModSync.ts, not here.
   - **Physical install (`cli` lane).** After `validate`, `ports.py` runs
     `install ... --phase base` and `install ... --phase widescreen`, each with
     `--ci-physical-install`. ModSync.ts then guards the game and archive roots with
@@ -222,7 +239,8 @@ and `Execute` steps, and still require the reviewed manifest described below.
     but cannot be rolled back from checkpoints.
 - **`rust` lanes** use `ci/<game>-rust-review.json` only if it exists. They build
   with Cargo, which fetches private git dependencies (`kolto-labs/OdyPatcher`,
-  `holowan-biolabs/odynsscomp`). A step before the build points `git` at
+  `holowan-biolabs/odynsscomp`). A step before the build (a `typescript` lane
+  also runs it on an NSS compiler cache miss) points `git` at
   `MODSYNC_SOURCE_TOKEN` (`url.<token URL>.insteadOf https://github.com/`) and sets
   `CARGO_NET_GIT_FETCH_WITH_CLI=true`. The token is read from the secret into an
   environment variable and masked. It is never printed, cached or uploaded.
