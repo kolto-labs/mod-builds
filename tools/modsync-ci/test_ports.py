@@ -4936,6 +4936,45 @@ class TypeScriptRecoveryTests(unittest.TestCase):
         self.assertEqual((record["status"], record["fallback"]), ("unavailable", "baseline_restore"))
         self.assertEqual(calls, [])
 
+    def recover_with_output(self, output, text=None, returncode=1):
+        calls = []
+
+        def fake(command, **kwargs):
+            calls.append(command)
+            kwargs["stdout"].write(output)
+            return mock.Mock(returncode=returncode)
+
+        stderr = io.StringIO()
+        with mock.patch.object(ports.subprocess, "run", fake), contextlib.redirect_stderr(stderr):
+            record = ports.recover_typescript_state(
+                ["node", "main.js"], self.game, text or ts_install_log(5), self.root, self.private,
+                f"engine_restore_{len(self.report['quarantine'].get(ports.ENGINE_RESTORE_KEY, [])) + 1}",
+                self.report, {})
+        return record, calls, stderr.getvalue()
+
+    def test_an_uncaptured_mutation_failure_caches_the_decision_and_later_restores_skip_the_engine(self):
+        message = (b"Error: Physical restore refused: checkpoint 3 modified paths (patcher/external program) "
+                   b"whose pre-mutation content was never captured\n")
+        first, calls, stderr = self.recover_with_output(message)
+        self.assertEqual((first["status"], first["fallback"]), ("failed", "baseline_restore"))
+        self.assertEqual(len(calls), 1)
+        self.assertNotIn("uncaptured_mutation", first)
+        self.assertEqual(self.report["quarantine"][ports.ENGINE_RESTORE_SKIP_KEY]["stage"], "engine_restore_1")
+        self.assertIn("skipping the engine restore for the rest of this run", stderr)
+        second, calls, stderr = self.recover_with_output(message)
+        self.assertEqual((second["stage"], second["status"], second["fallback"]),
+                         ("engine_restore_2", "skipped", "baseline_restore"))
+        self.assertEqual(calls, [])
+        self.assertIn("engine_restore_2: skipped", stderr)
+        self.assertEqual([item["status"] for item in self.report["quarantine"][ports.ENGINE_RESTORE_KEY]],
+                         ["failed", "skipped"])
+
+    def test_other_restore_failures_do_not_cache_a_skip(self):
+        _, _, _ = self.recover_with_output(b"Error: Snapshot hashes differ\n")
+        self.assertNotIn(ports.ENGINE_RESTORE_SKIP_KEY, self.report["quarantine"])
+        _, calls, _ = self.recover_with_output(b"")
+        self.assertEqual(len(calls), 1)
+
 
 NO_INSTRUCTIONS_GUIDE = "# Guide\n\n## Mod List\n\n### Mod One\n\n### Mod Two\n"
 NO_INSTRUCTIONS_GUID = "40000000-0000-0000-0000-000000000002"
