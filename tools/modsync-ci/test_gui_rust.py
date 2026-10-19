@@ -500,6 +500,19 @@ class SummaryNavigationConstantTests(unittest.TestCase):
         self.assertNotRegex("Allow configured telemetry", gui_rust.TELEMETRY_KEEP_PATTERN)
         self.assertNotRegex("Keep sharing verified completed archives", gui_rust.TELEMETRY_KEEP_PATTERN)
 
+    def test_later_transition_markers_do_not_match_the_page_they_leave(self):
+        self.assertTrue(gui_rust.VALIDATION_PAGE_MARKER.search("Run validation"))
+        self.assertFalse(gui_rust.VALIDATION_PAGE_MARKER.search("Base build: 30 of 145 mods selected"))
+        self.assertTrue(gui_rust.VALIDATION_STARTED_MARKER.search("Validating…"))
+        self.assertFalse(gui_rust.VALIDATION_STARTED_MARKER.search("Run validation"))
+        self.assertTrue(gui_rust.INSTALL_REVIEW_MARKER.search("Ready to Install"))
+        self.assertTrue(gui_rust.INSTALL_CONFIRMATION_MARKER.search("Create snapshot and install"))
+        self.assertFalse(gui_rust.INSTALL_CONFIRMATION_MARKER.search("Install selected mods"))
+        self.assertTrue(gui_rust.INSTALLATION_STARTED_MARKER.search("Stop Install"))
+        self.assertFalse(gui_rust.INSTALLATION_STARTED_MARKER.search("Installing multiple KOTOR mods is tedious"))
+        self.assertRegex("Next", gui_rust.NEXT_PATTERN)
+        self.assertNotRegex("Nexus updates", gui_rust.NEXT_PATTERN)
+
     def test_summary_crop_keeps_the_left_edge_where_the_page_body_starts(self):
         left, top, right, bottom = gui_rust.SUMMARY_CROP
         self.assertEqual((left, right), (0.0, 1.0))

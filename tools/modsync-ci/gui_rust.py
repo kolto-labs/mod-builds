@@ -22,7 +22,9 @@ verifies the page by OCR (the "Base build" line or the page's controls) before r
 re-locating and re-clicking every 10 s (the buttons are disabled while the app is busy) and
 failing with `summary_page_not_reached` if it never appears. The OCR of the Base build line
 is then retried and the lines read, a screenshot and the attempts are recorded in
-`selection_summary` before a mismatch is raised.
+`selection_summary` before a mismatch is raised. Every later page transition (Validation / install,
+Run validation, Install selected mods, Next, Create snapshot and install) goes through the same
+`transition()` helper with its own page marker and failure reason.
 """
 
 import argparse
@@ -52,16 +54,25 @@ SUMMARY_OCR_TAIL_LINES = 12
 SUMMARY_OCR_LINE_CHARS = 120
 SUMMARY_TAIL_KEYWORDS = re.compile(
     r"base\s*build|selected|\bmods?\b|sharing|summary|telemetry|select\s*all|wizard|"
-    r"getting\s*started|validation|pause", re.IGNORECASE)
+    r"getting\s*started|validation|pause|install|snapshot", re.IGNORECASE)
 EDIT_GATE_PATTERN = re.compile(r"Pause\s*sharing\s*before\s*editing", re.IGNORECASE)
 SUMMARY_NAV_LABEL = "Summary / selection"
 SUMMARY_NAV_PATTERN = r"Summary\s*\S{0,2}\s*sel\w*"
-SUMMARY_NAV_WINDOW_SECONDS = 90
-SUMMARY_NAV_RETRY_SECONDS = 10
-SUMMARY_NAV_SETTLE_SECONDS = 0.7
+NAV_WINDOW_SECONDS = 90
+NAV_RETRY_SECONDS = 10
+NAV_SETTLE_SECONDS = 0.7
 SUMMARY_PAGE_MARKER = re.compile(
     r"Base\s*build|Select\s*all\b|Select\s*category|Select\s*multiple\s*categories|"
     r"All\s*categories|Load\s*a\s*guide\s*first", re.IGNORECASE)
+VALIDATION_NAV_LABEL = "Validation / install"
+VALIDATION_PAGE_MARKER = re.compile(r"Run\s*validation|Analyze\s*conflicts|Install\s*selected\s*mods", re.IGNORECASE)
+VALIDATION_STARTED_MARKER = re.compile(
+    r"Validating\b|Starting\s*validation|Validation\s*(?:completed|passed)", re.IGNORECASE)
+INSTALL_REVIEW_MARKER = re.compile(r"Ready\s*to\s*Install", re.IGNORECASE)
+INSTALL_CONFIRMATION_MARKER = re.compile(r"Create\s*snapshot|snapshot\s*needs\s*space", re.IGNORECASE)
+INSTALLATION_STARTED_MARKER = re.compile(
+    r"Installing\b(?!\s*multiple)|What.?s\s*Happening|Stop\s*Install|Installation\s*complete", re.IGNORECASE)
+NEXT_PATTERN = r"\bNext\b"
 PAUSE_SHARING_PATTERN = r"Pause\s*sharing\s*to\s*edit"
 PAUSE_SHARING_RETRY_SECONDS = 5
 TELEMETRY_PROMPT = re.compile(
@@ -69,7 +80,6 @@ TELEMETRY_PROMPT = re.compile(
 TELEMETRY_KEEP_PATTERN = r"Keep\s*tele\w*(?:\s*off)?|\btele\w*\s*off\b"
 TELEMETRY_PROMPT_WINDOW_SECONDS = 20
 TELEMETRY_RETRY_SECONDS = 3
-SUMMARY_NAV_SCREENSHOT = "summary-navigation.png"
 SUMMARY_SCREENSHOT = "selection-summary.png"
 SUMMARY_PATTERN = re.compile(r"Base\s*build\s*:?\s*(\d+)\s*of\s*(\d+)\s*mods?\s*selected", re.IGNORECASE)
 SUMMARY_FRAGMENT = re.compile(r"Base\s*build.{0,70}", re.IGNORECASE)
@@ -468,7 +478,7 @@ def drive(args, private, result):
         save(private / "clicks.json", events)
         print("gui_rust: click %r at (%d, %d) matched %r" % (label, point[0], point[1], matched),
               flush=True)
-        time.sleep(SUMMARY_NAV_SETTLE_SECONDS)
+        time.sleep(NAV_SETTLE_SECONDS)
 
     def click(label, optional=False, window=None, pattern=None):
         result["stage"] = label
@@ -505,20 +515,32 @@ def drive(args, private, result):
                     continue
             time.sleep(0.5)
 
-    def reach_summary_page():
-        result["stage"] = "summary_navigation"
+    def transition(name, label, marker, reason, pattern=None, window=NAV_WINDOW_SECONDS):
+        """Click `label` until `marker` is read on screen, or block with `reason`.
+
+        The desktop ignores clicks on disabled controls (it is busy loading, saving the
+        telemetry choice or changing sharing) and a modal prompt swallows them, so one click
+        proves nothing: each frame dismisses the telemetry prompt and the sharing edit gate
+        when shown, checks the marker, and re-locates and re-clicks the control every
+        NAV_RETRY_SECONDS. The record (clicks with coordinates and matched text, a
+        keyword-filtered OCR tail) is kept in result["<name>_navigation"].
+        """
+        result["stage"] = name + "_navigation"
         mark()
-        navigation = {"label": SUMMARY_NAV_LABEL, "attempts": 0, "reached": False,
-                      "nav_label_not_found": 0, "clicks": [], "ocr_tail": ""}
-        result["summary_navigation"] = navigation
+        pattern = pattern or r"\s*".join(re.escape(token) for token in
+                                         re.findall(r"\w+|[^\w\s]", label))
+        navigation = {"label": label, "attempts": 0, "reached": False,
+                      "label_not_found": 0, "clicks": [], "ocr_tail": ""}
+        result[name + "_navigation"] = navigation
+        evidence = name + "-navigation"
         started = time.monotonic()
-        limit = min(deadline, started + SUMMARY_NAV_WINDOW_SECONDS)
+        limit = min(deadline, started + window)
         next_click = started
         last_pause = None
 
-        def record(point, label):
+        def record(point, control):
             navigation["clicks"] = (navigation["clicks"] + [{
-                "control": label, "x": int(point[0]), "y": int(point[1]),
+                "control": control, "x": int(point[0]), "y": int(point[1]),
                 "after_seconds": round(time.monotonic() - started, 1),
                 "matched": last_hit.get("text", "")}])[-12:]
 
@@ -528,13 +550,13 @@ def drive(args, private, result):
             read = clean_ocr_lines(lines)
             relevant = [text for text in read if SUMMARY_TAIL_KEYWORDS.search(text)]
             navigation["ocr_tail"] = filtered_ocr_tail(read)
-            print("gui_rust: summary navigation attempt %d (%d lines, %d relevant): %s" % (
-                navigation["attempts"], len(read), len(relevant),
+            print("gui_rust: %s navigation attempt %d (%d lines, %d relevant): %s" % (
+                name, navigation["attempts"], len(read), len(relevant),
                 " | ".join((relevant or read)[:SUMMARY_OCR_LOG_LINES]) or "<no text>"), flush=True)
-            if any(SUMMARY_PAGE_MARKER.search(text) for text in read):
+            if any(marker.search(text) for text in read):
                 navigation["reached"] = True
-                shot.save(private / SUMMARY_NAV_SCREENSHOT)
-                save(private / "summary-navigation.json", navigation)
+                shot.save(private / (evidence + ".png"))
+                save(private / (evidence + ".json"), navigation)
                 return
             now = time.monotonic()
             point = telemetry_point(shot, data, lines)
@@ -551,23 +573,22 @@ def drive(args, private, result):
                     record(point, "Pause sharing to edit")
                     continue
             if now >= next_click:
-                point = find_control(shot, data, lines, SUMMARY_NAV_PATTERN)
+                point = find_control(shot, data, lines, pattern)
                 if point is not None:
-                    next_click = now + SUMMARY_NAV_RETRY_SECONDS
-                    press(point, SUMMARY_NAV_LABEL)
-                    record(point, SUMMARY_NAV_LABEL)
+                    next_click = now + NAV_RETRY_SECONDS
+                    press(point, label)
+                    record(point, label)
                     continue
-                navigation["nav_label_not_found"] += 1
+                navigation["label_not_found"] += 1
             if now >= limit:
-                shot.save(private / SUMMARY_NAV_SCREENSHOT)
-                navigation["screenshot"] = SUMMARY_NAV_SCREENSHOT
-                save(private / "summary-navigation.json", navigation)
+                shot.save(private / (evidence + ".png"))
+                navigation["screenshot"] = evidence + ".png"
+                save(private / (evidence + ".json"), navigation)
                 last = navigation["clicks"][-1] if navigation["clicks"] else None
-                print("gui_rust: summary page not reached after %d attempts; last click %s; "
-                      "OCR tail: %s" % (navigation["attempts"], json.dumps(last),
-                                        navigation["ocr_tail"].replace("\n", " | ") or "<none>"),
-                      flush=True)
-                raise Blocked("summary_page_not_reached")
+                print("gui_rust: %s after %d attempts; last click %s; OCR tail: %s" % (
+                    reason, navigation["attempts"], json.dumps(last),
+                    navigation["ocr_tail"].replace("\n", " | ") or "<none>"), flush=True)
+                raise Blocked(reason)
             time.sleep(0.5)
 
     command = [str(args.binary), "gui", "--allow-multiple-instances",
@@ -590,22 +611,27 @@ def drive(args, private, result):
                                        stdout=log, stderr=subprocess.STDOUT)
             mark("first_screenshot")
             dismiss_telemetry_prompt()
-            reach_summary_page()
+            transition("summary", SUMMARY_NAV_LABEL, SUMMARY_PAGE_MARKER, "summary_page_not_reached",
+                       pattern=SUMMARY_NAV_PATTERN)
             if plan["click_select_all"]:
                 click("Select all")
             if plan["subset"]:
                 result["stage"] = "selection_summary"
                 mark()
                 wait_for_selection_summary(observe_summary, plan, result, private)
-            click("Validation / install")
-            click("Run validation")
+            transition("validation_page", VALIDATION_NAV_LABEL, VALIDATION_PAGE_MARKER,
+                       "validation_page_not_reached")
+            transition("validation_start", "Run validation", VALIDATION_STARTED_MARKER,
+                       "validation_not_started")
             result["stage"] = "validation"
             mark()
             locate("Validation passed")
-            click("Install selected mods")
-            locate("Ready to Install")
-            click("Next")
-            click("Create snapshot and install")
+            transition("install_review", "Install selected mods", INSTALL_REVIEW_MARKER,
+                       "install_review_not_reached")
+            transition("install_confirmation", "Next", INSTALL_CONFIRMATION_MARKER,
+                       "install_confirmation_not_reached", pattern=NEXT_PATTERN)
+            transition("installation_start", "Create snapshot and install",
+                       INSTALLATION_STARTED_MARKER, "installation_not_started")
             result["stage"] = "installation"
             mark()
             locate("Installation complete")
@@ -756,8 +782,9 @@ def execute(args, result):
                 paths={private: "$EVIDENCE", args.work_dir: "$WORK_DIR"})
             if "selection_summary" in result:
                 result["worker_diagnostics"]["selection_summary"] = result["selection_summary"]
-            if "summary_navigation" in result:
-                result["worker_diagnostics"]["summary_navigation"] = result["summary_navigation"]
+            for key in sorted(result):
+                if key.endswith("_navigation"):
+                    result["worker_diagnostics"][key] = result[key]
             if not (private / "result.json").is_file():
                 result["stage"] = (result["worker_diagnostics"]["stage"]
                                    or result["worker_diagnostics"]["phase"])
