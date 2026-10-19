@@ -761,6 +761,50 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
     (flushed, relevant lines first) to `driver.log`, and the lines read, the attempts, the last
     OCR text (`ocr_tail`) and a screenshot path are recorded in `selection_summary` (also in
     `worker_diagnostics`) before `selection_summary_does_not_match_expected_subset` is raised.
+  - **Page transitions.** After the summary check, every later page change goes through the
+    same `transition()` helper: click the nav label (re-locating it by OCR each time) until the
+    page marker is read on screen, else block with the listed reason. Windows are
+    `NAV_WINDOW_SECONDS` (90 s) except the first, `FIRST_NAV_WINDOW_SECONDS` (300 s), and
+    never outlast the overall `--timeout` (`gui_timeout`). The markers are OCR regexes:
+
+    | Transition (`<name>_navigation`) | Click | Verified page marker | Window | Hard-fail reason |
+    | --- | --- | --- | --- | --- |
+    | `summary` | `Summary / selection` | `Base build`, `Select all`, `Select category`, `Select multiple categories`, `All categories` or `Load a guide first` | 300 s | `summary_page_not_reached` |
+    | `validation_page` | `Validation / install` | `Run validation`, `Analyze conflicts` or `Install selected mods` | 90 s | `validation_page_not_reached` |
+    | `validation_start` | `Run validation` | `Validating`, `Starting validation` or `Validation completed/passed` | 90 s | `validation_not_started` |
+    | `install_review` | `Install selected mods` | `Ready to Install` | 90 s | `install_review_not_reached` |
+    | `install_confirmation` | `Next` (matched as the word) | `Create snapshot` or `snapshot needs space` | 90 s | `install_confirmation_not_reached` |
+    | `installation_start` | `Create snapshot and install` | `Installing` (not `Installing multiple`), `What's Happening`, `Stop Install` or `Installation complete` | 90 s | `installation_not_started` |
+
+    Between `validation_start` and `install_review` the driver waits for the text `Validation
+    passed` (`locate`), and after `installation_start` for `Installation complete`; those
+    waits are not `transition()`s and fail with `visible_control_missing` or `gui_timeout`.
+    `SUMMARY_CROP` (`0.0, 0.05, 1.0, 0.95`: full width, 5% to 95% of the height) is only the
+    body crop used by the `Base build` count OCR described above, not by the transitions,
+    which read the full frame at 2x.
+  - **Telemetry modal.** `dismiss_telemetry_prompt` runs once right after launch, before the
+    summary transition: it OCRs for `Telemetry preference`, `Allow configured` or `Keep
+    telemetry off`, presses `Keep telemetry off` (again after 3 s if still visible) and returns
+    once the prompt has been seen and is gone. If it never appears, it stops after 20 s. Every
+    `transition()` frame also presses `Keep telemetry off` if the prompt shows again, since
+    the modal swallows clicks aimed at the nav buttons.
+  - **Busy-aware clicks.** Each frame prints `waiting: app busy (<text>)` when the top 15% of
+    the frame has a status line matching `Loading`, `Parsing`, `Working`, `Busy`, `Resolving`,
+    `Syncing`, `Saving`, `Scanning`, `Initializing` or `Please wait`. While idle the nav label
+    is re-located and clicked every 10 s (`NAV_RETRY_SECONDS`), or at once when a busy
+    indicator has just cleared. While busy it does not click, except one probe every 30 s
+    (`NAV_BUSY_PROBE_SECONDS`) in case the busy read is a false positive. A click hovers 0.3 s,
+    holds 0.15 s, parks the pointer at (5, 5) and settles 0.7 s. `Pause sharing to edit` is
+    pressed at most every 5 s when `Pause sharing before editing` is on screen.
+  - **Navigation diagnostics.** Each transition writes `<name>_navigation` to the result
+    (and `<name>-navigation.json` plus `.png` in the evidence directory when the marker is
+    reached or the window runs out). Fields: `label`, `attempts`, `reached`,
+    `label_not_found`, `clicks` (last 12: `control`, `x`, `y`, `after_seconds`, `matched`),
+    `ocr_tail` (keyword-filtered), `window_seconds`, `busy_waits` and `busy_text`. On failure
+    it adds `screenshot`, `ocr_lines` (first 80 OCR lines) and `top_bar` (the top-bar lines).
+    The failure line in `driver.log` also gives the attempts, the last click and the busy
+    text. On a failed run every `*_navigation` key, plus `selection_summary`, is copied into
+    `worker_diagnostics`; `stage` is `<name>_navigation` while one is in progress.
   - Components that remain selected must not depend on a deselected one
     (`selected_component_depends_on_deselected_component`).
   - Widescreen-only components are excluded, never installed: the report lists them as
