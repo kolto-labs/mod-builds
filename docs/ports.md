@@ -523,6 +523,22 @@ worker environment sets it for the TypeScript GUI driver only. If the status err
 `error_not_attributable`. Wrapped multi-line status errors are joined into one line before they
 are printed or recorded as `error_line`.
 
+**GUI native 7-Zip fallback.** The bundled 7z-wasm can trap (`table index is out of bounds`) on
+some archives, and the engine retries with a native 7-Zip only when the `sevenZipPath` setting is
+set. `gui_typescript.py` looks for `7zz`, `7z` then `7za` on `PATH` and seeds the web server's
+`settings.json` (in the private evidence directory) with `sevenZipPath`; the worker then checks the
+setting it reads back (`seven_zip_path_not_applied` otherwise) and the report records the binary
+name as `seven_zip`. With no native binary the setting stays unset and the driver prints a
+`::warning::` so the missing fallback is visible. The CLI lane in this tree does not set
+`sevenZipPath`; only the GUI lane does.
+
+**GUI failure labels.** The server clears `currentMod` as soon as a failed install stops, so the
+polled last-seen mod is the one that already finished. When the failing instruction GUID maps to a
+mod, or the server still reports a current mod, that mod is named. Otherwise the driver log says
+`mod=[unattributed] after="<last seen mod>" ... next="<following mod in order>"` and the failure
+record carries `mod_guid` and `mod_name` as null (`after_mod_*` and `next_mod_*` stay in the driver
+log), instead of naming the completed mod as the one that failed.
+
 ### Stage durations and progress
 
 Every command `ports.py` runs (`build`, `convert`, the bind stages, `validate` and its

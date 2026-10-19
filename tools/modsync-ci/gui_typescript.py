@@ -31,6 +31,25 @@ class Blocked(Exception):
 
 PHYSICAL_INSTALL_ENV = "MODSYNC_CI_PHYSICAL_INSTALL"
 PROMPT_POLL_LIMIT = 100
+SEVEN_ZIP_COMMANDS = ("7zz", "7z", "7za")
+
+
+def discover_seven_zip():
+    for name in SEVEN_ZIP_COMMANDS:
+        found = shutil.which(name)
+        if found:
+            return found
+    return None
+
+
+def seed_settings(private, seven_zip):
+    settings = {"sevenZipPath": seven_zip} if seven_zip else {}
+    save(private / "settings.json", settings)
+    return settings
+
+
+def warn(message):
+    print("::warning::" + message, file=sys.stderr, flush=True)
 
 
 def parse_choice(value):
@@ -62,6 +81,15 @@ const reviewedAnswer = (prompt, choices) => {
 '''
 
 
+FAILURE_MOD_JS = r'''
+const failureMod = (attributedGuid, seenGuid, order) => {
+  if (attributedGuid) return {attributed: attributedGuid, after: null, next: null};
+  const position = seenGuid ? order.indexOf(seenGuid) : -1;
+  return {attributed: null, after: seenGuid ?? null, next: position >= 0 ? order[position + 1] ?? null : null};
+};
+'''
+
+
 def digest(path, algorithm="sha256"):
     checksum = hashlib.new(algorithm)
     with path.open("rb") as stream:
@@ -87,6 +115,7 @@ const require = createRequire(join(config.source, 'package.json'));
 const {chromium} = require('playwright');
 const {createModSyncServer} = await import(pathToFileURL(join(config.source, 'packages/server/src/createServer.ts')).href);
 __REVIEWED_CHOICE__
+__FAILURE_MOD__
 const choices = config.choices ?? {};
 const evidence = async (name, value) => writeFile(join(config.private, name), JSON.stringify(value, null, 2));
 let server, browser, page;
@@ -190,7 +219,8 @@ try {
     if (!(await updated).ok()) fail('directory_settings_rejected');
   }
   const settings = await read('/api/settings');
-  await evidence('settings-observed.json', {kotorDirectory: settings.kotorDirectory, modDirectory: settings.modDirectory, checkpointDirectory: settings.checkpointDirectory});
+  await evidence('settings-observed.json', {kotorDirectory: settings.kotorDirectory, modDirectory: settings.modDirectory, checkpointDirectory: settings.checkpointDirectory, sevenZipConfigured: Boolean(settings.sevenZipPath)});
+  if (config.seven_zip_path && settings.sevenZipPath !== config.seven_zip_path) fail('seven_zip_path_not_applied');
   if (settings.kotorDirectory !== config.game_dir || settings.modDirectory !== config.archives) fail('workspace_binding_mismatch');
   if (!settings.createCheckpoints) fail('physical_receipt_requires_checkpoints');
   for (let step = 0; step < 12; step++) {
@@ -253,9 +283,10 @@ try {
       const found = /Instruction ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) failed \(([^)]*)\)(?:; installation stopped with recovery pending)?(?::\s*([\s\S]*))?$/i.exec(rawError);
       const instructionGuid = found ? found[1].toLowerCase() : null;
       const where = instructionGuid ? locate(instructionGuid) : null;
-      const modGuid = where?.mod.guid ?? status.currentMod ?? seenMod ?? null;
-      const mod = where?.mod ?? file.mods.find(candidate => candidate.guid === modGuid);
       const order = Array.isArray(status.order) && status.order.length ? status.order : lastOrder;
+      const blame = failureMod(where?.mod.guid ?? status.currentMod ?? null, seenMod, order.length ? order : expected);
+      const modGuid = blame.attributed;
+      const mod = where?.mod ?? file.mods.find(candidate => candidate.guid === modGuid);
       let pendingMutation = null;
       let recoveryNote = null;
       if (typeof summary.checkpointSessionId === 'string' && /^[0-9A-Za-z_-]+$/.test(summary.checkpointSessionId)) {
@@ -288,6 +319,10 @@ try {
         mod_guid: modGuid,
         mod_name: mod ? scrub(mod.name, 200) : null,
         mod_index: index || null,
+        after_mod_guid: blame.after,
+        after_mod_name: blame.after ? names.get(blame.after) ?? null : null,
+        next_mod_guid: blame.next,
+        next_mod_name: blame.next ? names.get(blame.next) ?? null : null,
         mod_total: order.length || expected.length,
         pending_mutation: pendingMutation,
         recovery_note: recoveryNote,
@@ -297,7 +332,10 @@ try {
         elapsed_seconds: elapsed(),
         log_tail: logTail,
       };
-      say(`INSTALL FAILURE trigger=${trigger} recovery_pending=${installFailure.recovery_pending} mod=[${installFailure.mod_index ?? '?'}/${installFailure.mod_total}] "${installFailure.mod_name ?? 'unknown'}" (${modGuid ?? 'unknown'}) instruction=${instructionGuid ?? 'unknown'} action=${installFailure.action ?? 'unknown'} step=${installFailure.step ?? 'unknown'} code=${installFailure.result_code ?? 'unknown'}`);
+      const whichMod = modGuid
+        ? `mod=[${installFailure.mod_index ?? '?'}/${installFailure.mod_total}] "${installFailure.mod_name ?? 'unknown'}" (${modGuid})`
+        : `mod=[unattributed] after="${installFailure.after_mod_name ?? 'none'}" (${blame.after ?? 'none'}) next="${installFailure.next_mod_name ?? 'unknown'}" (${blame.next ?? 'unknown'})`;
+      say(`INSTALL FAILURE trigger=${trigger} recovery_pending=${installFailure.recovery_pending} ${whichMod} instruction=${instructionGuid ?? 'unknown'} action=${installFailure.action ?? 'unknown'} step=${installFailure.step ?? 'unknown'} code=${installFailure.result_code ?? 'unknown'}`);
       if (installFailure.error) sayWrapped('INSTALL FAILURE error: ', installFailure.error);
       if (checkpointLine(installFailure)) say(checkpointLine(installFailure));
       for (const item of failedResults) say(`INSTALL FAILURE failed instruction: ${JSON.stringify(item)}`);
@@ -377,6 +415,7 @@ try {
 
 
 WORKER = (WORKER_TEMPLATE.replace("__REVIEWED_CHOICE__", REVIEWED_CHOICE_JS)
+          .replace("__FAILURE_MOD__", FAILURE_MOD_JS)
           .replace("__PROMPT_POLL_LIMIT__", str(PROMPT_POLL_LIMIT)))
 
 
@@ -498,6 +537,15 @@ def execute(args, result):
     config = {name: str(getattr(args, name)) for name in ("source", "input", "game_dir", "archives")}
     config["private"] = str(private)
     config["choices"] = dict(getattr(args, "choices", None) or {})
+    seven_zip = discover_seven_zip()
+    config["seven_zip_path"] = seven_zip
+    seed_settings(private, seven_zip)
+    result["seven_zip"] = Path(seven_zip).name if seven_zip else None
+    if seven_zip:
+        print("gui_typescript: native 7-Zip fallback enabled: " + Path(seven_zip).name, flush=True)
+    else:
+        warn("gui_typescript: no native 7zz/7z/7za on PATH; archive extraction relies on the bundled 7z-wasm "
+             "and cannot fall back to a native 7-Zip when it traps")
     save(private / "config.json", config)
     environment["MODSYNC_GUI_CONFIG"] = str(private / "config.json")
     command = [node, "--import", str(args.source / "node_modules/tsx/dist/loader.mjs"),

@@ -32,8 +32,9 @@ class WorkerFailureTests(unittest.TestCase):
             source=self.root / "source", input=self.root / "input.toml", game_dir=self.root / "game",
             archives=self.root / "archives", work_dir=self.root / "work", timeout=60.0)
 
-    def run_execute(self, log_text, code, phase=None, report=False, expire=False):
+    def run_execute(self, log_text, code, phase=None, report=False, expire=False, tools=None):
         result = {}
+        available = {"node": "/usr/bin/node"} if tools is None else dict(tools, node="/usr/bin/node")
         owner = self
 
         class Process:
@@ -42,6 +43,9 @@ class WorkerFailureTests(unittest.TestCase):
 
             def __init__(self, command, **kwargs):
                 owner.worker_env = dict(kwargs["env"])
+                owner.worker_config = json.loads(Path(kwargs["env"]["MODSYNC_GUI_CONFIG"]).read_text())
+                seeded = Path(owner.worker_config["private"]) / "settings.json"
+                owner.seeded_settings = json.loads(seeded.read_text()) if seeded.is_file() else None
                 kwargs["stdout"].write(log_text.encode())
                 kwargs["stdout"].flush()
                 private = Path(json.loads(Path(kwargs["env"]["MODSYNC_GUI_CONFIG"]).read_text())["private"])
@@ -59,12 +63,33 @@ class WorkerFailureTests(unittest.TestCase):
             def wait(self, timeout=None):
                 return code
 
-        with mock.patch.object(gui_typescript.shutil, "which", return_value="/usr/bin/node"), \
+        with mock.patch.object(gui_typescript.shutil, "which", side_effect=available.get), \
                 mock.patch.object(gui_typescript.subprocess, "Popen", Process), \
                 mock.patch.object(gui_typescript.os, "killpg", side_effect=ProcessLookupError):
             with self.assertRaises(gui_typescript.Blocked) as caught:
                 gui_typescript.execute(self.args, result)
         return result, str(caught.exception)
+
+    def test_native_seven_zip_is_seeded_into_the_server_settings(self):
+        result, _ = self.run_execute("x\n", 1, tools={"7z": "/opt/tool/7z", "7za": "/opt/tool/7za"})
+        self.assertEqual(self.seeded_settings, {"sevenZipPath": "/opt/tool/7z"})
+        self.assertEqual(self.worker_config["seven_zip_path"], "/opt/tool/7z")
+        self.assertEqual(result["seven_zip"], "7z")
+
+    def test_seven_zip_search_order_prefers_the_standalone_binary(self):
+        result, _ = self.run_execute("x\n", 1, tools={"7zz": "/opt/tool/7zz", "7z": "/opt/tool/7z"})
+        self.assertEqual(self.seeded_settings, {"sevenZipPath": "/opt/tool/7zz"})
+        self.assertEqual(gui_typescript.SEVEN_ZIP_COMMANDS, ("7zz", "7z", "7za"))
+
+    def test_missing_seven_zip_leaves_the_setting_unset_and_warns(self):
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            result, _ = self.run_execute("x\n", 1, tools={})
+        self.assertEqual(self.seeded_settings, {})
+        self.assertIsNone(self.worker_config["seven_zip_path"])
+        self.assertIsNone(result["seven_zip"])
+        self.assertTrue(error.getvalue().startswith("::warning::"))
+        self.assertIn("7-Zip", error.getvalue())
 
     def test_missing_report_adds_redacted_tail_exit_and_phase(self):
         result, reason = self.run_execute(
@@ -223,6 +248,37 @@ class ReviewedAnswerMatcherTests(unittest.TestCase):
 
     def test_prototype_names_are_not_treated_as_answers(self):
         self.assertIsNone(self.match(self.prompt(instructionGuid="constructor"), {GUID_A: "0"}))
+
+
+class FailureModLabelTests(unittest.TestCase):
+    def label(self, attributed, seen, order):
+        script = gui_typescript.FAILURE_MOD_JS + (
+            "const input = JSON.parse(process.argv[1]);"
+            "process.stdout.write(JSON.stringify(failureMod(input.attributed, input.seen, input.order)));")
+        done = subprocess.run(
+            [shutil.which("node"), "--input-type=module", "-e", script,
+             json.dumps({"attributed": attributed, "seen": seen, "order": order})],
+            capture_output=True, text=True, check=True)
+        return json.loads(done.stdout)
+
+    def test_an_attributed_mod_is_named_as_failing(self):
+        self.assertEqual(self.label("m2", "m1", ["m1", "m2", "m3"]), {"attributed": "m2", "after": None, "next": None})
+
+    def test_a_failure_without_a_current_mod_is_placed_after_the_last_seen_mod(self):
+        self.assertEqual(self.label(None, "m1", ["m1", "m2", "m3"]), {"attributed": None, "after": "m1", "next": "m2"})
+
+    def test_the_last_mod_has_no_next_candidate(self):
+        self.assertEqual(self.label(None, "m3", ["m1", "m2", "m3"]), {"attributed": None, "after": "m3", "next": None})
+
+    def test_an_unknown_or_missing_seen_mod_never_invents_a_candidate(self):
+        self.assertEqual(self.label(None, "other", ["m1", "m2"]), {"attributed": None, "after": "other", "next": None})
+        self.assertEqual(self.label(None, None, ["m1", "m2"]), {"attributed": None, "after": None, "next": None})
+
+    def test_the_worker_no_longer_falls_back_to_the_last_seen_mod_for_attribution(self):
+        self.assertIn(gui_typescript.FAILURE_MOD_JS, gui_typescript.WORKER)
+        self.assertNotIn("__FAILURE_MOD__", gui_typescript.WORKER)
+        self.assertNotIn("status.currentMod ?? seenMod ?? null", gui_typescript.WORKER)
+        self.assertIn("mod=[unattributed] after=", gui_typescript.WORKER)
 
 
 class WorkerWiringTests(unittest.TestCase):
