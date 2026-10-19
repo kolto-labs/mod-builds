@@ -4103,5 +4103,87 @@ class TypeScriptValidateQuarantineTests(unittest.TestCase):
         self.assertNotIn("installable_before_quarantine_count", report)
 
 
+class ValidateQuarantinePassAccountingTests(unittest.TestCase):
+    validate = ValidateMultiComponentQuarantineTests.validate
+
+    def names(self, numbers):
+        return [f"Mod {number:02d}" for number in numbers]
+
+    def pass_log(self, numbers):
+        return validate_report(*[tagged_error(name) for name in self.names(numbers)])
+
+    def test_one_pass_attributing_more_components_than_iterations_is_not_an_iteration_failure(self):
+        seen, report, deselect, error = self.validate(
+            [self.pass_log(range(1, 19))], converted=quarantine_document(130))
+        self.assertIsNone(error)
+        self.assertEqual(report["quarantine"]["max_components"], 19)
+        self.assertEqual(report["quarantine"]["iterations_used"], 1)
+        self.assertEqual(len(report["quarantined_validate_failures"]), 18)
+        self.assertEqual(len(deselect), 36)
+        self.assertEqual([stage for stage, _ in seen], ["validate", "validate_retry_1"])
+        self.assertIsNone(report["quarantine"]["stopped"])
+
+    def test_a_pass_over_the_component_cap_reports_the_cap_with_every_attributed_component(self):
+        numbers = range(1, 27)
+        seen, report, deselect, error = self.validate(
+            [self.pass_log(numbers)], converted=quarantine_document(130))
+        self.assertEqual(error, "validate_quarantine_cap_exceeded")
+        stopped = report["quarantine"]["stopped"]
+        self.assertEqual(stopped["reason"], "component_cap_exceeded")
+        self.assertEqual(stopped["attributed_count"], 26)
+        self.assertEqual(stopped["component_cap"], 19)
+        self.assertEqual(stopped["already_quarantined"], 0)
+        self.assertEqual(stopped["attributed_components"], self.names(numbers))
+        self.assertEqual(report["quarantine"]["iterations_used"], 0)
+        self.assertEqual(report[ports.QUARANTINE_KEY], [])
+        self.assertEqual(deselect, [])
+        self.assertEqual([stage for stage, _ in seen], ["validate"])
+
+    def test_the_final_error_lists_every_attributed_component_not_only_the_first(self):
+        numbers = range(1, 27)
+        _, report, _, error = self.validate([self.pass_log(numbers)], converted=quarantine_document(130))
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        output = stderr.getvalue()
+        self.assertIn("attributed 26 component(s) against a component cap of 19", output)
+        for name in self.names(numbers):
+            self.assertIn(repr(name), output)
+
+    def test_iterations_count_passes_across_validate_passes(self):
+        logs = [self.pass_log(range(1, 4)), self.pass_log(range(4, 6)), self.pass_log([6])]
+        seen, report, deselect, error = self.validate(
+            logs, converted=quarantine_document(130), max_iterations=2)
+        self.assertEqual(error, "validate_quarantine_cap_exceeded")
+        stopped = report["quarantine"]["stopped"]
+        self.assertEqual(stopped["reason"], "iteration_cap_exceeded")
+        self.assertNotIn("attributed_components", stopped)
+        self.assertEqual(report["quarantine"]["iterations_used"], 2)
+        self.assertEqual(len(report[ports.QUARANTINE_KEY]), 5)
+        self.assertEqual([stage for stage, _ in seen], ["validate", "validate_retry_1", "validate_retry_2"])
+
+    def test_a_multi_component_pass_and_install_failures_each_consume_the_shared_budget_once(self):
+        installed = [{"kind": ports.INSTALL_FAILURE_KIND, "component_guid": quarantine_guid(number),
+                      "name": f"Mod {number:02d}"} for number in (101, 102)]
+        seen, report, deselect, error = self.validate(
+            [self.pass_log(range(1, 6))], converted=quarantine_document(130), max_iterations=1,
+            report={"commands": [], ports.INSTALL_QUARANTINE_KEY: installed})
+        self.assertIsNone(error)
+        self.assertEqual(report["quarantine"]["iterations_used"], 1)
+        self.assertEqual(len(ports.quarantined_entries(report)), 7)
+
+    def test_a_refused_pass_restores_the_iteration_count(self):
+        installed = [{"kind": ports.INSTALL_FAILURE_KIND, "component_guid": quarantine_guid(number),
+                      "name": f"Mod {number:02d}"} for number in range(101, 119)]
+        _, report, _, error = self.validate(
+            [self.pass_log(range(1, 4))], converted=quarantine_document(130),
+            report={"commands": [], ports.INSTALL_QUARANTINE_KEY: installed})
+        self.assertEqual(error, "validate_quarantine_cap_exceeded")
+        stopped = report["quarantine"]["stopped"]
+        self.assertEqual((stopped["attributed_count"], stopped["component_cap"], stopped["already_quarantined"]),
+                         (3, 19, 18))
+        self.assertEqual(report["quarantine"]["iterations_used"], 0)
+
+
 if __name__ == "__main__":
     unittest.main()

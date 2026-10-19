@@ -1191,7 +1191,7 @@ def start_quarantine(components, deselect, report, max_iterations, max_fraction)
     report["quarantine"] = {
         "max_iterations": max_iterations, "max_fraction": max_fraction,
         "selected_components": selected, "max_components": max_components,
-        "attempts": 0, "install_attempts": 0, "stopped": None}
+        "attempts": 0, "install_attempts": 0, "iterations_used": 0, "stopped": None}
     return report["quarantine"]
 
 
@@ -1205,13 +1205,15 @@ def quarantine_stop(report, phase, stage, reason, parsed, failure, cap=False):
 
 
 def quarantine_failure(phase, parsed, stage, components, deselect, game, report, failure,
-                       before_commit=None):
+                       before_commit=None, new_pass=True):
     """Quarantine the one component `parsed` names, plus its dependents, or fail the lane with a reason.
 
     Both stages use it, against the one budget in report["quarantine"]: the iteration cap counts
-    the failing components of the validate and install lists together, and so does the component
-    cap (failing components plus dependents). `before_commit` runs once every check has passed and
-    before anything is recorded or deselected; the install stage restores the game there.
+    passes (validate runs and install attempts together) and the component cap counts every
+    quarantined component (failing components plus dependents). A pass that attributes several
+    components calls this once per component and passes `new_pass=False` after the first, so it
+    consumes one iteration and one component each. `before_commit` runs once every check has
+    passed and before anything is recorded or deselected; the install stage restores the game there.
     """
     settings = QUARANTINE_PHASES[phase]
     policy = report["quarantine"]
@@ -1222,7 +1224,7 @@ def quarantine_failure(phase, parsed, stage, components, deselect, game, report,
     entries = quarantined_entries(report)
     if policy["max_iterations"] <= 0:
         stop("quarantine_disabled")
-    if sum(item["kind"] in QUARANTINE_FAILURE_KINDS for item in entries) >= policy["max_iterations"]:
+    if new_pass and policy.get("iterations_used", 0) >= policy["max_iterations"]:
         stop("iteration_cap_exceeded", True)
     if not game.is_dir() or not any(game.iterdir()) or GAME_MISSING.search(parsed["message"]):
         stop("game_missing")
@@ -1238,6 +1240,8 @@ def quarantine_failure(phase, parsed, stage, components, deselect, game, report,
         stop("component_cap_exceeded", True)
     if before_commit is not None:
         before_commit()
+    if new_pass:
+        policy["iterations_used"] = policy.get("iterations_used", 0) + 1
     quarantined = report.setdefault(settings["key"], [])
     quarantined.append({
         "kind": settings["kind"], "name": component.get("Name", component.get("Heading")),
@@ -1313,9 +1317,13 @@ def validate_with_quarantine(command, directories, deselect, converted, game, so
 
     When the log is a TypeScript validate report, every distinct component its tagged error lines
     name is quarantined in the same pass, one `quarantine_failure` per component against the same
-    budget, all or none (a refused pass rolls back what it had recorded and deselected). The
-    pass is refused as a whole for global or ambiguous errors, for missing downloads, and for
-    actions outside INSTALL_QUARANTINE_ACTIONS (see `attribute_validate_failures`).
+    budget, all or none (a refused pass rolls back what it had recorded and deselected). A pass
+    consumes one iteration (the iteration cap counts validate passes) and one unit of the
+    component budget per quarantined component or dependent. A pass over the component cap stops
+    with `component_cap_exceeded` and records every attributed component, their count and the cap
+    in report["quarantine"]["stopped"]. The pass is refused as a whole for global or ambiguous
+    errors, for missing downloads, and for actions outside INSTALL_QUARANTINE_ACTIONS (see
+    `attribute_validate_failures`).
 
     `arguments(deselect)` replaces `directories + deselect` as the validate arguments (TypeScript
     selects with --select, not --deselect) and `selectable` limits the components the budget and
@@ -1344,15 +1352,26 @@ def validate_with_quarantine(command, directories, deselect, converted, game, so
             recorded = list(report[QUARANTINE_KEY])
             flags = list(deselect)
             already = deselected_guids(deselect)
+            used = policy["iterations_used"]
+            counted = False
             try:
                 for parsed in failing:
                     match, _ = find_failing_component(components, parsed["component"])
                     if match is not None and match[0] in deselected_guids(deselect) - already:
                         continue
-                    quarantine_failure("validate", parsed, stage, components, deselect, game, report, failure)
+                    quarantine_failure("validate", parsed, stage, components, deselect, game, report, failure,
+                                       new_pass=not counted)
+                    counted = True
             except Blocked:
                 report[QUARANTINE_KEY][:] = recorded
                 deselect[:] = flags
+                policy["iterations_used"] = used
+                stopped = policy.get("stopped")
+                if stopped and stopped["reason"] == "component_cap_exceeded":
+                    stopped.update({
+                        "attributed_count": len(failing), "component_cap": policy["max_components"],
+                        "already_quarantined": len(quarantined_entries(report)),
+                        "attributed_components": [item["component"] for item in failing]})
                 raise
             iterations += 1
             continue
@@ -1569,6 +1588,12 @@ def print_diagnostics(report):
         print(f"::error::ports: {stopped.get('phase', 'validate')} failure not quarantined "
               f"({stopped['reason']})"
               + (f": {stopped['error_line']}" if stopped.get("error_line") else ""), file=sys.stderr)
+        if stopped.get("attributed_components"):
+            print(f"::error::ports: the {stopped.get('stage', 'validate')} pass attributed "
+                  f"{stopped['attributed_count']} component(s) against a component cap of "
+                  f"{stopped['component_cap']} ({stopped['already_quarantined']} already quarantined); "
+                  f"none were quarantined: " + ", ".join(repr(name) for name in stopped["attributed_components"]),
+                  file=sys.stderr)
     failure = report.get("failure")
     if failure and report.get("status") != "installed":
         where = failure_location(failure)
