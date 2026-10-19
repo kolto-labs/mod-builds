@@ -26,6 +26,9 @@ class Blocked(Exception):
     pass
 
 
+PHYSICAL_INSTALL_ENV = "MODSYNC_CI_PHYSICAL_INSTALL"
+
+
 def digest(path, algorithm="sha256"):
     checksum = hashlib.new(algorithm)
     with path.open("rb") as stream:
@@ -89,7 +92,7 @@ const scrub = (value, limit = 360) => {
   return text.length > limit ? text.slice(0, limit) + ' ...[truncated]' : text;
 };
 const say = line => process.stdout.write(`gui-ts: ${line}\n`);
-const sayWrapped = (label, text) => {for (let at = 0; at < text.length; at += 300) say(label + text.slice(at, at + 300));};
+const sayWrapped = (label, text) => {const joined = text.replace(/\s+/g, ' ').trim(); for (let at = 0; at < joined.length; at += 300) say(label + joined.slice(at, at + 300));};
 try {
   const token = randomBytes(32).toString('hex');
   serverToken = token;
@@ -403,6 +406,7 @@ def execute(args, result):
             raise Blocked("missing_source_prerequisite:" + relative)
     environment = os.environ.copy()
     environment.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(Path.home() / ".cache/ms-playwright"))
+    environment[PHYSICAL_INSTALL_ENV] = "1"
     for name in ("HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"):
         directory = private / name.lower()
         directory.mkdir(mode=0o700)
@@ -512,7 +516,7 @@ def main():
         print("gui_typescript: install failure: " + " ".join(
             f"{key}={failure[key]}" for key in ("trigger", "mod_name", "instruction_guid", "action", "step",
                                                 "result_code") if key in failure)
-              + " error=" + failure.get("error", "none")[:300], flush=True)
+              + " error=" + " ".join(failure.get("error", "none").split()), flush=True)
     print(json.dumps({key: value for key, value in result.items()
                       if key not in ("worker_diagnostics", "install_failure")}))
     return 0 if result["status"] == "installed" else 1

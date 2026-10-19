@@ -1,7 +1,10 @@
 import argparse
+import contextlib
+import io
 import json
 from pathlib import Path
 import shutil
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -29,12 +32,14 @@ class WorkerFailureTests(unittest.TestCase):
 
     def run_execute(self, log_text, code, phase=None, report=False, expire=False):
         result = {}
+        owner = self
 
         class Process:
             returncode = code
             pid = 0
 
             def __init__(self, command, **kwargs):
+                owner.worker_env = dict(kwargs["env"])
                 kwargs["stdout"].write(log_text.encode())
                 kwargs["stdout"].flush()
                 private = Path(json.loads(Path(kwargs["env"]["MODSYNC_GUI_CONFIG"]).read_text())["private"])
@@ -84,6 +89,38 @@ class WorkerFailureTests(unittest.TestCase):
         result, reason = self.run_execute("x\n", None, expire=True)
         self.assertEqual(reason, "ui_timeout_recovery_may_be_required")
         self.assertTrue(result["worker_diagnostics"]["timed_out"])
+
+    def test_worker_environment_opts_in_to_the_ci_physical_install(self):
+        for inherited in (None, "0"):
+            with mock.patch.dict(gui_typescript.os.environ, clear=False):
+                if inherited is None:
+                    gui_typescript.os.environ.pop("MODSYNC_CI_PHYSICAL_INSTALL", None)
+                else:
+                    gui_typescript.os.environ["MODSYNC_CI_PHYSICAL_INSTALL"] = inherited
+                self.run_execute("x\n", 1)
+            self.assertEqual(self.worker_env["MODSYNC_CI_PHYSICAL_INSTALL"], "1", inherited)
+        self.assertEqual(gui_typescript.PHYSICAL_INSTALL_ENV, "MODSYNC_CI_PHYSICAL_INSTALL")
+
+    def test_wrapped_status_errors_are_joined_before_they_are_wrapped_or_printed(self):
+        self.assertIn("text.replace(/\\s+/g, ' ')", gui_typescript.WORKER)
+        error = "Independent TypeScript physical installation is unavailable\n" + "x" * 400 + "\ntrailing words"
+
+        def fake_execute(args, result):
+            result["install_failure"] = {"trigger": "backend_install_gate_or_failure", "error": error}
+            raise gui_typescript.Blocked("backend_install_gate_or_failure")
+
+        report = self.root / "report" / "gui.json"
+        output = io.StringIO()
+        with mock.patch.object(gui_typescript, "execute", fake_execute), \
+                mock.patch.object(sys, "argv", [
+                    "gui_typescript.py", "--source", str(self.args.source), "--input", str(self.args.input),
+                    "--game-dir", str(self.args.game_dir), "--archives", str(self.args.archives),
+                    "--work-dir", str(self.args.work_dir), "--report", str(report)]), \
+                contextlib.redirect_stdout(output):
+            self.assertEqual(gui_typescript.main(), 1)
+        line = next(item for item in output.getvalue().splitlines() if "install failure:" in item)
+        self.assertIn("error=Independent TypeScript physical installation is unavailable x", line)
+        self.assertTrue(line.endswith("x trailing words"))
 
 
 if __name__ == "__main__":

@@ -5250,6 +5250,20 @@ class GuiInstallQuarantineTests(unittest.TestCase):
         self.assertIn("disk full", report["quarantine"]["stopped"]["error_line"])
         self.assertFalse(report[ports.INSTALL_QUARANTINE_KEY])
 
+    def test_a_physical_install_gate_error_is_a_lane_configuration_error_not_a_quarantine(self):
+        wrapped = ("Independent TypeScript physical installation is unavailable\n"
+                   "until the CI opt-in is set for this server process")
+        stages, _, report, error, _, recover = self.run_loop([self.failure(error=wrapped)])
+        self.assertEqual((error, stages), ("install_failed", ["gui"]))
+        recover.assert_not_called()
+        stopped = report["quarantine"]["stopped"]
+        self.assertEqual(ports.GUI_LANE_CONFIGURATION_REASON, "lane_configuration_error")
+        self.assertEqual(stopped["reason"], ports.GUI_LANE_CONFIGURATION_REASON)
+        self.assertEqual(stopped["error_line"],
+                         "Independent TypeScript physical installation is unavailable "
+                         "until the CI opt-in is set for this server process")
+        self.assertFalse(report[ports.INSTALL_QUARANTINE_KEY])
+
     def test_a_driver_failure_outside_installation_is_not_quarantined(self):
         stages, _, report, error, _, _ = self.run_loop([None], reason="validation_blocked")
         self.assertEqual(error, "gui_failed")
