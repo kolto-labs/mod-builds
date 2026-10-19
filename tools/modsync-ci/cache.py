@@ -57,6 +57,8 @@ SECRET_ENV = ("CACHE_ENCRYPTION_KEY", "DIAGNOSTICS_ENCRYPTION_KEY", "GITHUB_TOKE
 S3_ENV = ("MOD_CACHE_S3_", "AWS_", "RCLONE_CONFIG_")
 ARTSTORE_REFRESH_DAYS = 21
 ARTSTORE_STATE = {}
+STAGE_MAX_BYTES = 3 * 1024 ** 3
+STAGE_TOTAL_BYTES = 9 * 1024 ** 3
 
 
 def scrubbed_env(keep=()):
@@ -1596,25 +1598,79 @@ def try_artstore(stored, dest, args):
     return False
 
 
-def stage_candidates(root, manifest):
-    """[{path, sha256}] for each live non-.bik cached object the artifact store lacks or will soon expire."""
+def stage_needed(shas):
+    """The SHA-256s in shas the artifact store lacks or will soon expire; None when the store is unavailable."""
     session = artstore_session()
     if session is None:
+        return None
+    module, index = artstore_module(), session["index"]
+    wanted = set(module.core.blobs_missing(index, sorted(shas)))
+    wanted.update(module.refresh_plan(index, time.time(), ARTSTORE_REFRESH_DAYS))
+    return wanted & set(shas)
+
+
+def stage_candidates(root, manifest, stage_dir=None):
+    """[{path, sha256}] for each live non-.bik cached object the artifact store lacks or will soon expire.
+
+    An object is looked up in root/objects, then in stage_dir (the stage-only copies refresh keeps out of the cache).
+    """
+    if artstore_session() is None:
         return []
     try:
-        module, index = artstore_module(), session["index"]
         found = {}
         for entry in manifest["entries"].values():
             for stored in entry_objects(entry):
-                path = object_path(root, stored)
-                if not is_bik(stored) and path.is_file() and path.stat().st_size == stored["size"]:
-                    found[stored["sha256"]] = path
-        wanted = set(module.core.blobs_missing(index, sorted(found)))
-        wanted.update(module.refresh_plan(index, time.time(), ARTSTORE_REFRESH_DAYS))
-        return [{"path": str(found[sha]), "sha256": sha} for sha in sorted(wanted) if sha in found]
+                if is_bik(stored):
+                    continue
+                for path in (object_path(root, stored), *([stage_dir / stored["sha256"]] if stage_dir else [])):
+                    if path.is_file() and path.stat().st_size == stored["size"]:
+                        found[stored["sha256"]] = path
+                        break
+        wanted = stage_needed(found) or set()
+        return [{"path": str(found[sha]), "sha256": sha} for sha in sorted(wanted)]
     except Exception:
         warn("artifact store index unreadable; nothing staged")
         return []
+
+
+def stage_pending(old, keep, args):
+    """The objects of old outside keep that the artifact store still needs; None when old cannot be staged.
+
+    None when any object outside keep is .bik, malformed or larger than --stage-max-bytes, or the store is unavailable.
+    """
+    outside = [each for each in entry_objects(old) if each.get("sha256") not in keep]
+    for each in outside:
+        sha, size = each.get("sha256"), each.get("size")
+        if (is_bik(each) or not isinstance(sha, str) or not SHA256.fullmatch(sha)
+                or not isinstance(size, int) or size > args.stage_max_bytes):
+            return None
+    try:
+        wanted = stage_needed({each["sha256"] for each in outside})
+    except Exception:
+        return None
+    return None if wanted is None else [each for each in outside if each["sha256"] in wanted]
+
+
+def reserve_stage(old, keep, args, state):
+    """Reserve stage-only room for the objects of old outside keep: {sha256: size} of the newly reserved ones.
+
+    None when old cannot be staged or the run's --stage-total-bytes would be exceeded; {} when everything it
+    needs is already reserved. state is {"hold": set of SHA-256s, "left": bytes}.
+    """
+    pending = stage_pending(old, keep, args)
+    if pending is None:
+        return None
+    fresh = {each["sha256"]: each["size"] for each in pending if each["sha256"] not in state["hold"]}
+    if sum(fresh.values()) > state["left"]:
+        return None
+    state["hold"].update(fresh)
+    state["left"] -= sum(fresh.values())
+    return fresh
+
+
+def release_stage(fresh, state):
+    state["hold"].difference_update(fresh)
+    state["left"] += sum(fresh.values())
 
 
 def verified_object(item, stored, root, args):
@@ -1736,11 +1792,19 @@ def kept_objects(manifest, limit):
     return keep
 
 
-def prune(root, manifest, limit):
+def prune(root, manifest, limit, hold=(), stage_dir=None):
+    """Delete every object outside the kept set; the ones named in hold move to stage_dir instead.
+
+    stage_dir must be outside root: it is the stage-only copy that never reaches the Actions cache.
+    """
     keep = kept_objects(manifest, limit)
     for path in (root / "objects").iterdir():
         if path.is_file() and SHA256.fullmatch(path.name) and path.name not in keep:
-            path.unlink()
+            if stage_dir is not None and path.name in hold:
+                stage_dir.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(path), str(stage_dir / path.name))
+            else:
+                path.unlink()
 
 
 def main(argv=None):
@@ -1770,10 +1834,19 @@ def main(argv=None):
     parser.add_argument("--emit-stage-manifest", type=Path, metavar="FILE",
                         help="restore/refresh: write [{path, sha256}] for cached non-.bik objects the artifact "
                              "store lacks or will soon expire")
+    parser.add_argument("--stage-max-bytes", type=int, default=STAGE_MAX_BYTES,
+                        help="refresh with --emit-stage-manifest and --cache-limit-bytes: the largest single object "
+                             "(default 3 GiB, one artifact pack) fetched only to be staged when it does not fit the cache")
+    parser.add_argument("--stage-total-bytes", type=int, default=STAGE_TOTAL_BYTES,
+                        help="refresh: most bytes of such stage-only objects per run (default 9 GiB, the three upload packs)")
+    parser.add_argument("--stage-dir", type=Path,
+                        help="refresh: where stage-only objects wait for the stage manifest (default: "
+                             "<cache-dir>.stage-only, a sibling that is never part of the saved cache)")
     parser.add_argument("--cache-limit-bytes", type=int,
                         help="refresh only: keep only the objects in --cache-dir that fit in this many bytes "
                              "(pinned first, then smallest) and skip links whose objects do not; sized for the "
-                             "10 GB Actions cache. Lanes fetch what is not kept")
+                             "10 GB Actions cache. Lanes fetch what is not kept; with --emit-stage-manifest "
+                             "such objects are still fetched into --stage-dir to be staged")
     parser.add_argument("--force", action="store_true", help="refresh even inside freshness interval")
     parser.add_argument("--max-age-days", type=float, default=14)
     parser.add_argument("--timeout", type=float, default=30, help="socket timeout seconds")
@@ -1799,6 +1872,12 @@ def main(argv=None):
         parser.error("--archive-map is only valid with restore")
     if args.emit_stage_manifest and args.command not in ("restore", "refresh"):
         parser.error("--emit-stage-manifest is only valid with restore or refresh")
+    if args.stage_dir is not None:
+        cache_root, stage_root = args.cache_dir.resolve(), args.stage_dir.resolve()
+        if stage_root == cache_root or cache_root in stage_root.parents:
+            parser.error("--stage-dir must be outside --cache-dir")
+    if args.stage_max_bytes <= 0 or args.stage_total_bytes < 0:
+        parser.error("stage-max-bytes must be positive and stage-total-bytes must not be negative")
     if args.artstore is None:
         args.artstore = artstore_token()
     if not 0 <= args.retries <= 5 or not 0 < args.max_age_days <= 14:
@@ -1882,6 +1961,9 @@ def main(argv=None):
         losers = sibling_name_losers(items, manifest["entries"], pins) if args.command == "restore" else {}
         limit = args.cache_limit_bytes if args.command == "refresh" else None
         keep = kept_objects(manifest, limit) if limit is not None else None
+        stage_dir = (args.stage_dir or root.parent / (root.name + ".stage-only")).resolve()
+        stage_on = keep is not None and bool(args.emit_stage_manifest)
+        stage = {"hold": set(), "left": args.stage_total_bytes}
         for item in items:
             old = manifest["entries"].get(item["id"]) or (
                 pin_as_entry(pins[item["id"]]) if item["id"] in pins else {})
@@ -1902,12 +1984,15 @@ def main(argv=None):
                 if args.command == "refresh" and manifest["entries"].pop(item["id"], None) is not None:
                     atomic_json(manifest_path, manifest)
                 continue
+            reserved = {}
             try:
                 if keep is not None and entry_objects(old) and not all(
                         each.get("sha256") in keep for each in entry_objects(old)):
-                    entry.update(status=OVER_LIMIT, reason="does not fit --cache-limit-bytes; fetched by the lanes")
-                    report["entries"].append(entry)
-                    continue
+                    reserved = reserve_stage(old, keep, args, stage) if stage_on else None
+                    if not reserved:
+                        entry.update(status=OVER_LIMIT, reason="does not fit --cache-limit-bytes; fetched by the lanes")
+                        report["entries"].append(entry)
+                        continue
                 before = manifest["entries"].get(item["id"])
                 old, source = acquire(item, old, root, args, pins)
                 entry["source"] = source
@@ -1917,6 +2002,10 @@ def main(argv=None):
                     atomic_json(manifest_path, manifest)
                 if args.command == "refresh":
                     entry.update(old)
+                    if reserved:
+                        entry["stage_only"] = True
+                    elif stage_on:
+                        reserve_stage(old, kept_objects(manifest, limit), args, stage)
                 else:
                     taken, created, restored = set(), [], []
                     try:
@@ -1937,20 +2026,31 @@ def main(argv=None):
                     else:
                         entry.update(sha256=restored[0]["sha256"], file=restored[0]["file"])
                 if limit is not None:
-                    prune(root, manifest, limit)
+                    prune(root, manifest, limit, stage["hold"], stage_dir)
             except (ValueError, OSError, HTTPException, subprocess.SubprocessError, zipfile.BadZipFile) as error:
+                if reserved:
+                    release_stage(reserved, stage)
+                    entry.update(status=OVER_LIMIT, reason="stage-only fetch failed: " + safe_reason(error))
+                    report["entries"].append(entry)
+                    prune(root, manifest, limit, stage["hold"], stage_dir)
+                    continue
                 entry.update(status="unresolved", reason=safe_reason(error))
                 if args.command == "refresh" and old and not is_pinned(item, old, pins):
                     manifest["entries"][item["id"]] = {**old, "status": "stale-unknown"}
                     atomic_json(manifest_path, manifest)
             report["entries"].append(entry)
+        if limit is not None:
+            prune(root, manifest, limit, stage["hold"], stage_dir)
         if args.emit_stage_manifest:
-            atomic_json(args.emit_stage_manifest, stage_candidates(root, manifest))
+            atomic_json(args.emit_stage_manifest, stage_candidates(root, manifest, stage_dir))
         sources = [each["source"] for each in report["entries"] if "source" in each]
         report["sources"] = {name: sources.count(name) for name in sorted(set(sources))}
     if args.command != "import-existing":
+        stale = sum(1 for each in report["entries"] if each.get("status") == "stale-unknown")
+        if stale and args.command == "refresh":
+            warn("%d archive(s) are stale-unknown (upstream metadata unavailable); the last cached copy was kept" % stale)
         accepted = ("fresh", "verified", "restored", "pinned") + (
-            (UNCACHED, OVER_LIMIT) if args.command == "refresh" else (UNCACHED_SKIPPED,) if args.command == "restore" else ())
+            (UNCACHED, OVER_LIMIT, "stale-unknown") if args.command == "refresh" else (UNCACHED_SKIPPED,) if args.command == "restore" else ())
         report["ok"] = all(entry.get("status") in accepted
                            for entry in report["entries"]) if args.command != "discover" else True
     if args.report:

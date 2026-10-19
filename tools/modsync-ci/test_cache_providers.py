@@ -1,4 +1,5 @@
 import contextlib
+import hashlib
 import importlib.util
 import io
 import json
@@ -10,6 +11,8 @@ import types
 import unittest
 from unittest import mock
 import zipfile
+
+import test_cache_artstore as artstore_tests
 
 spec = importlib.util.spec_from_file_location("cache", Path(__file__).with_name("cache.py"))
 cache = importlib.util.module_from_spec(spec)
@@ -2033,6 +2036,131 @@ class ShippedDirectLinkTests(unittest.TestCase):
             self.assertRegex(link["sha256"], r"^[a-f0-9]{64}$")
             self.assertTrue(cache.ARCHIVE.search(link["file"]))
             self.assertGreater(link["size"], 0)
+
+
+class StageOnlyTests(artstore_tests.Fixture):
+    URLS = (artstore_tests.sources.URL, artstore_tests.sources.BIG_URL)
+    LIMITED = ("refresh", "--emit-stage-manifest")
+
+    def setUp(self):
+        super().setUp()
+        sources = artstore_tests.sources
+        self.module = sources.cache
+        self.big = sources.zip_bytes("big", 20000)
+        self.big_sha = hashlib.sha256(self.big).hexdigest()
+        self.site = sources.Site({sources.URL: self.payload, sources.BIG_URL: self.big})
+        with mock.patch.object(self.module, "request", self.site):
+            code, report = self.run_main("refresh")
+        self.assertEqual(code, 0, report)
+        (self.root / "objects" / self.big_sha).unlink()
+        self.site.requests.clear()
+        self.target = self.base / "stage.json"
+        self.stage_dir = self.base / "cache.stage-only"
+        self.limit = str(len(self.payload) + 1)
+
+    def refresh(self, *extra, store=None, site=None):
+        self.install(store or artstore_tests.FakeStore())
+        with mock.patch.object(self.module, "request", site or self.site):
+            return self.run_main("refresh", "--cache-limit-bytes", self.limit, "--emit-stage-manifest",
+                                 str(self.target), *extra)
+
+    def by_url(self, report):
+        return {entry["url"]: entry for entry in report["entries"]}
+
+    def staged(self):
+        return {each["sha256"]: each["path"] for each in json.loads(self.target.read_text())}
+
+    def test_over_limit_object_is_staged_but_not_kept_in_the_cache(self):
+        code, report = self.refresh()
+        sources = artstore_tests.sources
+        self.assertEqual(code, 0, report)
+        big = self.by_url(report)[sources.BIG_URL]
+        self.assertIn(big["status"], ("fresh", "verified"))
+        self.assertTrue(big["stage_only"])
+        self.assertEqual(sorted(path.name for path in (self.root / "objects").iterdir()), [self.sha])
+        self.assertEqual((self.stage_dir / self.big_sha).read_bytes(), self.big)
+        staged = self.staged()
+        self.assertEqual(set(staged), {self.sha, self.big_sha})
+        self.assertEqual(Path(staged[self.big_sha]), self.stage_dir.resolve() / self.big_sha)
+        self.assertNotIn(self.root.resolve(), Path(staged[self.big_sha]).parents)
+        self.assertEqual(self.manifest()["entries"][big["id"]]["sha256"], self.big_sha)
+
+    def test_without_the_stage_manifest_the_entry_stays_skipped(self):
+        self.install(artstore_tests.FakeStore())
+        with mock.patch.object(self.module, "request", self.site):
+            code, report = self.run_main("refresh", "--cache-limit-bytes", self.limit)
+        self.assertEqual(code, 0, report)
+        self.assertEqual(self.by_url(report)[artstore_tests.sources.BIG_URL]["status"], self.module.OVER_LIMIT)
+        self.assertEqual(self.site.requests, [(artstore_tests.sources.URL, mock.ANY)])
+        self.assertFalse(self.stage_dir.exists())
+
+    def test_per_object_cap_is_respected(self):
+        code, report = self.refresh("--stage-max-bytes", str(len(self.big) - 1))
+        self.assertEqual(code, 0, report)
+        self.assertEqual(self.by_url(report)[artstore_tests.sources.BIG_URL]["status"], self.module.OVER_LIMIT)
+        self.assertEqual([url for url, _ in self.site.requests], [artstore_tests.sources.URL])
+        self.assertEqual(set(self.staged()), {self.sha})
+        self.assertFalse(self.stage_dir.exists())
+
+    def test_per_run_total_is_respected(self):
+        code, report = self.refresh("--stage-total-bytes", str(len(self.big) - 1))
+        self.assertEqual(code, 0, report)
+        self.assertEqual(self.by_url(report)[artstore_tests.sources.BIG_URL]["status"], self.module.OVER_LIMIT)
+        self.assertEqual(set(self.staged()), {self.sha})
+
+    def test_an_object_the_store_already_holds_is_not_fetched(self):
+        code, report = self.refresh(store=artstore_tests.FakeStore(live=[self.big_sha]))
+        self.assertEqual(code, 0, report)
+        self.assertEqual(self.by_url(report)[artstore_tests.sources.BIG_URL]["status"], self.module.OVER_LIMIT)
+        self.assertEqual([url for url, _ in self.site.requests], [artstore_tests.sources.URL])
+        self.assertEqual(set(self.staged()), {self.sha})
+
+    def test_bik_is_refused(self):
+        manifest = self.manifest()
+        big = manifest["entries"][self.module.key_for(artstore_tests.sources.BIG_URL)]
+        big["archive_name"] = "Movie.BIK"
+        (self.root / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+        code, report = self.refresh("--cache-limit-bytes", str(10 ** 9))
+        self.assertEqual(code, 0, report)
+        self.assertEqual(self.by_url(report)[artstore_tests.sources.BIG_URL]["status"], self.module.OVER_LIMIT)
+        self.assertNotIn(artstore_tests.sources.BIG_URL, [url for url, _ in self.site.requests])
+        self.assertNotIn(self.big_sha, self.staged())
+        self.assertFalse(self.stage_dir.exists())
+
+    def test_a_blocked_fetch_leaves_the_entry_skipped_and_the_manifest_alone(self):
+        sources = artstore_tests.sources
+        before = self.manifest()["entries"][self.module.key_for(sources.BIG_URL)]
+        code, report = self.refresh(site=sources.Site({sources.URL: self.payload}))
+        self.assertEqual(code, 0, report)
+        big = self.by_url(report)[sources.BIG_URL]
+        self.assertEqual(big["status"], self.module.OVER_LIMIT)
+        self.assertTrue(big["reason"].startswith("stage-only fetch failed"))
+        self.assertEqual(self.manifest()["entries"][big["id"]], before)
+        self.assertEqual(set(self.staged()), {self.sha})
+
+    def test_stage_dir_inside_the_cache_is_rejected(self):
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            self.module.main(["refresh", "--guide", str(self.guide), "--cache-dir", str(self.root),
+                              "--stage-dir", str(self.root / "objects")])
+
+    def test_restore_gets_the_over_limit_object_from_the_store_by_manifest_hash(self):
+        store = artstore_tests.FakeStore({self.big_sha: self.big, self.sha: self.payload})
+        self.install(store)
+        (self.root / "objects" / self.sha).unlink()
+        code, report = self.run_main("restore", "--artstore")
+        self.assertEqual((code, report["sources"]), (0, {"artstore": 2}))
+        self.assertEqual({call[0] for call in store.calls}, {self.big_sha, self.sha})
+
+    def test_stale_unknown_is_accepted_with_a_warning(self):
+        def stale(item, old, root, args, pins):
+            return {**old, "status": "stale-unknown"}, "stale-local"
+
+        with mock.patch.object(self.module, "acquire", stale), \
+                mock.patch.object(self.module, "warn") as warn:
+            code, report = self.run_main("refresh")
+        self.assertEqual(code, 0, report)
+        self.assertEqual({entry["status"] for entry in report["entries"]}, {"stale-unknown"})
+        self.assertTrue(any("2 archive(s) are stale-unknown" in call.args[0] for call in warn.call_args_list))
 
 
 class DropboxTests(unittest.TestCase):

@@ -299,6 +299,19 @@ are tens of GB, so the cache holds only a subset: `--cache-limit-bytes` in `ci.y
 skips a link whose objects do not fit. The lanes fetch the rest themselves, from the
 bucket, P2P or the website.
 
+Archives that do not fit are still published to the artifact store, so the lanes stop
+re-downloading them. With `--emit-stage-manifest`, `cache.py refresh` acquires such an
+archive (local, artifact store, bucket, P2P, website; Nexus and other blocked links are
+skipped as before) only when the store lacks one of its objects or is about to expire it,
+moves the object to `<cache-dir>.stage-only` (a sibling of the cache directory, never part
+of the saved cache; `--stage-dir` overrides it) and lists it in the stage manifest. Pruning
+still runs before `actions/cache/save`, so the saved cache stays under `--cache-limit-bytes`.
+`--stage-max-bytes` (default 3 GiB, one pack) skips an object that is larger,
+`--stage-total-bytes` (default 9 GiB, the three upload packs) caps one run, and `.bik` is
+never fetched for this. The manifest records every object's hash once downloaded, so
+`cache.py restore` in the lanes asks the artifact store for it by hash before the bucket,
+P2P and the website. Objects that wait for a later run show as `over-cache-limit`.
+
 The mod entry is keyed by content (`mod-archives-<hash>`), and `mods` deletes the older
 `mod-archives-*` entries after saving, so exactly one mod entry stays. Keying by run id
 used to add a ~3 GB entry per run; the total passed 10 GB and eviction removed the k1 game

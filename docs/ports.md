@@ -268,9 +268,12 @@ because `validate` named it in a failing run.
    and, for the GUI lane, `gui_rust.py --deselect` receive. The GUI lane counts quarantined
    components as skipped, never covered (`coverage` is `subset`).
 
-The loop is bounded: at most `--max-quarantine` re-runs (default 15; `0` disables the loop) and at
-most `--max-quarantine-fraction` (default 0.15) of the **selected** components in total,
-failing components plus dependents, rounded down. "Selected" excludes the reviewed-policy
+The loop is bounded: at most `--max-quarantine` failing components (default 15; `0` disables
+validate and install quarantine) and at most `--max-quarantine-fraction` (default 0.15) of the
+**selected** components in total, failing components plus dependents, rounded down. The
+budget is **shared** with the install stage (see
+[Runtime quarantine of install failures](#runtime-quarantine-of-install-failures-rust-cli-lane)):
+what `validate` quarantines counts against what `install` may still quarantine. "Selected" excludes the reviewed-policy
 and GUI-widescreen deselects, so it is small on the current guides (k2 has about 30
 installable components, so at most 4 can be quarantined); raise the fraction only
 deliberately.
@@ -290,12 +293,8 @@ caps) when:
   (`quarantine_disabled`).
 
 Restore, convert, coverage and draft-review problems happen before `validate` and are
-never quarantined. TypeScript lanes do not use the loop. `install` failures are not
-quarantined either: a failed install has already changed the game directory (the K1 CLI
-stop `Helena Shan Improvement / step 2 (Patcher): Built-in OdyPatcher reported errors;
-restore before retrying` is of that kind), so retrying needs a restored game, which
-`ports.py` does not do. Its component and the tool's output are recorded and printed (see
-[Failure evidence](#failure-evidence)) instead.
+never quarantined. TypeScript lanes do not use the loop. `install` failures have their own
+stage with a game-directory restore (next section).
 
 **A green lane with quarantined components is a partial install.** The quarantined
 components were not installed and not verified, so the lane is not guide parity, and it
@@ -316,6 +315,82 @@ is less complete than the reviewed-policy subset alone. Every one is reported:
 To bring a component back, fix its instructions (or archive) and rerun; to make an
 omission permanent and reviewed, add it to `lane_skips` as for any other skip.
 
+### Runtime quarantine of install failures (Rust CLI lane)
+
+The K1 CLI lane stops in `install` when one component's patcher needs a file that an
+unselected (pending-review) earlier component would have provided. The engine aborts with a
+line like `Install stopped. Restore before retrying; snapshot: <path>: <Component> / step 2
+(Patcher): Built-in OdyPatcher reported errors; ...`. Same standing instruction as above
+(omit what cannot install, visibly, so the remainder installs), but a failed install has
+already changed the game directory, so the retry needs a restored game. The CLI install
+(`--mode cli`, Rust) therefore runs through `install_with_quarantine`:
+
+1. Before the first `install`, `ports.py` copies the whole game directory to
+   `game-baseline` in the lane's private directory (`cp -a --reflink=auto`: an independent
+   copy, never hardlinks; a reflink only where the filesystem supports it, a full copy
+   otherwise). **Disk cost:** one extra copy of the game directory (several GB for a
+   modded KOTOR) for the length of the install; it is deleted when the install finally
+   succeeds and left in the private directory when the lane fails. The copy is compared with
+   the game directory (paths, sizes, symlinks) and its size is recorded in
+   `quarantine.baseline`. `--max-quarantine 0` takes no baseline.
+2. When `install` fails, the log is parsed. If the failure is quarantinable (below), the game
+   directory is restored **in place** (its contents are emptied and the baseline is copied
+   back; the directory itself is kept, so mounts and handles stay valid) and the restore is
+   verified against the baseline's file list and sizes. Only then are the failing
+   component's GUID and the GUID of each of its transitive dependents appended to the shared
+   `--deselect` list.
+3. `install` re-runs as `install_retry_1`, `install_retry_2`, ... (each stage has its own
+   log). `converted.toml`, `RequiresReview` and the reviewed policy are never edited; the
+   omission lives only in the `--deselect` list and the report.
+
+The install uses the same caps as `validate`, from one shared budget: `--max-quarantine`
+counts failing components over both stages, and `--max-quarantine-fraction` bounds the
+quarantined components (failing plus dependents) of both stages together, against the same
+selected-component count taken before `validate`. With 45 selected components the default
+allows 6: a `validate` quarantine of 2 components leaves room for an `install` quarantine
+of at most 4.
+
+The lane still **hard-fails** (`install_failed`, or `install_quarantine_cap_exceeded` for
+the caps), without quarantining and without restoring the game, when:
+
+- the output contains `panicked at` or `stack backtrace`, or the exit code is 101
+  (`panic_detected`), or contains `Rollback FAILED` (`rollback_failed`): the game state is
+  unknown;
+- it does not name exactly one distinct (component, step) pair: none
+  (`error_not_attributable`) or several (`multiple_components_failed`);
+- the failing action is not `Patcher`, `Extract`, `Move`, `Copy`, `Rename` or `Delete`
+  (`action_not_quarantinable`); `Execute` runs arbitrary programs and is excluded;
+- the game directory or its `chitin.key` is missing, or the message says so (`game_missing`);
+- the baseline copy failed (`baseline_copy_failed`: the install itself still ran, but a
+  failure cannot be recovered), or the restore failed or did not match the baseline
+  (`restore_failed`; nothing is recorded as quarantined);
+- the component name matches no component or several (`component_unknown`,
+  `component_ambiguous`), or it is already deselected, which would loop
+  (`component_already_deselected`);
+- either cap would be exceeded (`iteration_cap_exceeded`, `component_cap_exceeded`), or
+  quarantine is disabled (`quarantine_disabled`).
+
+The reason is in `quarantine.stopped` (`phase` `install`, `stage`, `reason`, `component`,
+`step`, `error_line`).
+
+**A green lane after an install quarantine is a partial install**, with the same meaning as
+for `validate`: the quarantined components were not installed and not verified, so the lane
+is not guide parity. Reporting:
+
+- The lane report has `quarantined_install_failures`, records shaped like those of
+  `quarantined_validate_failures` with `kind` `install_failure` for the failing component
+  (`stage` is the `install` stage that failed) and `dependent_of_quarantined` for its
+  dependents; an empty list when nothing was quarantined. `quarantine.install_attempts`
+  counts the `install` runs and `quarantine.baseline` records the baseline copy
+  (`status`, `files`, `bytes`).
+- The CI log prints `::warning::ports: N component(s) QUARANTINED after install failures
+  ... PARTIAL install` and one `::warning::ports: quarantined <name> [<guid>]: install
+  failed at step N (<action>): <error line>` (or `depends on quarantined <guid>`) per
+  component, next to the same block for `validate` failures. A refused quarantine is
+  `::error::ports: install failure not quarantined (<reason>)`.
+- The GUI lane (`--mode gui`) does not use this stage; it keeps the `validate` quarantine
+  only, and a failed GUI install still fails the lane.
+
 ### Failure evidence
 
 The CI log keeps only the last 80 lines of a failed command, which hid the three patcher
@@ -330,7 +405,8 @@ parameters are scrubbed. The failing component is also written to the lane repor
 `failure` (`stage`, `exit_code`, `component`, `step`, `action`, `error_line`; the component
 fields are `null` when the output names none) and echoed as `ports: <stage> failed at
 component '<name>', step N (<action>)` and a final `::error::ports: <stage> failed ...`
-line.
+line. The engine's `Install stopped. Restore before retrying; snapshot: <path>: ` prefix is
+not part of the component name.
 
 ## TypeScript review manifest (schema 1)
 
@@ -647,5 +723,6 @@ hashes, but GUI reports include private paths; review them before publishing.
 Exit 0 means the port's own install completed. It is not, by itself, proof of
 parity with the manual reference, and for the Rust lanes it is a partial install
 whenever the report lists `deselected_pending_review`, `skipped_by_reviewed_policy` or
-`quarantined_validate_failures` entries (see
-[Runtime quarantine](#runtime-quarantine-of-validate-failures-rust-lanes-only)).
+`quarantined_validate_failures` or `quarantined_install_failures` entries (see
+[Runtime quarantine](#runtime-quarantine-of-validate-failures-rust-lanes-only) and
+[install quarantine](#runtime-quarantine-of-install-failures-rust-cli-lane)).

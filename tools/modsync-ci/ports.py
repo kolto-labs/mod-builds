@@ -9,6 +9,7 @@ import math
 import os
 from pathlib import Path
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -125,7 +126,8 @@ ERROR_LINE = re.compile(r"(?:\bError|\bException):|\[Error\]")
 STOP_MARKER = re.compile(r"(?:install(?:ation)?|cli command)\s+stopped", re.IGNORECASE)
 FAILURE_WORDS = re.compile(r"error|failed", re.IGNORECASE)
 COMPONENT_FAILURE = re.compile(
-    r"(?:Error|Exception): (?P<component>.+?) / step (?P<step>\d+) "
+    r"(?:Error|Exception): (?:Install stopped\. Restore before retrying; snapshot: .+?: )?"
+    r"(?P<component>.+?) / step (?P<step>\d+) "
     r"\((?P<action>[^)]*)\): (?P<message>.*?)\s*$")
 SECRET_PATTERNS = (
     (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"), r"\1 ***"),
@@ -180,6 +182,33 @@ def failure_excerpt(text, before=EVIDENCE_LINES_BEFORE, cap=EVIDENCE_LINE_CAP):
     return excerpt
 
 
+def component_failure_fields(match):
+    return {"component": match.group("component").strip(), "step": int(match.group("step")),
+            "action": match.group("action").strip(),
+            "message": clean_line(match.group("message")),
+            "error_line": clean_line(match.group(0))}
+
+
+def parse_component_failures(text):
+    """Every distinct `Error: <Component> / step N (<Action>): <message>` line of a tool's output.
+
+    A line repeated (the log and the final error) counts once, at its last position.
+    """
+    found = []
+    seen = set()
+    for line in text.splitlines():
+        match = COMPONENT_FAILURE.search(ANSI_ESCAPE.sub("", line))
+        if match:
+            fields = component_failure_fields(match)
+            key = (fields["component"], fields["step"], fields["action"], fields["message"])
+            if key in seen:
+                found = [item for item in found
+                         if (item["component"], item["step"], item["action"], item["message"]) != key]
+            seen.add(key)
+            found.append(fields)
+    return found
+
+
 def parse_component_failure(text):
     """The last `Error: <Component> / step N (<Action>): <message>` line of a tool's output, or None."""
     found = None
@@ -187,12 +216,7 @@ def parse_component_failure(text):
         match = COMPONENT_FAILURE.search(ANSI_ESCAPE.sub("", line))
         if match:
             found = match
-    if found is None:
-        return None
-    return {"component": found.group("component").strip(), "step": int(found.group("step")),
-            "action": found.group("action").strip(),
-            "message": clean_line(found.group("message")),
-            "error_line": clean_line(found.group(0))}
+    return None if found is None else component_failure_fields(found)
 
 
 def record_failure(text, stage, code, report, print_excerpt=False):
@@ -953,6 +977,19 @@ QUARANTINE_MAX_FRACTION = 0.15
 VALIDATE_FAILURE_KIND = "validate_failure"
 QUARANTINE_DEPENDENT_KIND = "dependent_of_quarantined"
 QUARANTINE_CAP_REASON = "validate_quarantine_cap_exceeded"
+INSTALL_QUARANTINE_KEY = "quarantined_install_failures"
+INSTALL_FAILURE_KIND = "install_failure"
+INSTALL_QUARANTINE_CAP_REASON = "install_quarantine_cap_exceeded"
+QUARANTINE_FAILURE_KINDS = (VALIDATE_FAILURE_KIND, INSTALL_FAILURE_KIND)
+QUARANTINE_PHASES = {
+    "validate": {"key": QUARANTINE_KEY, "kind": VALIDATE_FAILURE_KIND,
+                 "cap": QUARANTINE_CAP_REASON, "blocked": "validate_failed"},
+    "install": {"key": INSTALL_QUARANTINE_KEY, "kind": INSTALL_FAILURE_KIND,
+                "cap": INSTALL_QUARANTINE_CAP_REASON, "blocked": "install_failed"},
+}
+INSTALL_QUARANTINE_ACTIONS = frozenset(
+    action.casefold() for action in ("Patcher", "Extract", "Move", "Copy", "Rename", "Delete"))
+BASELINE_COPY_TIMEOUT = 7200
 GAME_MISSING = re.compile(
     r"\b(?:game|kotor)\s+(?:directory|folder|install(?:ation)?)\b[^:]{0,40}"
     r"\b(?:not found|does not exist|is missing|missing)\b|chitin\.key",
@@ -1006,6 +1043,91 @@ def transitive_dependents(components, root, excluded):
     return found
 
 
+def quarantined_entries(report):
+    """Every quarantine record of the lane, validate failures first, then install failures."""
+    return list(report.get(QUARANTINE_KEY) or ()) + list(report.get(INSTALL_QUARANTINE_KEY) or ())
+
+
+def start_quarantine(components, deselect, report, max_iterations, max_fraction):
+    """Open the quarantine budget that validate and install share; returns the policy record."""
+    taken = deselected_guids(deselect)
+    selected = sum(normalized_reference(component.get("Guid")) not in taken for component in components)
+    max_components = min(selected, math.floor(selected * max_fraction + 1e-9)) if max_fraction > 0 else 0
+    report["quarantine"] = {
+        "max_iterations": max_iterations, "max_fraction": max_fraction,
+        "selected_components": selected, "max_components": max_components,
+        "attempts": 0, "install_attempts": 0, "stopped": None}
+    return report["quarantine"]
+
+
+def quarantine_stop(report, phase, stage, reason, parsed, failure, cap=False):
+    """Record why a failure was not quarantined and fail the lane."""
+    settings = QUARANTINE_PHASES[phase]
+    report["quarantine"]["stopped"] = {
+        "phase": phase, "stage": stage, "reason": reason, "component": parsed and parsed["component"],
+        "step": parsed and parsed["step"], "error_line": parsed and parsed["error_line"]}
+    raise Blocked(settings["cap"] if cap else settings["blocked"]) from failure
+
+
+def quarantine_failure(phase, parsed, stage, components, deselect, game, report, failure,
+                       before_commit=None):
+    """Quarantine the one component `parsed` names, plus its dependents, or fail the lane with a reason.
+
+    Both stages use it, against the one budget in report["quarantine"]: the iteration cap counts
+    the failing components of the validate and install lists together, and so does the component
+    cap (failing components plus dependents). `before_commit` runs once every check has passed and
+    before anything is recorded or deselected; the install stage restores the game there.
+    """
+    settings = QUARANTINE_PHASES[phase]
+    policy = report["quarantine"]
+
+    def stop(reason, cap=False):
+        quarantine_stop(report, phase, stage, reason, parsed, failure, cap)
+
+    entries = quarantined_entries(report)
+    if policy["max_iterations"] <= 0:
+        stop("quarantine_disabled")
+    if sum(item["kind"] in QUARANTINE_FAILURE_KINDS for item in entries) >= policy["max_iterations"]:
+        stop("iteration_cap_exceeded", True)
+    if not game.is_dir() or not any(game.iterdir()) or GAME_MISSING.search(parsed["message"]):
+        stop("game_missing")
+    match, problem = find_failing_component(components, parsed["component"])
+    if problem:
+        stop(problem)
+    identity, component = match
+    taken = deselected_guids(deselect)
+    if identity in taken:
+        stop("component_already_deselected")
+    dependents = transitive_dependents(components, identity, taken)
+    if len(entries) + 1 + len(dependents) > policy["max_components"]:
+        stop("component_cap_exceeded", True)
+    if before_commit is not None:
+        before_commit()
+    quarantined = report.setdefault(settings["key"], [])
+    quarantined.append({
+        "kind": settings["kind"], "name": component.get("Name", component.get("Heading")),
+        "component_guid": identity, "step": parsed["step"], "action": parsed["action"],
+        "error_line": parsed["error_line"], "stage": stage, "caused_by": None})
+    for dependent_guid, dependent in dependents.items():
+        quarantined.append({
+            "kind": QUARANTINE_DEPENDENT_KIND,
+            "name": dependent.get("Name", dependent.get("Heading")),
+            "component_guid": dependent_guid, "step": None, "action": None,
+            "error_line": None, "stage": stage, "caused_by": identity})
+    for each in (identity, *dependents):
+        deselect += ["--deselect", each]
+
+
+def read_stage_log(private, stage, report):
+    """The text of a failed stage's log and its exit code."""
+    try:
+        text = (private / (stage + ".log")).read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        text = ""
+    code = report["commands"][-1].get("exit_code") if report.get("commands") else None
+    return text, code
+
+
 def validate_with_quarantine(command, directories, deselect, converted, game, source, private, report,
                              env, max_iterations=QUARANTINE_MAX_ITERATIONS,
                              max_fraction=QUARANTINE_MAX_FRACTION):
@@ -1020,20 +1142,9 @@ def validate_with_quarantine(command, directories, deselect, converted, game, so
     report["quarantined_validate_failures"].
     """
     components = converted_components(converted)
-    taken = deselected_guids(deselect)
-    selected = sum(normalized_reference(component.get("Guid")) not in taken for component in components)
-    max_components = min(selected, math.floor(selected * max_fraction + 1e-9)) if max_fraction > 0 else 0
-    quarantined = report.setdefault(QUARANTINE_KEY, [])
-    policy = report["quarantine"] = {
-        "max_iterations": max_iterations, "max_fraction": max_fraction,
-        "selected_components": selected, "max_components": max_components,
-        "attempts": 0, "stopped": None}
-
-    def stop(reason, parsed, failure, blocked=None):
-        policy["stopped"] = {"reason": reason, "component": parsed and parsed["component"],
-                             "step": parsed and parsed["step"], "error_line": parsed and parsed["error_line"]}
-        raise Blocked(blocked or "validate_failed") from failure
-
+    report.setdefault(QUARANTINE_KEY, [])
+    start_quarantine(components, deselect, report, max_iterations, max_fraction)
+    policy = report["quarantine"]
     iterations = 0
     while True:
         stage = "validate" if iterations == 0 else f"validate_retry_{iterations}"
@@ -1043,48 +1154,157 @@ def validate_with_quarantine(command, directories, deselect, converted, game, so
         except Blocked as failure:
             if str(failure) != stage + "_failed":
                 raise
-            try:
-                text = (private / (stage + ".log")).read_text(encoding="utf-8", errors="replace")
-            except OSError:
-                text = ""
-            code = report["commands"][-1].get("exit_code") if report.get("commands") else None
+            text, code = read_stage_log(private, stage, report)
             parsed = parse_component_failure(text)
-            if parsed is None:
-                record_failure(text, stage, code, report)
-                stop("error_not_attributable", None, failure)
             record_failure(text, stage, code, report)
-            if max_iterations <= 0:
-                stop("quarantine_disabled", parsed, failure)
-            if iterations >= max_iterations:
-                stop("iteration_cap_exceeded", parsed, failure, QUARANTINE_CAP_REASON)
-            if not game.is_dir() or not any(game.iterdir()) or GAME_MISSING.search(parsed["message"]):
-                stop("game_missing", parsed, failure)
-            match, problem = find_failing_component(components, parsed["component"])
-            if problem:
-                stop(problem, parsed, failure)
-            identity, component = match
-            taken = deselected_guids(deselect)
-            if identity in taken:
-                stop("component_already_deselected", parsed, failure)
-            dependents = transitive_dependents(components, identity, taken)
-            if len(quarantined) + 1 + len(dependents) > max_components:
-                stop("component_cap_exceeded", parsed, failure, QUARANTINE_CAP_REASON)
-            name = component.get("Name", component.get("Heading"))
-            quarantined.append({
-                "kind": VALIDATE_FAILURE_KIND, "name": name, "component_guid": identity,
-                "step": parsed["step"], "action": parsed["action"],
-                "error_line": parsed["error_line"], "stage": stage, "caused_by": None})
-            for dependent_guid, dependent in dependents.items():
-                quarantined.append({
-                    "kind": QUARANTINE_DEPENDENT_KIND,
-                    "name": dependent.get("Name", dependent.get("Heading")),
-                    "component_guid": dependent_guid, "step": None, "action": None,
-                    "error_line": None, "stage": stage, "caused_by": identity})
-            for each in (identity, *dependents):
-                deselect += ["--deselect", each]
+            if parsed is None:
+                quarantine_stop(report, "validate", stage, "error_not_attributable", None, failure)
+            quarantine_failure("validate", parsed, stage, components, deselect, game, report, failure)
             iterations += 1
             continue
         report.pop("failure", None)
+        return
+
+
+def game_is_populated(game):
+    """The game directory exists, is not empty and still has its chitin.key."""
+    try:
+        return game.is_dir() and any(child.name.casefold() == "chitin.key" for child in game.iterdir())
+    except OSError:
+        return False
+
+
+def tree_manifest(root):
+    """Every entry under `root`: relative path -> (kind, size or link target)."""
+    manifest = {}
+    pending = [root]
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                relative = Path(entry.path).relative_to(root).as_posix()
+                if entry.is_symlink():
+                    manifest[relative] = ("link", os.readlink(entry.path))
+                elif entry.is_dir(follow_symlinks=False):
+                    manifest[relative] = ("dir", 0)
+                    pending.append(entry.path)
+                else:
+                    manifest[relative] = ("file", entry.stat(follow_symlinks=False).st_size)
+    return manifest
+
+
+def copy_tree(source, destination):
+    """Copy the contents of `source` into `destination` as independent files (never hardlinks)."""
+    destination.mkdir(parents=True, exist_ok=True)
+    try:
+        subprocess.run(["cp", "-a", "--reflink=auto", "--", str(source) + "/.", str(destination) + "/"],
+                       check=True, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                       stderr=subprocess.DEVNULL, timeout=BASELINE_COPY_TIMEOUT)
+    except FileNotFoundError:
+        shutil.copytree(source, destination, symlinks=True, dirs_exist_ok=True)
+
+
+def take_baseline(game, private, report):
+    """Copy the game directory to the lane's private directory before the first install.
+
+    Returns (baseline directory, manifest) or None when the copy failed or does not match the
+    game; the outcome is recorded under report["quarantine"]["baseline"] either way.
+    """
+    baseline = private / "game-baseline"
+    try:
+        copy_tree(game, baseline)
+        manifest = tree_manifest(baseline)
+        if manifest != tree_manifest(game):
+            raise OSError("baseline copy differs from the game directory")
+    except (OSError, subprocess.SubprocessError, shutil.Error):
+        shutil.rmtree(baseline, ignore_errors=True)
+        report["quarantine"]["baseline"] = {"status": "copy_failed"}
+        return None
+    report["quarantine"]["baseline"] = {
+        "status": "copied", "files": sum(kind == "file" for kind, _ in manifest.values()),
+        "bytes": sum(size for kind, size in manifest.values() if kind == "file")}
+    return baseline, manifest
+
+
+def restore_game(game, baseline, manifest):
+    """Put the game directory back to the baseline in place and verify the file list and sizes."""
+    for child in game.iterdir():
+        if child.is_symlink() or not child.is_dir():
+            child.unlink()
+        else:
+            shutil.rmtree(child)
+    copy_tree(baseline, game)
+    if tree_manifest(game) != manifest:
+        raise OSError("restored game directory differs from the baseline")
+
+
+def install_with_quarantine(command, directories, deselect, converted, game, source, private, report,
+                            env, max_iterations=QUARANTINE_MAX_ITERATIONS,
+                            max_fraction=QUARANTINE_MAX_FRACTION):
+    """Run `install`; when one component's step stops it, restore the game, omit that component and retry.
+
+    A copy of the game directory is taken before the first install. A failed install is only
+    quarantined when its output names exactly one (component, step) whose action is in
+    INSTALL_QUARANTINE_ACTIONS, shows no panic or failed rollback, the game directory is
+    populated, the baseline copy exists, and the budget shared with validate still allows it.
+    The game directory is then restored in place and verified against the baseline, the
+    component and its dependents are appended to `deselect` and the install re-runs as
+    `install_retry_N`. Anything else leaves the lane failed. Every quarantined component is
+    listed in report["quarantined_install_failures"]: the lane is a partial install.
+    """
+    components = converted_components(converted)
+    policy = report.get("quarantine") or start_quarantine(
+        components, deselect, report, max_iterations, max_fraction)
+    report.setdefault(INSTALL_QUARANTINE_KEY, [])
+    baseline = take_baseline(game, private, report) if policy["max_iterations"] > 0 else None
+    attempt = 0
+    while True:
+        stage = "install" if attempt == 0 else f"install_retry_{attempt}"
+        policy["install_attempts"] = attempt + 1
+        try:
+            run(command + ["install"] + directories + deselect + ["--non-interactive", "--phase", "all"],
+                source, private, stage, report, env)
+        except Blocked as failure:
+            if str(failure) != stage + "_failed":
+                raise
+            text, code = read_stage_log(private, stage, report)
+            record_failure(text, stage, code, report)
+            failures = parse_component_failures(text)
+            parsed = failures[-1] if failures else None
+
+            def stop(reason, parsed=parsed, stage=stage, failure=failure):
+                quarantine_stop(report, "install", stage, reason, parsed, failure)
+
+            lowered = ANSI_ESCAPE.sub("", text).lower()
+            if policy["max_iterations"] <= 0:
+                stop("quarantine_disabled")
+            if code == 101 or "panicked at" in lowered or "stack backtrace" in lowered:
+                stop("panic_detected")
+            if "rollback failed" in lowered:
+                stop("rollback_failed")
+            if not failures:
+                stop("error_not_attributable")
+            if len({(item["component"].casefold(), item["step"]) for item in failures}) > 1:
+                stop("multiple_components_failed")
+            if parsed["action"].casefold() not in INSTALL_QUARANTINE_ACTIONS:
+                stop("action_not_quarantinable")
+            if not game_is_populated(game):
+                stop("game_missing")
+            if baseline is None:
+                stop("baseline_copy_failed")
+
+            def restore(parsed=parsed, stage=stage, failure=failure):
+                try:
+                    restore_game(game, baseline[0], baseline[1])
+                except (OSError, subprocess.SubprocessError, shutil.Error):
+                    quarantine_stop(report, "install", stage, "restore_failed", parsed, failure)
+
+            quarantine_failure("install", parsed, stage, components, deselect, game, report, failure,
+                               before_commit=restore)
+            attempt += 1
+            continue
+        report.pop("failure", None)
+        if baseline is not None:
+            shutil.rmtree(baseline[0], ignore_errors=True)
         return
 
 
@@ -1126,23 +1346,33 @@ def print_diagnostics(report):
         for item in pending["components"]:
             print(f"  - deselected pending review: {item['heading']} [{item['component_guid']}] "
                   f"({item['kind']})", file=sys.stderr)
-    quarantined = report.get(QUARANTINE_KEY)
-    if quarantined:
-        failing = [item for item in quarantined if item["kind"] == VALIDATE_FAILURE_KIND]
-        print(f"::warning::ports: {len(quarantined)} component(s) QUARANTINED after validate failures "
+    for phase, label, outcome in (
+            ("validate", "validate failures", "not installed and not verified"),
+            ("install", "install failures", "omitted from the retried install and not verified")):
+        settings = QUARANTINE_PHASES[phase]
+        quarantined = report.get(settings["key"])
+        if not quarantined:
+            continue
+        failing = [item for item in quarantined if item["kind"] == settings["kind"]]
+        print(f"::warning::ports: {len(quarantined)} component(s) QUARANTINED after {label} "
               f"({len(failing)} failing, {len(quarantined) - len(failing)} dependent(s)): they are "
-              f"not installed and not verified, so a green lane is a PARTIAL install", file=sys.stderr)
+              f"{outcome}, so a green lane is a PARTIAL install", file=sys.stderr)
         for item in quarantined:
-            if item["kind"] == VALIDATE_FAILURE_KIND:
+            if item["kind"] == settings["kind"]:
                 print(f"::warning::ports: quarantined {item['name']} [{item['component_guid']}]: "
-                      f"validate failed at step {item['step']} ({item['action']}): {item['error_line']}",
+                      f"{phase} failed at step {item['step']} ({item['action']}): {item['error_line']}",
                       file=sys.stderr)
             else:
                 print(f"::warning::ports: quarantined {item['name']} [{item['component_guid']}]: "
                       f"depends on quarantined {item['caused_by']}", file=sys.stderr)
+    baseline = (report.get("quarantine") or {}).get("baseline")
+    if baseline and baseline.get("status") == "copy_failed":
+        print("::warning::ports: the game directory baseline copy failed, so an install failure "
+              "could not be quarantined (no restore point)", file=sys.stderr)
     stopped = (report.get("quarantine") or {}).get("stopped")
     if stopped:
-        print(f"::error::ports: validate failure not quarantined ({stopped['reason']})"
+        print(f"::error::ports: {stopped.get('phase', 'validate')} failure not quarantined "
+              f"({stopped['reason']})"
               + (f": {stopped['error_line']}" if stopped.get("error_line") else ""), file=sys.stderr)
     failure = report.get("failure")
     if failure and report.get("status") != "installed":
@@ -1758,7 +1988,7 @@ def execute(args, report):
         command, directories, deselect, converted, game, source, private, report, env,
         getattr(args, "max_quarantine", QUARANTINE_MAX_ITERATIONS),
         getattr(args, "max_quarantine_fraction", QUARANTINE_MAX_FRACTION))
-    quarantined_guids = {item["component_guid"] for item in report.get(QUARANTINE_KEY, [])}
+    quarantined_guids = {item["component_guid"] for item in quarantined_entries(report)}
     gui_skipped = policy_guids | quarantined_guids
     if args.mode == "gui":
         if (digest(guide) != report["guide_sha256"]
@@ -1807,9 +2037,10 @@ def execute(args, report):
         report["status"] = "installed"
         report["reason"] = result["reason"]
         return
-    run(command + ["install"] + directories + deselect
-        + ["--non-interactive", "--phase", "all"],
-        source, private, "install", report, env)
+    install_with_quarantine(
+        command, directories, deselect, converted, game, source, private, report, env,
+        getattr(args, "max_quarantine", QUARANTINE_MAX_ITERATIONS),
+        getattr(args, "max_quarantine_fraction", QUARANTINE_MAX_FRACTION))
     report["status"] = "installed"
     report["reason"] = "native_install_command_succeeded"
 
@@ -1829,11 +2060,12 @@ def main(argv=None):
                              "TypeScript --select of the rest). Both implementations also apply the reviewed "
                              "lane_skips of archive_selections.json (TypeScript: the unpinned entries only)")
     parser.add_argument("--max-quarantine", type=int, default=QUARANTINE_MAX_ITERATIONS,
-                        help="Rust lanes: most validate failures to quarantine (deselect and re-run) "
-                             "before the lane fails; 0 disables quarantine (default %(default)s)")
+                        help="Rust lanes: most validate and install failures together to quarantine "
+                             "(deselect and re-run) before the lane fails; 0 disables quarantine "
+                             "(default %(default)s)")
     parser.add_argument("--max-quarantine-fraction", type=float, default=QUARANTINE_MAX_FRACTION,
-                        help="Rust lanes: most quarantined components (failures plus dependents) as a "
-                             "fraction of the selected components (default %(default)s)")
+                        help="Rust lanes: most quarantined components (validate and install failures plus "
+                             "dependents) as a fraction of the selected components (default %(default)s)")
     for name in ("source", "guide", "game-dir", "archives", "work-dir", "report"):
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args(argv)

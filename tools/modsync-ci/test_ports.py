@@ -2479,6 +2479,415 @@ class ValidateQuarantineTests(unittest.TestCase):
                       text)
 
 
+def install_error(name, step=2, action="Patcher",
+                  message="Built-in OdyPatcher reported errors; restore before retrying"):
+    prefix = "Install stopped. Restore before retrying; snapshot: /tmp/snapshots/run 1: "
+    return (f"Component A / 1: Extract\n"
+            f"[2026-10-18 16:09:50] [Error] Install stopped\n"
+            f"[2026-10-18 16:09:50] [Error] Exception: {prefix}{name} / step {step} ({action}): {message}\n"
+            f"Error: {prefix}{name} / step {step} ({action}): {message}\n")
+
+
+class InstallFailureParserTests(unittest.TestCase):
+    PREFIX = "Install stopped. Restore before retrying; snapshot: /tmp/snap shots/run 1: "
+
+    def test_the_install_stopped_prefix_is_not_part_of_the_component_name(self):
+        for line in (f"Error: {self.PREFIX}Component A / step 2 (Patcher): Built-in OdyPatcher reported errors; x",
+                     f"[2026-10-18 16:09:50] [Error] Exception: {self.PREFIX}Component A / step 2 (Patcher): "
+                     "Built-in OdyPatcher reported errors; x",
+                     f"\x1b[31mError: {self.PREFIX}Component A / step 2 (Patcher): "
+                     "Built-in OdyPatcher reported errors; x\x1b[0m"):
+            with self.subTest(line=line):
+                parsed = ports.parse_component_failure(line + "\n")
+                self.assertEqual((parsed["component"], parsed["step"], parsed["action"]),
+                                 ("Component A", 2, "Patcher"))
+                self.assertEqual(parsed["message"], "Built-in OdyPatcher reported errors; x")
+
+    def test_a_component_name_with_a_colon_and_the_plain_form_are_unchanged(self):
+        parsed = ports.parse_component_failure(
+            f"Error: {self.PREFIX}Component A: Part 2 / step 1 (Move): boom\n")
+        self.assertEqual(parsed["component"], "Component A: Part 2")
+        self.assertEqual(ports.parse_component_failure("Error: Component B / step 3 (Copy): x\n")["component"],
+                         "Component B")
+
+    def test_every_distinct_failure_line_is_listed_once_in_order(self):
+        text = install_error("Mod 05") + install_error("Mod 06", step=1, action="Move", message="boom")
+        parsed = ports.parse_component_failures(text)
+        self.assertEqual([(item["component"], item["step"]) for item in parsed],
+                         [("Mod 05", 2), ("Mod 06", 1)])
+        self.assertEqual(ports.parse_component_failures("Error: nothing here\n"), [])
+
+
+class InstallQuarantineTests(unittest.TestCase):
+    prepare = ExecuteCommandTests.prepare
+
+    def run_lane(self, validate_failures=(), install_failures=(), converted=None, count=20, chitin=True,
+                 max_quarantine=None, max_fraction=None, mode="cli"):
+        """Run the Rust lane with a fake `run`; each failure is a log text or a (log text, exit code)."""
+        root, args = self.prepare("k2")
+        args.guide.write_text("# Guide\n\n## Mod List\n\n" + "".join(
+            f"### Mod {number:02d}\n\n" for number in range(1, count + 1)), encoding="utf-8")
+        args.implementation = "rust"
+        args.mode = mode
+        game = args.game_dir.resolve()
+        (game / "swkotor2.exe").write_text("x", encoding="utf-8")
+        if chitin:
+            (game / "chitin.key").write_text("key", encoding="utf-8")
+        (game / "modules").mkdir()
+        (game / "modules" / "a.mod").write_text("module", encoding="utf-8")
+        (game / "override").mkdir()
+        (game / "override" / "keep.2da").write_text("0123456789", encoding="utf-8")
+        self.initial = ports.tree_manifest(game)
+        if max_quarantine is not None:
+            args.max_quarantine = max_quarantine
+        if max_fraction is not None:
+            args.max_quarantine_fraction = max_fraction
+        pending = {"validate": list(validate_failures), "install": list(install_failures)}
+        commands = []
+        self.seen = {}
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append((stage, list(command)))
+            self.private = private
+            reviewed = private / "converted.toml"
+            self.seen[stage] = {
+                "tree": ports.tree_manifest(game),
+                "converted": hashlib.sha256(reviewed.read_bytes()).hexdigest() if reviewed.is_file() else None,
+                "baseline": (private / "game-baseline").is_dir()}
+            if stage == "convert":
+                reviewed.write_text(converted or quarantine_document(count), encoding="utf-8")
+            for phase, queue in pending.items():
+                if stage.startswith(phase) and queue:
+                    text, code = queue.pop(0) if isinstance(queue[0], tuple) else (queue.pop(0), 1)
+                    if phase == "install":
+                        (game / "override" / "partial.2da").write_text("half", encoding="utf-8")
+                        (game / "modules" / "a.mod").write_text("changed module", encoding="utf-8")
+                        (game / "override" / "keep.2da").unlink()
+                        (game / "newdir").mkdir(exist_ok=True)
+                        (game / "newdir" / "x.bin").write_text("x", encoding="utf-8")
+                    (private / (stage + ".log")).write_text(text, encoding="utf-8")
+                    report["stage"] = stage
+                    report["commands"].append({"stage": stage, "exit_code": code})
+                    raise ports.Blocked(stage + "_failed")
+
+        report = {"commands": []}
+        error = None
+        with mock.patch.object(ports, "run", reviewing(fake_run)):
+            try:
+                ports.execute(args, report)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        self.assertEqual(pending, {"validate": [], "install": []}, "every scripted failure was consumed")
+        self.game = game
+        return commands, report, error
+
+    def deselected(self, command):
+        return [value for flag, value in zip(command, command[1:]) if flag == "--deselect"]
+
+    def installs(self, commands):
+        return [(stage, command) for stage, command in commands if stage.startswith("install")]
+
+    def test_a_passing_install_runs_once_and_reports_an_empty_install_quarantine(self):
+        commands, report, error = self.run_lane()
+        self.assertIsNone(error)
+        self.assertEqual([stage for stage, _ in self.installs(commands)], ["install"])
+        self.assertEqual(report["quarantined_install_failures"], [])
+        self.assertEqual(report["quarantine"]["install_attempts"], 1)
+        self.assertEqual(report["quarantine"]["baseline"]["status"], "copied")
+        self.assertEqual(report["quarantine"]["baseline"]["files"], 4)
+        self.assertTrue(self.seen["install"]["baseline"], "the baseline exists before the first install")
+        self.assertFalse((self.private / "game-baseline").exists(), "the baseline is dropped once installed")
+        self.assertEqual(report["reason"], "native_install_command_succeeded")
+
+    def test_a_single_failure_restores_the_game_and_retries_without_the_component(self):
+        commands, report, error = self.run_lane(install_failures=[install_error("Mod 05")])
+        self.assertIsNone(error)
+        installs = self.installs(commands)
+        self.assertEqual([stage for stage, _ in installs], ["install", "install_retry_1"])
+        self.assertEqual(self.deselected(installs[0][1]), [])
+        self.assertEqual(self.deselected(installs[1][1]), [quarantine_guid(5)])
+        self.assertEqual(self.seen["install_retry_1"]["tree"], self.initial,
+                         "the game tree equals the baseline when the retry starts")
+        self.assertTrue(self.seen["install_retry_1"]["baseline"])
+        self.assertEqual(ports.tree_manifest(self.game), self.initial)
+        self.assertEqual((self.game / "override" / "keep.2da").read_text(encoding="utf-8"), "0123456789")
+        self.assertFalse((self.game / "override" / "partial.2da").exists())
+        entry, = report["quarantined_install_failures"]
+        self.assertEqual((entry["kind"], entry["name"], entry["component_guid"], entry["step"],
+                          entry["action"], entry["stage"], entry["caused_by"]),
+                         ("install_failure", "Mod 05", quarantine_guid(5), 2, "Patcher", "install", None))
+        self.assertTrue(entry["error_line"].startswith("Error: Install stopped. Restore before retrying;"))
+        self.assertIn("Mod 05 / step 2 (Patcher)", entry["error_line"])
+        self.assertEqual(report["quarantined_validate_failures"], [])
+        self.assertEqual(report["quarantine"]["install_attempts"], 2)
+        self.assertIsNone(report["quarantine"]["stopped"])
+        self.assertNotIn("failure", report, "a later green install clears the stale failure")
+        self.assertEqual(report["reason"], "native_install_command_succeeded")
+
+    def test_converted_toml_is_never_touched_by_the_quarantine(self):
+        _, report, error = self.run_lane(install_failures=[install_error("Mod 05")])
+        self.assertIsNone(error)
+        digests = {item["converted"] for stage, item in self.seen.items()
+                   if stage.startswith("install") or stage == "validate"}
+        self.assertEqual(len(digests), 1)
+        self.assertEqual(hashlib.sha256((self.private / "converted.toml").read_bytes()).hexdigest(),
+                         digests.pop())
+        self.assertEqual(report["converted_sha256"], hashlib.sha256(
+            (self.private / "converted.toml").read_bytes()).hexdigest())
+
+    def test_transitive_dependents_are_quarantined_with_it(self):
+        converted = quarantine_document(dependencies={
+            7: ["{" + quarantine_guid(5).upper() + "}"], 8: [quarantine_guid(7)], 11: [quarantine_guid(2)]})
+        commands, report, error = self.run_lane(
+            install_failures=[install_error("Mod 05")], converted=converted, max_fraction=0.25)
+        self.assertIsNone(error)
+        self.assertEqual(self.deselected(dict(commands)["install_retry_1"]),
+                         [quarantine_guid(5), quarantine_guid(7), quarantine_guid(8)])
+        entries = report["quarantined_install_failures"]
+        self.assertEqual([(item["kind"], item["component_guid"], item["caused_by"], item["stage"])
+                          for item in entries],
+                         [("install_failure", quarantine_guid(5), None, "install"),
+                          ("dependent_of_quarantined", quarantine_guid(7), quarantine_guid(5), "install"),
+                          ("dependent_of_quarantined", quarantine_guid(8), quarantine_guid(5), "install")])
+
+    def test_validate_and_install_quarantines_accumulate_into_the_retried_install(self):
+        commands, report, error = self.run_lane(
+            validate_failures=[validate_error("Mod 02")], install_failures=[install_error("Mod 05")])
+        self.assertIsNone(error)
+        self.assertEqual(self.deselected(dict(commands)["install"]), [quarantine_guid(2)])
+        self.assertEqual(self.deselected(dict(commands)["install_retry_1"]),
+                         [quarantine_guid(2), quarantine_guid(5)])
+        self.assertEqual(len(ports.quarantined_entries(report)), 2)
+
+    def test_the_component_cap_is_shared_with_validate(self):
+        dependencies = {number: [quarantine_guid(1)] for number in (2,)}
+        dependencies.update({number: [quarantine_guid(5)] for number in range(6, 11)})
+        commands, report, error = self.run_lane(
+            validate_failures=[validate_error("Mod 01")], install_failures=[install_error("Mod 05")],
+            converted=quarantine_document(45, dependencies), count=45)
+        self.assertEqual(report["quarantine"]["max_components"], 6)
+        self.assertEqual(error, "install_quarantine_cap_exceeded")
+        self.assertEqual(len(report["quarantined_validate_failures"]), 2)
+        self.assertEqual(report["quarantined_install_failures"], [])
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "component_cap_exceeded")
+        self.assertEqual(report["quarantine"]["stopped"]["phase"], "install")
+        self.assertEqual([stage for stage, _ in self.installs(commands)], ["install"])
+
+    def test_the_same_failures_fit_when_the_shared_total_stays_within_the_cap(self):
+        dependencies = {2: [quarantine_guid(1)], 6: [quarantine_guid(5)], 7: [quarantine_guid(5)]}
+        commands, report, error = self.run_lane(
+            validate_failures=[validate_error("Mod 01")], install_failures=[install_error("Mod 05")],
+            converted=quarantine_document(45, dependencies), count=45)
+        self.assertIsNone(error)
+        self.assertEqual(len(ports.quarantined_entries(report)), 5)
+
+    def test_the_iteration_cap_is_shared_with_validate(self):
+        failures = [install_error("Mod 02"), install_error("Mod 03")]
+        commands, report, error = self.run_lane(
+            validate_failures=[validate_error("Mod 01")], install_failures=failures, max_quarantine=2)
+        self.assertEqual(error, "install_quarantine_cap_exceeded")
+        self.assertEqual([stage for stage, _ in self.installs(commands)], ["install", "install_retry_1"])
+        self.assertEqual([item["name"] for item in report["quarantined_install_failures"]], ["Mod 02"])
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "iteration_cap_exceeded")
+        self.assertEqual(report["failure"]["stage"], "install_retry_1")
+        self.assertEqual(report["failure"]["component"], "Mod 03")
+
+    def test_hard_failures_never_quarantine_and_say_why(self):
+        both = install_error("Mod 05") + install_error("Mod 06")
+        cases = [
+            ("panic_detected", "thread 'main' panicked at src/main.rs:1\n" + install_error("Mod 05")),
+            ("panic_detected", "stack backtrace:\n" + install_error("Mod 05")),
+            ("panic_detected", (install_error("Mod 05"), 101)),
+            ("rollback_failed", install_error("Mod 05") + "Rollback FAILED: file busy\n"),
+            ("multiple_components_failed", both),
+            ("error_not_attributable", "Error: No components are selected\n"),
+            ("error_not_attributable", ""),
+            ("action_not_quarantinable", install_error("Mod 05", action="Execute")),
+            ("action_not_quarantinable", install_error("Mod 05", action="Choose")),
+            ("component_unknown", install_error("Not In The Guide")),
+        ]
+        for reason, failure in cases:
+            with self.subTest(reason=reason, failure=failure):
+                commands, report, error = self.run_lane(install_failures=[failure])
+                self.assertEqual(error, "install_failed")
+                self.assertEqual(report["quarantine"]["stopped"]["reason"], reason)
+                self.assertEqual(report["quarantine"]["stopped"]["phase"], "install")
+                self.assertEqual(report["quarantined_install_failures"], [])
+                self.assertEqual([stage for stage, _ in self.installs(commands)], ["install"])
+                self.assertEqual(report["failure"]["stage"], "install")
+                self.assertNotEqual(ports.tree_manifest(self.game), self.initial, "no restore happened")
+
+    def test_the_same_step_named_twice_is_still_one_failure(self):
+        _, report, error = self.run_lane(
+            install_failures=[install_error("Mod 05") + install_error("Mod 05", message="again")])
+        self.assertIsNone(error)
+        self.assertEqual(len(report["quarantined_install_failures"]), 1)
+
+    def test_a_shared_name_hard_fails_as_ambiguous(self):
+        _, report, error = self.run_lane(
+            install_failures=[install_error("Mod 05")], converted=quarantine_document(names={6: "Mod 05"}))
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "component_ambiguous")
+
+    def test_a_component_already_deselected_by_validate_hard_fails_instead_of_looping(self):
+        _, report, error = self.run_lane(
+            validate_failures=[validate_error("Mod 05")], install_failures=[install_error("Mod 05")])
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "component_already_deselected")
+        self.assertEqual(report["quarantined_install_failures"], [])
+
+    def test_a_game_directory_without_chitin_key_hard_fails(self):
+        commands, report, error = self.run_lane(install_failures=[install_error("Mod 05")], chitin=False)
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "game_missing")
+        _, report, error = self.run_lane(install_failures=[install_error(
+            "Mod 05", step=1, action="Move", message="game directory not found: /g")])
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "game_missing")
+        self.assertEqual(report["quarantined_install_failures"], [])
+
+    def test_every_allowed_action_is_quarantinable(self):
+        for action in ("Patcher", "Extract", "Move", "Copy", "Rename", "Delete"):
+            with self.subTest(action=action):
+                _, report, error = self.run_lane(install_failures=[install_error("Mod 05", action=action)])
+                self.assertIsNone(error)
+                self.assertEqual(report["quarantined_install_failures"][0]["action"], action)
+
+    def test_a_failed_baseline_copy_runs_the_install_but_cannot_quarantine(self):
+        real = ports.copy_tree
+
+        def failing(source, destination):
+            if destination.name == "game-baseline":
+                raise OSError("no space left")
+            return real(source, destination)
+
+        with mock.patch.object(ports, "copy_tree", failing):
+            commands, report, error = self.run_lane()
+        self.assertIsNone(error)
+        self.assertEqual(report["quarantine"]["baseline"], {"status": "copy_failed"})
+        self.assertFalse((self.private / "game-baseline").exists())
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            ports.print_diagnostics(report)
+        self.assertIn("::warning::ports: the game directory baseline copy failed", log.getvalue())
+        with mock.patch.object(ports, "copy_tree", failing):
+            commands, report, error = self.run_lane(install_failures=[install_error("Mod 05")])
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "baseline_copy_failed")
+        self.assertEqual([stage for stage, _ in self.installs(commands)], ["install"])
+
+    def test_a_failed_restore_hard_fails_and_quarantines_nothing(self):
+        with mock.patch.object(ports, "restore_game", side_effect=OSError("busy")):
+            commands, report, error = self.run_lane(install_failures=[install_error("Mod 05")])
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "restore_failed")
+        self.assertEqual(report["quarantined_install_failures"], [])
+        self.assertEqual([stage for stage, _ in self.installs(commands)], ["install"])
+
+    def test_a_restore_that_does_not_match_the_baseline_hard_fails(self):
+        real = ports.copy_tree
+
+        def lossy(source, destination):
+            real(source, destination)
+            if destination.name != "game-baseline":
+                (destination / "modules" / "a.mod").write_text("short", encoding="utf-8")
+
+        with mock.patch.object(ports, "copy_tree", lossy):
+            _, report, error = self.run_lane(install_failures=[install_error("Mod 05")])
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "restore_failed")
+        self.assertEqual(report["quarantined_install_failures"], [])
+
+    def test_zero_disables_install_quarantine_and_takes_no_baseline(self):
+        commands, report, error = self.run_lane(install_failures=[install_error("Mod 05")], max_quarantine=0)
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "quarantine_disabled")
+        self.assertNotIn("baseline", report["quarantine"])
+        self.assertFalse(self.seen["install"]["baseline"])
+
+    def test_the_gui_lane_never_runs_the_install_quarantine(self):
+        commands, report, error = self.run_lane(mode="gui")
+        self.assertEqual(error, "gui_completion_report_missing")
+        self.assertEqual(self.installs(commands), [])
+        self.assertNotIn("quarantined_install_failures", report)
+
+    def test_the_baseline_is_an_independent_copy_and_restore_works_in_place(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root)
+        game = root / "game"
+        (game / "sub" / "deep").mkdir(parents=True)
+        (game / "a.bin").write_bytes(b"abc")
+        (game / "sub" / "deep" / "b.bin").write_bytes(b"defgh")
+        (game / "link").symlink_to("a.bin")
+        report = {"quarantine": {}}
+        baseline, manifest = ports.take_baseline(game, root, report)
+        self.assertEqual(report["quarantine"]["baseline"], {"status": "copied", "files": 2, "bytes": 8})
+        for relative in ("a.bin", "sub/deep/b.bin"):
+            original, copied = (game / relative).stat(), (baseline / relative).stat()
+            self.assertNotEqual(original.st_ino, copied.st_ino)
+            self.assertEqual(copied.st_nlink, 1)
+        before = os.stat(game).st_ino
+        (game / "a.bin").write_bytes(b"much longer")
+        (game / "sub" / "deep" / "b.bin").unlink()
+        (game / "sub" / "deep").rmdir()
+        (game / "sub").rmdir()
+        (game / "sub").write_text("now a file", encoding="utf-8")
+        (game / "extra").mkdir()
+        (game / "extra" / "c.bin").write_bytes(b"c")
+        ports.restore_game(game, baseline, manifest)
+        self.assertEqual(os.stat(game).st_ino, before, "the game directory itself is kept")
+        self.assertEqual(ports.tree_manifest(game), manifest)
+        self.assertEqual((game / "a.bin").read_bytes(), b"abc")
+        self.assertEqual((game / "sub" / "deep" / "b.bin").read_bytes(), b"defgh")
+        self.assertTrue((game / "link").is_symlink())
+        self.assertFalse((game / "extra").exists())
+
+    def test_the_log_lists_every_install_quarantine_as_a_warning(self):
+        converted = quarantine_document(dependencies={7: [quarantine_guid(5)]})
+        _, report, error = self.run_lane(install_failures=[install_error("Mod 05")], converted=converted)
+        self.assertIsNone(error)
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            ports.print_diagnostics(report)
+        text = log.getvalue()
+        self.assertIn("::warning::ports: 2 component(s) QUARANTINED after install failures "
+                      "(1 failing, 1 dependent(s))", text)
+        self.assertIn("PARTIAL install", text)
+        self.assertIn("::warning::ports: quarantined Mod 05 [" + quarantine_guid(5)
+                      + "]: install failed at step 2 (Patcher): Error: Install stopped.", text)
+        self.assertIn("::warning::ports: quarantined Mod 07 [" + quarantine_guid(7)
+                      + "]: depends on quarantined " + quarantine_guid(5), text)
+        self.assertNotIn("after validate failures", text)
+        self.assertNotIn("::error::", text)
+
+    def test_validate_and_install_warnings_are_separate_blocks(self):
+        _, report, _ = self.run_lane(
+            validate_failures=[validate_error("Mod 02")], install_failures=[install_error("Mod 05")])
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            ports.print_diagnostics(report)
+        text = log.getvalue()
+        self.assertIn("1 component(s) QUARANTINED after validate failures", text)
+        self.assertIn("1 component(s) QUARANTINED after install failures", text)
+
+    def test_a_refused_install_quarantine_is_a_stage_aware_error_line(self):
+        _, report, _ = self.run_lane(install_failures=[install_error("Mod 05") + install_error("Mod 06")])
+        report["status"] = "blocked"
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            ports.print_diagnostics(report)
+        text = log.getvalue()
+        self.assertIn("::error::ports: install failure not quarantined (multiple_components_failed): "
+                      "Error: Install stopped.", text)
+        self.assertIn("::error::ports: install failed (exit 1): component 'Mod 06', step 2 (Patcher)", text)
+
+    def test_an_old_style_stopped_record_still_reads_as_a_validate_failure(self):
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            ports.print_diagnostics({"quarantine": {"stopped": {
+                "reason": "game_missing", "component": "Mod 05", "step": 1, "error_line": None}}})
+        self.assertIn("::error::ports: validate failure not quarantined (game_missing)", log.getvalue())
+
+
 REAL_K2_LOG = (
     "\x1b[32mEbon Hawk Downloadable Map / 1: Extract\x1b[0m\n"
     "[2026-10-18 16:09:50] [Error] CLI command stopped\n"
