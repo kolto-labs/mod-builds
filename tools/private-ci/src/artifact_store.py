@@ -140,6 +140,25 @@ def stage(encrypted: Path, output: Path, chunk_size: int):
     return chunks
 
 
+def stage_directory(encrypted_directory: Path, output: Path, chunk_size: int):
+    """Stage stable per-object ciphertexts.
+
+    Callers retain each age-encrypted source object by its source digest and
+    replace only objects whose source changed. Re-encrypting one large tarball
+    every refresh would randomize all age nonces and defeat deduplication.
+    """
+    if encrypted_directory.is_symlink() or not encrypted_directory.is_dir():
+        raise ArtifactStoreError("Encrypted object directory is missing or unsafe")
+    result = {}
+    for source in sorted(encrypted_directory.iterdir(), key=lambda item: item.name):
+        if source.is_symlink() or not source.is_file() or not NAME_RE.fullmatch(source.name):
+            raise ArtifactStoreError("Encrypted object directory contains an unsafe member")
+        result.update(stage(source, output, chunk_size))
+    if not result:
+        raise ArtifactStoreError("Encrypted object directory is empty")
+    return result
+
+
 def make_index(chunks, segment_id=None, previous=None):
     merged = dict(previous.get("chunks", {})) if previous else {}
     for sha, entry in chunks.items():
@@ -200,6 +219,7 @@ def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("action", choices=("stage", "fetch-index", "fetch-chunks", "gc"))
     parser.add_argument("--input", type=Path)
+    parser.add_argument("--input-dir", type=Path)
     parser.add_argument("--output", type=Path)
     parser.add_argument("--index", type=Path)
     parser.add_argument("--repo")
@@ -213,9 +233,9 @@ def main(argv=None):
     if args.action != "stage" and (not args.repo or not token):
         raise ArtifactStoreError("A repository and authenticated token are required")
     if args.action == "stage":
-        if not args.input or not args.output:
+        if (bool(args.input) == bool(args.input_dir)) or not args.output:
             raise ArtifactStoreError("Stage requires input and output")
-        result = stage(args.input, args.output, args.chunk_size)
+        result = stage(args.input, args.output, args.chunk_size) if args.input else stage_directory(args.input_dir, args.output, args.chunk_size)
         print(json.dumps({"chunks": result}, sort_keys=True))
     elif args.action == "fetch-index":
         fetch_index(args.repo, token, args.artifact_id, args.output)

@@ -27,6 +27,16 @@ class ArtifactStoreTests(unittest.TestCase):
         body = {"schema": 1, "chunks": index["chunks"]}
         self.assertEqual(index["sha256"], hashlib.sha256(artifact_store.json_bytes(body)).hexdigest())
 
+    def test_directory_staging_reuses_stable_encrypted_objects(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            objects = root / "objects"; objects.mkdir()
+            (objects / "mod-a.age").write_bytes(b"stable-a")
+            (objects / "mod-b.age").write_bytes(b"stable-b")
+            first = artifact_store.stage_directory(objects, root / "first", 64)
+            second = artifact_store.stage_directory(objects, root / "second", 64)
+            self.assertEqual(set(first), set(second))
+
     def test_zip_slip_is_rejected(self):
         with tempfile.TemporaryDirectory() as temp:
             archive = Path(temp) / "x.zip"

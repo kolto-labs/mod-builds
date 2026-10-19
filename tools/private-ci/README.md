@@ -177,11 +177,11 @@ establish the tooling, not a completed real-game build or publisher authorizatio
 
 GitHub does not expose a supported upload API for creating an artifact from an arbitrary process. The safe pattern is a two-phase workflow: a trusted job prepares encrypted files, `actions/upload-artifact` uploads a segment, and a second upload publishes a small index containing the segment artifact ID. `src/artifact_store.py` supplies content-addressed chunking, index validation, authenticated cross-run downloads, and garbage collection. It never uploads plaintext and never puts the token in a URL.
 
-The payload must be encrypted before staging, for example by piping an owner-controlled archive through the pinned `age` binary into `$RUNNER_TEMP/cache/payload.age`:
+Each source archive must be encrypted once and retained as a separate stable age object. Re-encrypting one large tarball on every refresh would randomize its age nonces and defeat deduplication. The private payload command should update only changed objects under `{output-dir}`. Stage that directory:
 
 ```sh
 python tools/private-ci/src/artifact_store.py stage \
-  --input "$RUNNER_TEMP/cache/payload.age" \
+  --input-dir "$RUNNER_TEMP/cache/objects" \
   --output "$RUNNER_TEMP/cache/chunks"
 ```
 
