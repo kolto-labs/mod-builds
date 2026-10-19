@@ -28,6 +28,9 @@ permissions:
   contents: read
 
 env:
+  # Only push (dev only), schedule and manual dispatch write the large Actions caches. Pull requests and
+  # releases only restore, so a 3 GB game or archive entry is not duplicated per ref and the 10 GB cap holds.
+  CACHE_WRITER: ${{ github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' }}
   # ModSync.ts ref the typescript install lanes build. Physical install
   # (--ci-physical-install) exists only on this branch, not on the repository default branch.
   MODSYNC_TS_REF: ${{ vars.MODSYNC_TS_REF || 'feat/physical-install' }}
@@ -147,7 +150,7 @@ jobs:
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
 
       - name: Save game cache
-        if: steps.cache.outputs.cache-matched-key == ''
+        if: steps.cache.outputs.cache-matched-key == '' && env.CACHE_WRITER == 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/sealed/*.seal
@@ -187,7 +190,8 @@ jobs:
       contents: read
       actions: write
     outputs:
-      # Content-addressed key of the archive cache this run saved or found; empty when none.
+      # Content-addressed key of the archive cache this run computed; a non-writer run does not save it, and
+      # the lanes then restore the newest mod-archives-* entry.
       archive_cache_key: ${{ steps.archive_key.outputs.key }}
     steps:
       - uses: actions/checkout@v4
@@ -290,7 +294,7 @@ jobs:
       # cache" at info level, which is not an error.
       - name: Save mod archive cache
         id: archive_save
-        if: always() && steps.archive_key.outputs.key != '' && steps.archive_exists.outputs.cache-hit != 'true'
+        if: always() && env.CACHE_WRITER == 'true' && steps.archive_key.outputs.key != '' && steps.archive_exists.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/mod-cache
@@ -299,7 +303,7 @@ jobs:
       # Only runs once the current key is confirmed present, and only touches mod-archives-* keys,
       # never game-* or steam-sealed-*.
       - name: Prune stale mod archive caches
-        if: always() && steps.archive_key.outputs.key != '' && (steps.archive_save.outcome == 'success' || steps.archive_exists.outputs.cache-hit == 'true')
+        if: always() && env.CACHE_WRITER == 'true' && steps.archive_key.outputs.key != '' && (steps.archive_save.outcome == 'success' || steps.archive_exists.outputs.cache-hit == 'true')
         continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
@@ -839,7 +843,7 @@ jobs:
           echo "MODSYNC_NSS_GAME=$([[ "$GAME" == k1 ]] && echo 1 || echo 2)" >> "$GITHUB_ENV"
 
       - name: Save the NSS script compiler cache
-        if: matrix.implementation == 'typescript' && steps.nsscomp.outputs.cache-hit != 'true'
+        if: matrix.implementation == 'typescript' && steps.nsscomp.outputs.cache-hit != 'true' && env.CACHE_WRITER == 'true'
         uses: actions/cache/save@v4
         with:
           path: ${{ runner.temp }}/nsscomp
@@ -881,7 +885,24 @@ jobs:
           path: ${{ runner.temp }}/sealed/*.seal
           key: game-${{ matrix.game }}-v1
           restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
-          fail-on-cache-miss: true
+          fail-on-cache-miss: ${{ env.CACHE_WRITER == 'true' }}
+      - name: Look up game backup artifact
+        id: game_backup
+        if: steps.game_cache.outputs.cache-matched-key == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/modsync-ci/game_backup.py status --game "$GAME"
+      - name: Restore game from backup artifact
+        id: game_artifact
+        if: steps.game_cache.outputs.cache-matched-key == '' && steps.game_backup.outputs.artifact_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+          ARTIFACT_ID: ${{ steps.game_backup.outputs.artifact_id }}
+        run: python tools/modsync-ci/game_backup.py fetch --game "$GAME" --artifact-id "$ARTIFACT_ID" --seal-dir "$RUNNER_TEMP/sealed"
+      - name: Require the game
+        if: steps.game_cache.outputs.cache-matched-key == '' && steps.game_artifact.outputs.restored != 'true'
+        run: echo "::error::$GAME has no game cache on this ref and no usable game-$GAME-sealed backup artifact; run the game job from dev or a manual dispatch to save it (docs/ci.md, Actions cache size and eviction)"; exit 1
       - name: Explain a game cache miss
         if: failure() && steps.game_cache.outcome == 'failure'
         run: echo "::error::game cache evicted — re-run the game job (then this lane); see docs/ci.md, Actions cache size and eviction"
@@ -1052,7 +1073,24 @@ jobs:
           path: ${{ runner.temp }}/sealed/*.seal
           key: game-${{ matrix.game }}-v1
           restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
-          fail-on-cache-miss: true
+          fail-on-cache-miss: ${{ env.CACHE_WRITER == 'true' }}
+      - name: Look up game backup artifact
+        id: game_backup
+        if: steps.plan.outputs.present == 'true' && steps.game_cache.outputs.cache-matched-key == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python tools/modsync-ci/game_backup.py status --game "$GAME"
+      - name: Restore game from backup artifact
+        id: game_artifact
+        if: steps.plan.outputs.present == 'true' && steps.game_cache.outputs.cache-matched-key == '' && steps.game_backup.outputs.artifact_id != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+          ARTIFACT_ID: ${{ steps.game_backup.outputs.artifact_id }}
+        run: python tools/modsync-ci/game_backup.py fetch --game "$GAME" --artifact-id "$ARTIFACT_ID" --seal-dir "$RUNNER_TEMP/sealed"
+      - name: Require the game
+        if: steps.plan.outputs.present == 'true' && steps.game_cache.outputs.cache-matched-key == '' && steps.game_artifact.outputs.restored != 'true'
+        run: echo "::error::$GAME has no game cache on this ref and no usable game-$GAME-sealed backup artifact; run the game job from dev or a manual dispatch to save it (docs/ci.md, Actions cache size and eviction)"; exit 1
       - name: Explain a game cache miss
         if: failure() && steps.game_cache.outcome == 'failure'
         run: echo "::error::game cache evicted — re-run the game job (then this lane); see docs/ci.md, Actions cache size and eviction"

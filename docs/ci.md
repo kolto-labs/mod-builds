@@ -18,6 +18,9 @@ install fails.
 
 A new push to a pull request cancels its previous run. Other runs are not cancelled.
 
+Only `dev` pushes, the schedule and manual dispatch save to the Actions cache; pull
+requests and releases only restore (see [Actions cache size and eviction](#actions-cache-size-and-eviction)).
+
 ## Jobs
 
 ```
@@ -336,7 +339,28 @@ is skipped and the Actions cache, P2P and the websites still supply every archiv
 ## Actions cache size and eviction
 
 The repository's Actions cache is limited to 10 GB and GitHub evicts the least
-recently used entries first (and any entry not used for 7 days). The mod archives
+recently used entries first (and any entry not used for 7 days). Entries are scoped
+per ref: the same key saved from `refs/heads/dev`, a pull request merge ref and a
+feature branch is stored once for each, so a ~3 GB game entry would be stored three
+times.
+
+**One writer.** `ci.yml` sets `CACHE_WRITER` to true only for `push` (the workflow
+triggers only on `dev`), `schedule` and `workflow_dispatch`. Only then do `game` (game
+cache), `mods` (archive cache and its prune) and the `nsscomp` step save. Pull requests
+and releases only restore: a pull request reads the entries of its base branch `dev`, and
+`restore-keys` fall back to the newest `mod-archives-*` entry. If a pull request run
+finds no game cache, `game` still refills the game from the backup artifact or SteamCMD
+(and keeps the backup artifact current) but does not save a cache entry; `install` and
+`manual` then restore the sealed game from the `game-<game>-sealed` backup artifact
+instead of failing on a cache miss, and fail with a clear error only when no artifact
+exists either. On `CACHE_WRITER` runs `fail-on-cache-miss` stays on, so an evicted entry
+still fails the lane. To seed the caches before `dev` has them, dispatch the workflow on
+the branch: that run saves under the branch ref and its own lanes read it, but a pull
+request merge ref cannot read a branch ref's entries, so merge to `dev` (or dispatch on
+`dev`) for pull requests to benefit. The next writer run's prune deletes older
+`mod-archives-*` entries on every ref.
+
+The mod archives
 are tens of GB, so the cache holds only a subset: `--cache-limit-bytes` in `ci.yml`
 (2.5 GiB) keeps pinned objects first, then the smallest, and never `.bik`; `mods` also
 skips a link whose objects do not fit. The lanes fetch the rest themselves, from the
