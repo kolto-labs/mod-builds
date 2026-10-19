@@ -2282,6 +2282,12 @@
         "heading": "K2 Remastered Cutscenes",
         "reason": "visible policy skip: the restored archive set is two zips whose combination is unknown, and the converted Execute step's exe glob (K2 Remastered Cutscenes*.exe) matches no restored file, so ModSync.ts reports 'executable not found'; the Rust lane keeps its own handling",
         "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Remove Duplicate TGA/TPC",
+        "reason": "visible policy skip: the converted Execute step runs the guide's interactive Windows batch script (DelDuplicateTGA-TPC.bat), which expects to live in the game root and prompts on stdin for the file type to delete; under wine in CI it prints 'Unknown Input, Exiting' and ModSync.ts reports an ExecuteError, so the step cannot be reproduced non-interactively and Execute is deliberately not quarantinable. The guide marks the duplicate removal as critical, so a green TypeScript lane is a PARTIAL install without it; the Rust lane keeps its own handling (reviewed unreviewed_draft deselect) and the guide's Linux .sh deduper is the non-interactive equivalent",
+        "lane": "typescript"
       }
     ]
   },
