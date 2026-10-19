@@ -503,24 +503,47 @@ def component_archive(component, mapping):
     return names.pop() if len(names) == 1 and None not in names else None
 
 
-def component_heading(component):
-    """The guide `###` heading: the Rust converter keeps it as `Heading` when the Name field differs."""
-    heading = component.get("Heading", component.get("Name"))
-    return heading if isinstance(heading, str) else None
+def alias_key(text):
+    """A heading or name as alias rules compare it: whitespace collapsed, case-insensitive; None if blank."""
+    folded = " ".join(text.split()).casefold() if isinstance(text, str) else ""
+    return folded or None
 
 
-def declared_archive(component, headings, rules, archives):
-    """The one file of the reviewed `archive_aliases` rule for this component's heading, else None.
+def component_alias_keys(component):
+    """The normalized guide heading and component Name of a converted component, each once.
+
+    The Rust converter writes `Heading` only when the guide `###` heading differs from the Name
+    field, so a component can be known by either one; a reviewed rule may be keyed by both.
+    """
+    keys = []
+    for field in ("Heading", "Name"):
+        key = alias_key(component.get(field))
+        if key is not None and key not in keys:
+            keys.append(key)
+    return keys
+
+
+def declared_archive(component, counts, rules, archives):
+    """The one file of the reviewed `archive_aliases` rule for this component, else None.
 
     The Rust converter derives GUIDs differently from the TypeScript one, so the rule (keyed by
-    the TypeScript GUID) is found by the guide heading, which must identify exactly one component.
-    Only a single-file rule for a component without instructions applies, so the binding keeps its
-    sha256/size check; the file must be a restored archive.
+    the TypeScript GUID) is found by the component's guide heading or its Name field, normalized,
+    and exactly one rule must match. Each of the component's keys that a rule names must identify
+    exactly one component (`counts`). Only a single-file rule for a component without
+    instructions applies, so the binding keeps its sha256/size check; the file must be a restored
+    archive.
     """
-    heading = component_heading(component)
-    rule = rules.get(heading)
-    if (rule is None or headings.get(heading) != 1 or component.get("Instructions")
-            or len(rule["files"]) != 1 or alias_file_problem(archives, rule["files"][0])):
+    matched = {}
+    for key in component_alias_keys(component):
+        for rule in rules.get(key, ()):
+            matched[rule["guid"]] = rule
+            if counts.get(key) != 1:
+                return None
+    if len(matched) != 1:
+        return None
+    rule = next(iter(matched.values()))
+    if (component.get("Instructions") or len(rule["files"]) != 1
+            or alias_file_problem(archives, rule["files"][0])):
         return None
     return rule["files"][0]
 
@@ -529,19 +552,22 @@ def resolved_archive_bindings(converted, mapping, archives, rules=None):
     """--resolved-archives entries for components whose links map to exactly one archive present in `archives`.
 
     A component the map cannot resolve falls back to its reviewed `archive_aliases` rule
-    (`load_archive_aliases`), matched by heading (`declared_archive`).
+    (`load_archive_aliases`), matched by heading or Name (`declared_archive`).
     """
     components = components_of(converted)
-    seen, headings = {}, {}
+    seen, counts = {}, {}
     for component in components:
         seen[component.get("Guid")] = seen.get(component.get("Guid"), 0) + 1
-        headings[component_heading(component)] = headings.get(component_heading(component), 0) + 1
-    by_heading = {rule["heading"]: rule for rule in (rules or {}).values()}
+        for key in component_alias_keys(component):
+            counts[key] = counts.get(key, 0) + 1
+    by_key = {}
+    for rule in (rules or {}).values():
+        by_key.setdefault(alias_key(rule["heading"]), []).append(rule)
     bindings = []
     for component in components:
         guid, name = component.get("Guid"), component_archive(component, mapping)
-        if name is None and by_heading:
-            name = declared_archive(component, headings, by_heading, archives)
+        if name is None and by_key:
+            name = declared_archive(component, counts, by_key, archives)
         if (not isinstance(guid, str) or not guid or seen[guid] != 1 or name is None
                 or not 0 < len(name) <= 255 or name in (".", "..") or BIND_UNSAFE_NAME.search(name)
                 or not name.lower().endswith(BIND_SUFFIXES)):

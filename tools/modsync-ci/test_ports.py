@@ -1227,17 +1227,18 @@ class ArchiveBindingTests(unittest.TestCase):
         blocks = [linked("Mod One", BIND_ONE, LINK_ONE), linked("Mod Again", BIND_ONE, LINK_ONE)]
         self.assertEqual(self.bindings(blocks, mapping, one_zip=b"one"), [])
 
-    def declared_bindings(self, rule_files, blocks, mapping=None, **files):
+    def declared_bindings(self, rule_files, blocks, mapping=None, rule_heading="Guide Heading", **files):
         archives = self.archives(**files)
         path = self.write(document(*blocks))
         rules = {"90000000-0000-0000-0000-000000000001": {
-            "heading": "Guide Heading", "guid": "90000000-0000-0000-0000-000000000001",
+            "heading": rule_heading, "guid": "90000000-0000-0000-0000-000000000001",
             "files": rule_files, "reason": "reviewed"}}
         return ports.resolved_archive_bindings(path, mapping or {}, archives, rules)
 
     def heading_block(self, guid, name="Name Field", heading="Guide Heading", instructed=False, **links):
-        block = component(name, guid, Heading='"' + heading + '"',
-                          ResourceRegistry="{" + ", ".join('"' + link + '" = {}' for link in links.values()) + "}")
+        extra = {"Heading": '"' + heading + '"'} if heading else {}
+        block = component(name, guid, ResourceRegistry="{" + ", ".join('"' + link + '" = {}' for link in links.values()) + "}",
+                          **extra)
         return block if instructed else block[:block.index("[[thisMod.Instructions]]")]
 
     def test_a_reviewed_alias_binds_by_heading_when_the_map_cannot_choose(self):
@@ -1247,6 +1248,40 @@ class ArchiveBindingTests(unittest.TestCase):
         self.assertEqual(self.declared_bindings(["generic.rar"], blocks, mapping, generic_rar=content), [{
             "componentGuid": BIND_ONE, "filenames": ["generic.rar"],
             "sha256": hashlib.sha256(content).hexdigest(), "sizeBytes": len(content)}])
+
+    def test_a_reviewed_alias_binds_by_component_name_or_heading_when_they_differ(self):
+        mapping = {ports.canonical_link(LINK_ONE): None}
+        content = b"PK\x03\x04generic"
+        expected = [{"componentGuid": BIND_ONE, "filenames": ["generic.zip"],
+                     "sha256": hashlib.sha256(content).hexdigest(), "sizeBytes": len(content)}]
+        cases = {
+            "rule keyed by the Name field": ("Alias Name", "Alias Name", "Guide Heading"),
+            "rule keyed by the heading": ("Guide Heading", "Alias Name", "Guide Heading"),
+            "name only, no heading emitted": ("Alias Name", "Alias Name", None),
+            "case and spacing ignored": ("  alias   NAME ", "Alias Name", "Guide Heading"),
+        }
+        for label, (rule_heading, name, heading) in cases.items():
+            with self.subTest(label):
+                blocks = [self.heading_block(BIND_ONE, name=name, heading=heading, one=LINK_ONE)]
+                self.assertEqual(self.declared_bindings(["generic.zip"], blocks, mapping,
+                                                        rule_heading=rule_heading, generic_zip=content), expected)
+
+    def test_a_reviewed_alias_matched_by_name_stays_unbound_when_unsafe_or_ambiguous(self):
+        mapping = {ports.canonical_link(LINK_ONE): None}
+        good = b"PK\x03\x04generic"
+        cases = {
+            "name shared by another component": [
+                self.heading_block(BIND_ONE, name="Alias Name", heading="Guide Heading", one=LINK_ONE),
+                self.heading_block(BIND_TWO, name="Other", heading="Alias Name", one=LINK_TWO)],
+            "name unrelated to the rule": [
+                self.heading_block(BIND_ONE, name="Unrelated", heading="Other Heading", one=LINK_ONE)],
+            "name matches but has instructions": [
+                self.heading_block(BIND_ONE, name="Alias Name", instructed=True, one=LINK_ONE)],
+        }
+        for label, blocks in cases.items():
+            with self.subTest(label):
+                self.assertEqual(self.declared_bindings(["generic.zip"], blocks, mapping,
+                                                        rule_heading="Alias Name", generic_zip=good), [])
 
     def test_a_reviewed_alias_never_binds_an_unsafe_or_ambiguous_component(self):
         mapping = {ports.canonical_link(LINK_ONE): None}
