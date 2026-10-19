@@ -694,7 +694,11 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
     rules of `game::enforce_selectable`) and blocks with
     `application_selection_differs_from_plan` (GUIDs in `selection_oracle`) if it
     selects a different set. The GUI's `Base build: N of M mods selected` line must then
-    show that count; OCR is retried for 15 s, and the lines read, the attempts and a
+    show that count; OCR (alternating a central-area 1x crop and a full-frame 1x read, every 3rd attempt
+    full-frame 2x; 10+ samples) is retried for 60 s, after the
+    `Pause sharing to edit` click (up to 30 s) and the disappearance of the `Pause sharing
+    before editing` gate text (else `sharing_edit_gate_still_closed`); each attempt is printed
+    to `driver.log`, and the lines read, the attempts, the last OCR text (`ocr_tail`) and a
     screenshot path are recorded in `selection_summary` (also in `worker_diagnostics`)
     before `selection_summary_does_not_match_expected_subset` is raised.
   - Components that remain selected must not depend on a deselected one

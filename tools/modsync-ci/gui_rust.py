@@ -41,7 +41,14 @@ import gui_diag
 
 
 WORKER_LOGS = (("worker", "driver.log", gui_diag.TAIL_LINES),)
-SUMMARY_WINDOW_SECONDS = 15
+SUMMARY_WINDOW_SECONDS = 60
+SUMMARY_CROP = (0.2, 0.08, 0.98, 0.92)
+SUMMARY_OCR_LOG_LINES = 4
+SUMMARY_OCR_TAIL_LINES = 12
+SUMMARY_OCR_LINE_CHARS = 120
+SUMMARY_TAIL_KEYWORDS = re.compile(r"base\s*build|selected|\bmods?\b|sharing", re.IGNORECASE)
+EDIT_GATE_WINDOW_SECONDS = 30
+EDIT_GATE_PATTERN = re.compile(r"Pause\s*sharing\s*before\s*editing", re.IGNORECASE)
 SUMMARY_SCREENSHOT = "selection-summary.png"
 SUMMARY_PATTERN = re.compile(r"Base\s*build\s*:?\s*(\d+)\s*of\s*(\d+)\s*mods?\s*selected", re.IGNORECASE)
 SUMMARY_FRAGMENT = re.compile(r"Base\s*build.{0,70}", re.IGNORECASE)
@@ -204,18 +211,28 @@ def wait_for_selection_summary(observe, plan, result, private, window=SUMMARY_WI
                                clock=time.monotonic, sleep=time.sleep):
     """Retry OCR for `window` seconds until the expected Base build line shows.
 
+    Each attempt prints its number and the first OCR lines (flushed) and the last
+    attempt's text is kept in summary["ocr_tail"].
+
     Only OCR noise is tolerated by retrying; a different count is never accepted. The
     expected line, every distinct Base build fragment read, the attempts and a
     screenshot are recorded in result["selection_summary"] before a mismatch is raised.
     """
     expected = (plan["base_selected"], plan["base_total"])
     summary = {"expected": "Base build: %d of %d mods selected" % expected,
-               "observed": [], "attempts": 0, "matched": False}
+               "observed": [], "attempts": 0, "matched": False, "ocr_tail": ""}
     result["selection_summary"] = summary
     limit = clock() + window
     while True:
         shot, _, lines = observe()
         summary["attempts"] += 1
+        read = [" ".join(text.split())[:SUMMARY_OCR_LINE_CHARS] for text, _ in lines]
+        read = [text for text in read if text]
+        print("gui_rust: selection summary attempt %d: %s" % (
+            summary["attempts"], " | ".join(read[:SUMMARY_OCR_LOG_LINES]) or "<no text>"),
+            flush=True)
+        kept = [text for text in read if SUMMARY_TAIL_KEYWORDS.search(text)]
+        summary["ocr_tail"] = "\n".join(kept[-SUMMARY_OCR_TAIL_LINES:])
         for text, _ in lines:
             for fragment in SUMMARY_FRAGMENT.finditer(text):
                 shown = " ".join(fragment.group(0).split())
@@ -316,12 +333,18 @@ def drive(args, private, result):
         if process is not None and process.poll() is not None:
             raise Blocked("desktop_exited_before_completion")
 
-    def observe():
+    def observe(scale=2, box=None):
         check_time()
         shot = ImageGrab.grab(xdisplay=os.environ["DISPLAY"])
         shot.save(private / "latest.png")
+        region = shot
+        if box is not None:
+            region = shot.crop((int(shot.width * box[0]), int(shot.height * box[1]),
+                                int(shot.width * box[2]), int(shot.height * box[3])))
+        if scale != 1:
+            region = region.resize((region.width * scale, region.height * scale))
         data = pytesseract.image_to_data(
-            shot.resize((shot.width * 2, shot.height * 2)),
+            region,
             config="--psm 11", output_type=pytesseract.Output.DICT,
             timeout=max(0.1, min(20, deadline - time.monotonic())),
         )
@@ -346,8 +369,19 @@ def drive(args, private, result):
             raise Blocked("visible_review_validation_or_install_error")
         return shot, data, lines
 
-    def locate(label, optional=False):
-        limit = min(deadline, time.monotonic() + (4 if optional else args.timeout))
+    summary_attempts = [0]
+
+    def observe_summary():
+        attempt = summary_attempts[0]
+        summary_attempts[0] += 1
+        if (attempt + 1) % 3 == 0:
+            return observe()
+        if attempt % 2 == 0:
+            return observe(scale=1, box=SUMMARY_CROP)
+        return observe(scale=1)
+
+    def locate(label, optional=False, window=None):
+        limit = min(deadline, time.monotonic() + (window or (4 if optional else args.timeout)))
         pattern = r"\s*".join(re.escape(token) for token in
                                 re.findall(r"\w+|[^\w\s]", label))
         while time.monotonic() < limit:
@@ -380,10 +414,10 @@ def drive(args, private, result):
             return None
         raise Blocked("visible_control_missing")
 
-    def click(label, optional=False):
+    def click(label, optional=False, window=None):
         result["stage"] = label
         mark()
-        point = locate(label, optional)
+        point = locate(label, optional, window)
         if point is None:
             return
         pyautogui.moveTo(*point)
@@ -394,6 +428,19 @@ def drive(args, private, result):
         events.append({"control": label, "coordinates": point})
         save(private / "clicks.json", events)
         time.sleep(0.7)
+
+    def open_edit_gate():
+        click("Pause sharing to edit", optional=True, window=EDIT_GATE_WINDOW_SECONDS)
+        result["stage"] = "edit_gate"
+        mark()
+        limit = min(deadline, time.monotonic() + EDIT_GATE_WINDOW_SECONDS)
+        while True:
+            _, _, lines = observe()
+            if not any(EDIT_GATE_PATTERN.search(text) for text, _ in lines):
+                return
+            if time.monotonic() >= limit:
+                raise Blocked("sharing_edit_gate_still_closed")
+            time.sleep(0.5)
 
     command = [str(args.binary), "gui", "--allow-multiple-instances",
                "--input", str(driven_input), "--game-dir", str(args.game_dir),
@@ -416,13 +463,13 @@ def drive(args, private, result):
             mark("first_screenshot")
             click("Keep telemetry off", optional=True)
             click("Summary / selection")
-            click("Pause sharing to edit", optional=True)
+            open_edit_gate()
             if plan["click_select_all"]:
                 click("Select all")
             if plan["subset"]:
                 result["stage"] = "selection_summary"
                 mark()
-                wait_for_selection_summary(observe, plan, result, private)
+                wait_for_selection_summary(observe_summary, plan, result, private)
             click("Validation / install")
             click("Run validation")
             result["stage"] = "validation"

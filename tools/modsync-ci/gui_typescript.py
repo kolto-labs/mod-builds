@@ -124,13 +124,20 @@ try {
     await click('Next →');
   }
   await page.getByRole('heading', {name: 'Validation', exact: true}).waitFor();
-  await page.getByRole('button', {name: 'Run validation again', exact: true}).waitFor();
-  if (await page.getByText('Errors must be fixed before installing', {exact: true}).count()) fail('validation_blocked');
-  await page.locator('.pill-ok').filter({hasText: 'Ready to install'}).waitFor();
+  stage = 'validation-wait';
+  await mark();
+  await page.getByRole('button', {name: 'Run validation again', exact: true})
+    .or(page.locator('.pill-ok').filter({hasText: 'Ready to install'}))
+    .or(page.locator('.pill-error'))
+    .first()
+    .waitFor({timeout: 900000});
+  await page.getByRole('button', {name: 'Run validation again', exact: true}).waitFor({timeout: 900000});
+  if (await page.getByText('Errors must be fixed before installing', {exact: true}).count() || await page.locator('.pill-error').count()) fail('validation_blocked');
+  await page.locator('.pill-ok').filter({hasText: 'Ready to install'}).waitFor({timeout: 60000});
   const current = await read('/api/file');
   if (JSON.stringify(current.mods.map(mod => [mod.guid, mod.isSelected, mod.options])) !== JSON.stringify(file.mods.map(mod => [mod.guid, mod.isSelected, mod.options]))) fail('selection_changed');
   await click('Next →');
-  await page.getByRole('heading', {name: 'Ready to install', exact: true}).waitFor();
+  await page.getByRole('heading', {name: 'Ready to install', exact: true}).waitFor({timeout: 120000});
   await page.screenshot({path: join(config.private, 'ready.png'), fullPage: true});
   await click('Begin installation');
   await click('I understand, continue');
@@ -146,7 +153,7 @@ try {
       const summary = status.summary;
       if (summary.virtualPrediction || summary.failed !== 0 || summary.skipped !== 0 || summary.succeeded !== expected.length || !summary.checkpointSessionId) fail('physical_install_receipt_incomplete');
       if (summary.mods.length !== expected.length || summary.mods.some(mod => mod.state !== 'Installed') || new Set(summary.mods.map(mod => mod.modGuid)).size !== expected.length || expected.some(guid => !summary.mods.some(mod => mod.modGuid === guid))) fail('receipt_selection_mismatch');
-      await page.getByRole('heading', {name: 'Installation finished', exact: true}).waitFor();
+      await page.getByRole('heading', {name: 'Installation finished', exact: true}).waitFor({timeout: 300000});
       await page.screenshot({path: join(config.private, 'finished.png'), fullPage: true});
       await evidence('worker-result.json', {status: 'receipt_required', stage, ui_completed: true});
       break;
