@@ -2,6 +2,7 @@
 """Archive cache shared by installer adapters; Python 3.10+, standard library only."""
 
 import argparse
+import collections
 import concurrent.futures
 import copy
 from email.message import EmailMessage
@@ -74,7 +75,11 @@ SLOW_SECONDS = 5
 HOST_FAIL_LIMIT = 3
 PACK_FAIL_LIMIT = 2
 RCLONE_LIMITS = ("--retries", "1", "--low-level-retries", "2", "--contimeout", "15s", "--timeout", "30s")
-RUN_STATE = {"p2p_missed": set(), "host_failures": {}, "warned": set()}
+RUN_STATE = {"p2p_missed": set(), "host_failures": {}, "warned": set(), "failures": []}
+REASON_LIMIT = 160
+URL_TEXT = re.compile(r"[a-z][a-z0-9+.-]*://\S+", re.I)
+SUMMARY_ROWS = 200
+DEFERRED_PRIORITY = "deferred by an earlier run"
 STATE_LOCK = threading.RLock()
 ENV_LOCK = threading.RLock()
 
@@ -721,6 +726,13 @@ def deadlystream_endpoint(source, base, candidates, file_id, selections):
     return [{"name": None, "url": next(iter(pool)), "r": None}]
 
 
+def network_error(cause):
+    """The generic network failure, carrying only the class name of what caused it (never its text)."""
+    error = ValueError("network request failed")
+    error.cause = type(cause).__name__
+    return error
+
+
 def request(url, args, headers=None):
     checked_url(url)
     for attempt in range(args.retries + 1):
@@ -735,9 +747,9 @@ def request(url, args, headers=None):
             error.close()
             if error.code not in (408, 429, 500, 502, 503, 504) or attempt == args.retries:
                 raise ValueError("HTTP " + str(error.code)) from None
-        except (URLError, TimeoutError, OSError, HTTPException):
+        except (URLError, TimeoutError, OSError, HTTPException) as cause:
             if attempt == args.retries:
-                raise ValueError("network request failed") from None
+                raise network_error(cause) from None
         time.sleep(min(2 ** attempt, 8))
 
 
@@ -1488,11 +1500,11 @@ def restore_object(item, old, root, args, restored_names, taken, created, rename
 
 
 def warn(message):
-    print("::warning::" + message, file=sys.stderr)
+    print("::warning::" + message, file=sys.stderr, flush=True)
 
 
 def notice(message):
-    print("::notice::" + message, file=sys.stderr)
+    print("::notice::" + message, file=sys.stderr, flush=True)
 
 
 def warn_once(key, message):
@@ -1524,6 +1536,118 @@ def bounded(args, seconds, floor=5.0):
 def say(message):
     """One flushed progress line on stderr (stdout carries the JSON report)."""
     print("cache: " + message, file=sys.stderr, flush=True)
+
+
+def scrub(text):
+    """text on one line, capped, with URLs and secret values removed."""
+    text = " ".join(str(text).split())
+    for name in SECRET_ENV:
+        value = os.environ.get(name, "")
+        if len(value) >= 8:
+            text = text.replace(value, "***")
+    return URL_TEXT.sub("<url>", text)[:REASON_LIMIT]
+
+
+def failure_reason(error):
+    """Exception class, HTTP status or sanitized message, and the network cause class; no URLs."""
+    kind = type(error).__name__
+    parts = [kind]
+    detail = safe_reason(error) if isinstance(error, ValueError) else ""
+    if detail and detail != kind:
+        parts.append(detail)
+    cause = getattr(error, "cause", None)
+    if isinstance(cause, str) and cause:
+        parts.append("cause=" + cause)
+    return scrub(" ".join(parts))
+
+
+def record_failure(item, outcome, error=None, reason=None, echo=True):
+    """Remember one upstream-check failure for the end-of-run table; echo it as one flushed line."""
+    row = {"id": item["id"][:8], "outcome": outcome, "host": upstream_host(item) or "-",
+           "reason": reason or failure_reason(error)}
+    with STATE_LOCK:
+        RUN_STATE.setdefault("failures", []).append(row)
+    if echo:
+        say("%s %s host=%s reason=%s" % (outcome, row["id"], row["host"], row["reason"]))
+    return row
+
+
+def failure_rows(entries, failures):
+    """One row per archive that failed its upstream check or ended stale-unknown, with its final status.
+
+    A stale-unknown archive this run never asked upstream about (budget, host skipped) still gets a row.
+    """
+    status = {each.get("id", "")[:8]: each.get("status") for each in entries}
+    rows = [{**each, "status": status.get(each["id"], "-")} for each in failures]
+    known = {each["id"] for each in failures}
+    for each in entries:
+        if each.get("status") == "stale-unknown" and each.get("id", "")[:8] not in known:
+            rows.append({"id": each["id"][:8], "outcome": "stale-unknown", "status": "stale-unknown",
+                         "host": "-", "reason": "not rechecked this run (host or time budget skipped it)"})
+    return rows
+
+
+def summary_markdown(title, rows, columns, note=None):
+    cells = lambda values: "| " + " | ".join(str(value).replace("|", "/").replace("\n", " ") for value in values) + " |"
+    lines = ["### " + title, ""]
+    if note:
+        lines += [note, ""]
+    lines += [cells(columns), cells("---" for _ in columns)]
+    lines += [cells(row) for row in rows[:SUMMARY_ROWS]]
+    if len(rows) > SUMMARY_ROWS:
+        lines.append("| ... | %d more row(s) omitted |%s" % (len(rows) - SUMMARY_ROWS, " |" * (len(columns) - 2)))
+    return "\n".join(lines) + "\n\n"
+
+
+def append_step_summary(text):
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path or not text:
+        return
+    try:
+        with open(path, "a", encoding="utf-8") as stream:
+            stream.write(text)
+            stream.flush()
+    except OSError:
+        say("could not write the step summary")
+
+
+def report_failures(entries, failures):
+    """Flushed digest of the upstream-check failures plus a markdown table for $GITHUB_STEP_SUMMARY."""
+    rows = failure_rows(entries, failures)
+    if not rows:
+        return rows
+    reasons = collections.Counter(row["reason"] for row in rows)
+    hosts = collections.Counter(row["host"] for row in rows)
+    say("refresh: %d archive(s) failed the upstream check or ended stale-unknown; reasons: %s; hosts: %s" % (
+        len(rows), ", ".join("%s x%d" % pair for pair in reasons.most_common(8)),
+        ", ".join("%s x%d" % pair for pair in hosts.most_common(8))))
+    append_step_summary(summary_markdown(
+        "Mod cache refresh: upstream check failures (%d)" % len(rows),
+        [(row["id"], row["outcome"], row["status"], row["host"], row["reason"]) for row in rows],
+        ("Archive", "Outcome", "Status", "Host", "Reason"),
+        "The last cached copy was kept for stale-unknown archives; the next refresh asks upstream again."))
+    return rows
+
+
+def human_bytes(count):
+    return "%.2f GB" % (count / 1e9) if count >= 1e8 else "%.1f MB" % (count / 1e6)
+
+
+def report_stage(candidates):
+    """Flushed totals for the stage manifest (files, bytes, largest objects) plus a step-summary row."""
+    sizes = []
+    for each in candidates:
+        try:
+            sizes.append((Path(each["path"]).stat().st_size, each["sha256"]))
+        except OSError:
+            sizes.append((0, each["sha256"]))
+    total = sum(size for size, _ in sizes)
+    say("stage manifest: %d file(s), %d bytes (%s) to publish to the artifact store; per-pack sizes follow in the "
+        "stage step" % (len(sizes), total, human_bytes(total)))
+    for size, sha in sorted(sizes, reverse=True)[:10]:
+        say("stage manifest: %s %d bytes" % (sha[:12], size))
+    append_step_summary("### Mod cache refresh: staged for the artifact store\n\n%d file(s), %d bytes (%s)\n\n" % (
+        len(sizes), total, human_bytes(total)))
 
 
 class Progress:
@@ -1780,10 +1904,37 @@ def stage_needed(shas):
     return wanted & set(shas)
 
 
+def deferred_shas():
+    """SHA-256s an earlier run staged but could not upload (kept in the artifact store index); empty if unknown."""
+    session = artstore_session()
+    if session is None:
+        return set()
+    try:
+        return set(artstore_module().core.deferred_map(session["index"]))
+    except Exception:
+        return set()
+
+
+def prioritise_deferred(items, entries, deferred):
+    """items with the archives holding a deferred object first (stable), so they claim the stage budget first."""
+    if not deferred:
+        return items
+
+    def first(item):
+        return not any(each.get("sha256") in deferred for each in entry_objects(entries.get(item["id"])))
+
+    ordered = sorted(items, key=first)
+    waiting = sum(1 for item in items if not first(item))
+    if waiting:
+        notice("%d archive(s) with objects %s are fetched and staged first" % (waiting, DEFERRED_PRIORITY))
+    return ordered
+
+
 def stage_candidates(root, manifest, stage_dir=None):
     """[{path, sha256}] for each live non-.bik cached object the artifact store lacks or will soon expire.
 
     An object is looked up in root/objects, then in stage_dir (the stage-only copies refresh keeps out of the cache).
+    Objects deferred by an earlier run come first, then the rest by hash.
     """
     if artstore_session() is None:
         return []
@@ -1798,7 +1949,9 @@ def stage_candidates(root, manifest, stage_dir=None):
                         found[stored["sha256"]] = path
                         break
         wanted = stage_needed(found) or set()
-        return [{"path": str(found[sha]), "sha256": sha} for sha in sorted(wanted)]
+        deferred = deferred_shas()
+        return [{"path": str(found[sha]), "sha256": sha}
+                for sha in sorted(wanted, key=lambda sha: (sha not in deferred, sha))]
     except Exception:
         warn("artifact store index unreadable; nothing staged")
         return []
@@ -1995,7 +2148,9 @@ def acquire(item, old, root, args, pins):
         if args.force:
             raise
         note_host(host, not network_failure(error))
-        warn("upstream could not be checked for " + item["id"][:8] + "; using the last cached copy")
+        reason = failure_reason(error)
+        warn("upstream could not be checked for " + item["id"][:8] + " (" + reason + "); using the last cached copy")
+        record_failure(item, "stale-local", reason=reason, echo=False)
         return old, "stale-local"
     note_host(host, True)
     return result, "revalidated" if result.get("evidence") == "conditional-304" else "website"
@@ -2270,7 +2425,9 @@ def main(argv=None):
         stage_dir = (args.stage_dir or root.parent / (root.name + ".stage-only")).resolve()
         stage_on = keep is not None and bool(args.emit_stage_manifest)
         stage = {"hold": set(), "left": args.stage_total_bytes}
-        RUN_STATE.update(p2p_missed=set(), host_failures={}, warned=set())
+        if stage_on:
+            items = prioritise_deferred(items, manifest["entries"], deferred_shas())
+        RUN_STATE.update(p2p_missed=set(), host_failures={}, warned=set(), failures=[])
         restoring = args.command == "restore"
         args.deadline = (time.monotonic() + args.restore_budget_seconds
                          if restoring and args.restore_budget_seconds else None)
@@ -2312,6 +2469,15 @@ def main(argv=None):
                 before = manifest["entries"].get(item["id"])
                 old, source = acquisitions.result(item, old)
                 entry["source"] = source
+                if args.command == "refresh" and any(is_bik(each) for each in entry_objects(old)):
+                    for each in entry_objects(old):
+                        if re.fullmatch(r"[a-f0-9]{64}", str(each.get("sha256", ""))):
+                            object_path(root, each).unlink(missing_ok=True)
+                    if manifest["entries"].pop(item["id"], None) is not None:
+                        atomic_json(manifest_path, manifest)
+                    report["entries"].append(uncached_entry(item, ".bik movies are never cached or staged"))
+                    release_stage(reserved, stage)
+                    continue
                 pinned = is_pinned(item, old, pins)
                 if old != before:
                     manifest["entries"][item["id"]] = old
@@ -2347,6 +2513,9 @@ def main(argv=None):
                 if limit is not None:
                     prune(root, manifest, limit, stage["hold"], stage_dir)
             except (ValueError, OSError, HTTPException, subprocess.SubprocessError, zipfile.BadZipFile) as error:
+                if args.command == "refresh":
+                    record_failure(item, "stage-fetch-failed" if reserved else (
+                        "stale-unknown" if old and not is_pinned(item, old, pins) else "unresolved"), error)
                 if reserved:
                     release_stage(reserved, stage)
                     entry.update(status=OVER_LIMIT, reason="stage-only fetch failed: " + safe_reason(error))
@@ -2361,11 +2530,15 @@ def main(argv=None):
         if limit is not None:
             prune(root, manifest, limit, stage["hold"], stage_dir)
         if args.emit_stage_manifest:
-            atomic_json(args.emit_stage_manifest, stage_candidates(root, manifest, stage_dir))
+            candidates = stage_candidates(root, manifest, stage_dir)
+            atomic_json(args.emit_stage_manifest, candidates)
+            report_stage(candidates)
         acquisitions.close()
         sources = [each["source"] for each in report["entries"] if "source" in each]
         report["sources"] = {name: sources.count(name) for name in sorted(set(sources))}
         tracker.summary(report["sources"])
+        if args.command == "refresh":
+            report_failures(report["entries"], RUN_STATE.get("failures", []))
     if args.command != "import-existing":
         stale = sum(1 for each in report["entries"] if each.get("status") == "stale-unknown")
         if stale and args.command == "refresh":

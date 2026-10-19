@@ -311,6 +311,28 @@ class IndexTests(unittest.TestCase):
                    for order in itertools.permutations(variants)}
         self.assertEqual(len(results), 1)
 
+    def test_merge_carries_deferred_with_the_oldest_since_and_drops_stored_blobs(self):
+        first, second, third = "a" * 64, "b" * 64, "c" * 64
+        one = core.new_index()
+        core.set_deferred(one, {first: {"since": 200, "size": 1}, second: {"since": 100, "size": 2}})
+        two = index_with(("p", second, 1, None, 1))
+        core.set_deferred(two, {first: {"since": 50, "size": 1}, third: {"since": 70, "size": 3}})
+        merged = core.merge_indexes([one, two])
+        self.assertEqual(core.deferred_map(merged), {first: {"since": 50, "size": 1}, third: {"since": 70, "size": 3}})
+        self.assertEqual(merged, core.merge_indexes([two, one]))
+
+    def test_deferred_round_trips_and_malformed_rows_are_ignored(self):
+        index = core.new_index()
+        core.set_deferred(index, {"d" * 64: {"since": 5, "size": 9}})
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "index.json"
+            core.dump_index(index, path)
+            self.assertEqual(core.deferred_map(core.load_index(path)), {"d" * 64: {"since": 5, "size": 9}})
+        index["deferred"] = {"short": {"since": 1}, "e" * 64: {"since": True}, "f" * 64: "x", "1" * 64: {"since": 3}}
+        self.assertEqual(core.deferred_map(index), {"1" * 64: {"since": 3, "size": 0}})
+        core.set_deferred(index, {})
+        self.assertNotIn("deferred", index)
+
     def test_merge_does_not_mutate_inputs(self):
         first = index_with(("p1", "a" * 64, NOW, NOW + DAY, 1))
         snapshot = copy.deepcopy(first)

@@ -257,6 +257,31 @@ def _check_index(index):
     return index
 
 
+def deferred_map(index):
+    """{sha256: {since, size}} of blobs an earlier run staged but could not upload; malformed rows are ignored."""
+    raw = index.get("deferred") if isinstance(index, dict) else None
+    result = {}
+    if isinstance(raw, dict):
+        for sha256, record in raw.items():
+            since = record.get("since") if isinstance(record, dict) else None
+            if (isinstance(sha256, str) and len(sha256) == 64 and isinstance(since, (int, float))
+                    and not isinstance(since, bool)):
+                size = record.get("size")
+                result[sha256.lower()] = {"since": int(since),
+                                          "size": size if isinstance(size, int) and size >= 0 else 0}
+    return result
+
+
+def set_deferred(index, mapping):
+    _check_index(index)
+    if mapping:
+        index["deferred"] = {sha256: {"since": int(record["since"]), "size": int(record.get("size") or 0)}
+                             for sha256, record in sorted(mapping.items())}
+    else:
+        index.pop("deferred", None)
+    return index
+
+
 def dump_index(index, path):
     _check_index(index)
     path = Path(path)
@@ -349,7 +374,13 @@ def merge_indexes(list_of_indexes, now_epoch=None):
     for sha256, records in candidates.items():
         best = max(records, key=lambda record: _blob_rank(record, merged["packs"], now_epoch))
         merged["blobs"][sha256] = copy.deepcopy(best)
-    return merged
+    deferred = {}
+    for index in list_of_indexes:
+        for sha256, record in deferred_map(index).items():
+            if sha256 not in merged["blobs"] and (
+                    sha256 not in deferred or record["since"] < deferred[sha256]["since"]):
+                deferred[sha256] = record
+    return set_deferred(merged, deferred)
 
 
 def lookup(index, sha256):

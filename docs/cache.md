@@ -97,6 +97,26 @@ usable copy anywhere still fails the lane, and `.bik` is still never cached.
   into the destination, and a final `finished` summary with the source counts. Lines carry
   only the first 8 characters of the archive id, never URLs, tokens or pack contents.
 
+## Refresh diagnostics
+
+`cache.py refresh` explains every archive it could not check upstream. A failed check
+(`stale-local`), a failed fetch of a missing object (`stale-unknown` in the manifest) and
+a failed stage-only fetch each print one flushed line with the 8-character archive id, the
+host and the reason, for example `cache: stale-unknown 797139bf host=example.com
+reason=ValueError HTTP 403` or `reason=ValueError network request failed
+cause=TimeoutError`. The reason is the exception class plus the HTTP status or the cause
+class of a network failure; URLs, tokens and secret values never appear. At the end of the
+run a digest line counts the reasons and hosts, and when `GITHUB_STEP_SUMMARY` is set a
+markdown table lists archive, outcome, status, host and reason (an archive that ended
+`stale-unknown` without a recorded check gets a row saying it was not rechecked).
+
+With `--emit-stage-manifest`, refresh also logs the staged totals (files and bytes, plus
+the largest objects) and puts objects deferred by an earlier upload-slot cap first; see
+[Deferred packs](ci.md#deferred-packs). A fetched object whose name ends in `.bik` is
+dropped at once: it is not kept in the cache or the manifest and is reported
+`uncached-by-policy`. `artstore.py stage` additionally refuses any file whose first bytes
+are a Bink header, whatever it is called.
+
 ## Backend and names
 
 The optional archive bucket is reached through `rclone`. Each job that uses it

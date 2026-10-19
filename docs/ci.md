@@ -375,8 +375,9 @@ the cache prune then:
    with a 3 GiB pack budget. If everything is already stored it writes nothing.
 2. `Upload artifact store pack 1`, `2` and `3` upload `pack1`, `pack2` and `pack3` of the
    stage output through `artstore-upload`, each only when that pack exists. The 2.5 GiB
-   cache limit normally fits one pack. A fourth pack is not uploaded; its blobs are
-   staged again by the next run.
+   cache limit normally fits one pack. `artstore.py stage --max-packs` (default and
+   maximum 3, one per upload step) seals at most that many packs, so a fourth pack is
+   never sealed and then thrown away. See [Deferred packs](#deferred-packs).
 3. `Upload artifact store index` uploads the index fragment (named by `index_name`), only
    when at least one pack uploaded.
 
@@ -388,6 +389,26 @@ The pack and index artifacts use `if-exists: skip`, so a re-run attempt that reu
 name is not an error. Without `CACHE_ENCRYPTION_KEY` staging is skipped with a notice.
 
 The last step, `Verify artifact store round trip`, fetches the smallest blob just published (or the smallest one in `artstore.py list` when nothing was published) back with `artstore.py fetch`, compares its SHA-256 and writes `artstore round trip OK: <sha prefix> <bytes> in <seconds>s` to the step summary; a failure only emits a `::warning::`.
+
+<a id="deferred-packs"></a>Deferred packs. When more blobs are due than the
+`--max-packs` upload slots hold, the surplus is not sealed. `stage` records each one under
+`deferred` in the index fragment (`{sha256: {since, size}}`) and prints a `::notice::`
+with the file and byte counts. The fragment is merged like any other index, so the next
+`mods` run reads it: `cache.py refresh` fetches and stages the archives that hold a
+deferred object first (before they compete for `--stage-total-bytes`), `stage_candidates`
+lists deferred hashes first, and `stage` seals them ahead of anything new. A blob leaves
+the list when it is stored; one that no run lists again is forgotten after 14 days. The
+cap is the number of upload steps in `ci.yml`; do not raise `--max-packs` without adding
+upload steps.
+
+Staged totals and upstream failures. `cache.py refresh` logs `stage manifest: N file(s),
+B bytes` and the largest objects; `artstore.py stage` logs the manifest total, the sealed
+totals and one `pack <name> files=<n> stored_bytes=<b>` line per pack before any upload,
+and both append a table to `$GITHUB_STEP_SUMMARY` when it is set. Every archive whose
+upstream check failed, or that ends `stale-unknown`, gets one flushed line
+(`cache: stale-unknown 797139bf host=example.com reason=ValueError HTTP 403`) and a row in
+the refresh summary table (archive, outcome, status, host, reason). Reasons are the
+exception class plus the HTTP status or network cause class, with no URLs or tokens.
 
 `artstore refresh` (schedule and dispatch). Archives are stored for at most 90 days and
 the store has no way to extend an artifact, so close-to-expiry blobs are copied into a

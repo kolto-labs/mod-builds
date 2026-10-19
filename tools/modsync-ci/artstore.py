@@ -42,6 +42,9 @@ __all__ = [
 KEY_ENV = core.KEY_ENV
 PART_SIZE_DEFAULT = core.PART_SIZE_DEFAULT
 PACK_BUDGET_DEFAULT = 10 * 1024 ** 3
+UPLOAD_SLOTS = 3
+DEFERRED_TTL_DAYS = 14
+BIK_MAGICS = (b"BIK", b"KB2")
 MIN_DAYS_LEFT = 30
 REFRESH_WITHIN_DAYS = 21
 INDEX_FETCH_LIMIT = 3
@@ -72,6 +75,22 @@ def _redact(text):
 def _log(level, message):
     text = _redact(" ".join(str(message).split()))[:300]
     print("::%s::artstore: %s" % (level, text), file=sys.stderr, flush=True)
+
+
+def _say(message):
+    print("artstore: " + _redact(" ".join(str(message).split()))[:300], file=sys.stderr, flush=True)
+
+
+def _human(count):
+    return "%.2f GB" % (count / 1e9) if count >= 1e8 else "%.1f MB" % (count / 1e6)
+
+
+def _is_bik_payload(source):
+    try:
+        with Path(source).open("rb") as handle:
+            return handle.read(3).startswith(BIK_MAGICS)
+    except OSError:
+        return False
 
 
 def _describe(exc):
@@ -314,8 +333,14 @@ def _pairs(paths_and_sha256):
 
 def stage(paths_and_sha256, packdir, part_size=PART_SIZE_DEFAULT, index=None, *,
           pack_budget=PACK_BUDGET_DEFAULT, key_env=KEY_ENV, min_days_left=MIN_DAYS_LEFT,
-          now=None):
-    """Seal blobs into ``packdir/<pack_name>/`` dirs plus a cumulative ``packdir/index/index.json``."""
+          now=None, max_packs=None):
+    """Seal blobs into ``packdir/<pack_name>/`` dirs plus a cumulative ``packdir/index/index.json``.
+
+    With ``max_packs`` only that many packs are sealed (the workflow has that many upload slots). Blobs
+    that would need another pack are not sealed: they are recorded as deferred in the index fragment and
+    come first, ahead of everything new, the next time stage runs. Deferred state older than
+    ``DEFERRED_TTL_DAYS`` is forgotten.
+    """
     now_epoch = _now(now)
     _SECRET_ENVS.add(key_env)
     if not _key_configured(key_env):
@@ -333,11 +358,17 @@ def stage(paths_and_sha256, packdir, part_size=PART_SIZE_DEFAULT, index=None, *,
     seen = set()
     packs = []
     current = None
+    deferred = {}
+    missing = set()
+    ttl = DEFERRED_TTL_DAYS * core.DAY_SECONDS
+    previous = {sha256: record for sha256, record in core.deferred_map(base).items()
+                if record["since"] + ttl > now_epoch}
 
     def skip(path, sha256, reason):
         skipped.append({"path": str(path), "sha256": sha256, "reason": reason})
 
-    for path, claimed in _pairs(paths_and_sha256):
+    ordered = sorted(_pairs(paths_and_sha256), key=lambda pair: str(pair[1]).strip().lower() not in previous)
+    for path, claimed in ordered:
         sha256 = str(claimed).strip().lower()
         source = Path(path)
         if not _SHA_RE.match(sha256):
@@ -351,13 +382,22 @@ def stage(paths_and_sha256, packdir, part_size=PART_SIZE_DEFAULT, index=None, *,
             skip(path, sha256, "bik")
             continue
         if not source.is_file():
+            missing.add(sha256)
             skip(path, sha256, "missing")
+            continue
+        if _is_bik_payload(source):
+            skip(path, sha256, "bik")
             continue
         if _is_live(base, sha256, now_epoch, min_days_left):
             skip(path, sha256, "present")
             continue
         estimate = source.stat().st_size + SEAL_OVERHEAD * (source.stat().st_size // part_size + 1)
         if current is None or (current["blobs"] and current["bytes"] + estimate > pack_budget):
+            if max_packs is not None and len(packs) >= max_packs:
+                deferred[sha256] = {"since": int(previous.get(sha256, {}).get("since", now_epoch)),
+                                    "size": source.stat().st_size}
+                skip(path, sha256, "deferred")
+                continue
             while ((packdir / ("%s%s-%d" % (core.PACK_PREFIX, tag, counter))).exists()
                    or ("%s%s-%d" % (core.PACK_PREFIX, tag, counter)) in base["packs"]):
                 counter += 1
@@ -373,6 +413,10 @@ def stage(paths_and_sha256, packdir, part_size=PART_SIZE_DEFAULT, index=None, *,
             for leftover in set(os.listdir(current["dir"])) - before:
                 (current["dir"] / leftover).unlink(missing_ok=True)
             skip(path, sha256, "seal-failed: %s" % _redact(str(exc))[:80])
+            if not current["blobs"]:
+                shutil.rmtree(current["dir"], ignore_errors=True)
+                packs.remove(current)
+                current = None
             continue
         if record["sha256"] != sha256:
             for part in record["parts"]:
@@ -392,7 +436,13 @@ def stage(paths_and_sha256, packdir, part_size=PART_SIZE_DEFAULT, index=None, *,
         core.add_pack(base, pack["name"], pack["blobs"], members, created_at=int(now_epoch))
         kept.append(pack)
         staged.extend(blob["sha256"] for blob in pack["blobs"])
+    carried = {sha256: record for sha256, record in previous.items()
+               if (sha256 not in seen or sha256 in missing) and sha256 not in base["blobs"]
+               and sha256 not in deferred}
+    core.set_deferred(base, {**carried, **deferred})
     result = {"blobs": [copy.deepcopy(base["blobs"][sha256]) for sha256 in staged],
+              "deferred": [{"sha256": sha256, "size": record["size"]} for sha256, record in sorted(deferred.items())],
+              "max_packs": max_packs,
               "pack_name": kept[0]["name"] if kept else None,
               "packs": [{"name": pack["name"], "dir": str(pack["dir"]), "size": pack["bytes"],
                          "blobs": len(pack["blobs"])} for pack in kept],
@@ -552,14 +602,64 @@ def _command_stage(args):
     if client is None:
         return EXIT_UNAVAILABLE
     pairs = _read_manifest(args.manifest_json)
+    _say("stage: manifest lists %d file(s), %d bytes (%s); at most %d pack(s) of %s are sealed" % (
+        len(pairs), *_manifest_totals(pairs), args.max_packs, _human(args.pack_budget)))
     index = load_index(client)
     result = stage(pairs, args.packdir, args.part_size, index, pack_budget=args.pack_budget,
-                   key_env=args.key_env)
+                   key_env=args.key_env, max_packs=args.max_packs)
+    _report_stage(result, args.max_packs)
     summary = {key: result[key] for key in ("pack_name", "packs", "index_name", "index_path",
-                                            "skipped")}
+                                            "skipped", "deferred")}
     summary["staged"] = [blob["sha256"] for blob in result["blobs"]]
     print(json.dumps(summary, indent=1, sort_keys=True))
     return EXIT_OK
+
+
+def _manifest_totals(pairs):
+    total = 0
+    for path, _ in pairs:
+        try:
+            total += os.path.getsize(path)
+        except OSError:
+            pass
+    return total, _human(total)
+
+
+def _report_stage(result, max_packs):
+    """Flushed staged totals (files, bytes, per pack) before upload, a ::notice:: for deferrals and a step summary."""
+    sizes = {blob["sha256"]: blob["size"] for blob in result["blobs"]}
+    staged_bytes = sum(pack["size"] for pack in result["packs"])
+    _say("stage: sealed %d file(s) (%d plain bytes) into %d pack(s), %d stored bytes (%s)" % (
+        len(sizes), sum(sizes.values()), len(result["packs"]), staged_bytes, _human(staged_bytes)))
+    for pack in result["packs"]:
+        _say("stage: pack %s files=%d stored_bytes=%d (%s)" % (
+            pack["name"], pack["blobs"], pack["size"], _human(pack["size"])))
+    reasons = {}
+    for each in result["skipped"]:
+        reason = each["reason"].split(":")[0]
+        reasons[reason] = reasons.get(reason, 0) + 1
+    if reasons:
+        _say("stage: not sealed: " + ", ".join("%s=%d" % pair for pair in sorted(reasons.items())))
+    deferred = result.get("deferred") or []
+    if deferred:
+        _log("notice", "%d file(s) (%d bytes, %s) exceed the %d upload slot(s) and are deferred: they are "
+             "recorded in the index and staged first by the next refresh run" % (
+                 len(deferred), sum(each["size"] for each in deferred),
+                 _human(sum(each["size"] for each in deferred)), max_packs))
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if path:
+        lines = ["### Artifact store: staged packs", "",
+                 "| Pack | Files | Stored bytes |", "| --- | --- | --- |"]
+        lines += ["| %s | %d | %d (%s) |" % (pack["name"], pack["blobs"], pack["size"], _human(pack["size"]))
+                  for pack in result["packs"]]
+        lines += ["", "Deferred to the next refresh run: %d file(s), %d bytes" % (
+            len(deferred), sum(each["size"] for each in deferred)), ""]
+        try:
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write("\n".join(lines) + "\n")
+                handle.flush()
+        except OSError:
+            _say("stage: could not write the step summary")
 
 
 def _command_list(args):
@@ -613,6 +713,9 @@ def _parser():
     sub.add_argument("--packdir", required=True)
     sub.add_argument("--part-size", type=int, default=PART_SIZE_DEFAULT)
     sub.add_argument("--pack-budget", type=int, default=PACK_BUDGET_DEFAULT)
+    sub.add_argument("--max-packs", type=int, default=UPLOAD_SLOTS, choices=range(1, UPLOAD_SLOTS + 1),
+                     metavar="N", help="packs sealed per run, 1..%d (the workflow's upload steps); the rest "
+                                       "is deferred and staged first next run" % UPLOAD_SLOTS)
     sub.add_argument("--key-env", default=KEY_ENV)
     sub.set_defaults(handler=_command_stage)
     sub = commands.add_parser("list", help="table of stored blobs")

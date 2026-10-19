@@ -314,6 +314,91 @@ class StageTests(StoreTestCase):
         self.assertNotIn("short", str(caught.exception).replace("CACHE_ENCRYPTION_KEY", ""))
 
 
+class DeferralTests(StoreTestCase):
+    NOW = 1_800_000_000
+
+    def sized_pairs(self, count):
+        return [self.make_file("f%d.bin" % number, 700, number + 10)[:2] for number in range(count)]
+
+    def stage_run(self, pairs, name, run_id, now, index=None, **options):
+        options.setdefault("part_size", 700)
+        options.setdefault("pack_budget", 1000)
+        with mock.patch.dict(os.environ, {"GITHUB_RUN_ID": run_id}):
+            result = artstore.stage(pairs, self.tmp / name, index=index, now=now, **options)
+        fragment = core.load_index(self.tmp / name / "index" / "index.json") if result["packs"] else None
+        return result, fragment
+
+    def test_max_packs_defers_the_overflow_without_sealing_it(self):
+        pairs = self.sized_pairs(5)
+        result, fragment = self.stage_run(pairs, "pd", "1001", self.NOW, max_packs=2)
+        self.assertEqual(len(result["packs"]), 2)
+        staged = {blob["sha256"] for blob in result["blobs"]}
+        deferred = {each["sha256"] for each in result["deferred"]}
+        self.assertEqual((len(staged), len(deferred)), (2, 3))
+        self.assertEqual(staged | deferred, {sha for _, sha in pairs})
+        self.assertEqual({each["reason"] for each in result["skipped"]}, {"deferred"})
+        self.assertEqual(sorted(path.name for path in (self.tmp / "pd").iterdir()),
+                         sorted([*(pack["name"] for pack in result["packs"]), "index"]))
+        self.assertEqual(set(core.deferred_map(fragment)), deferred)
+        self.assertTrue(all(record["since"] == self.NOW and record["size"] == 700
+                            for record in core.deferred_map(fragment).values()))
+
+    def test_without_a_cap_nothing_is_deferred(self):
+        result, fragment = self.stage_run(self.sized_pairs(4), "pd", "1001", self.NOW)
+        self.assertEqual((len(result["packs"]), result["deferred"]), (4, []))
+        self.assertEqual(core.deferred_map(fragment), {})
+        self.assertNotIn("deferred", fragment)
+
+    def test_deferred_blobs_are_sealed_before_anything_new_on_the_next_run(self):
+        pairs = self.sized_pairs(4)
+        first, fragment = self.stage_run(pairs, "pd1", "1001", self.NOW, max_packs=2)
+        deferred = [sha for _, sha in pairs if sha in {each["sha256"] for each in first["deferred"]}]
+        fresh = self.make_file("fresh.bin", 700, 99)[:2]
+        second, again = self.stage_run([fresh, *pairs], "pd2", "1002", self.NOW + DAY, index=fragment, max_packs=1)
+        self.assertEqual([blob["sha256"] for blob in second["blobs"]], [deferred[0]])
+        remaining = core.deferred_map(again)
+        self.assertEqual(set(remaining), {deferred[1], fresh[1]})
+        self.assertEqual(remaining[deferred[1]]["since"], self.NOW)
+        self.assertEqual(remaining[fresh[1]]["since"], self.NOW + DAY)
+
+    def test_a_run_that_seals_everything_clears_the_deferred_state(self):
+        pairs = self.sized_pairs(4)
+        _, fragment = self.stage_run(pairs, "pd1", "1001", self.NOW, max_packs=2)
+        _, again = self.stage_run(pairs, "pd2", "1002", self.NOW + DAY, index=fragment, max_packs=3)
+        self.assertEqual(core.deferred_map(again), {})
+        self.assertEqual(set(again["blobs"]), {sha for _, sha in pairs})
+
+    def test_deferred_state_survives_a_run_that_does_not_list_it_until_the_ttl(self):
+        pairs = self.sized_pairs(4)
+        first, fragment = self.stage_run(pairs, "pd1", "1001", self.NOW, max_packs=2)
+        deferred = {each["sha256"] for each in first["deferred"]}
+        fresh = self.make_file("fresh.bin", 700, 99)[:2]
+        _, kept = self.stage_run([fresh], "pd2", "1002", self.NOW + DAY, index=fragment)
+        self.assertEqual(set(core.deferred_map(kept)), deferred)
+        _, expired = self.stage_run([fresh], "pd3", "1003", self.NOW + 15 * DAY, index=fragment)
+        self.assertEqual(core.deferred_map(expired), {})
+
+    def test_bik_content_is_never_staged_even_without_a_bik_suffix(self):
+        sources = []
+        for number, magic in enumerate((b"BIKi", b"KB2j")):
+            data = magic + bytes(range(200))
+            path = self.tmp / "src" / ("object%d" % number)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+            sources.append((path, hashlib.sha256(data).hexdigest()))
+        good, good_sha = self.make_file("good.bin", 400, 3)
+        result = artstore.stage([*sources, (good, good_sha)], self.tmp / "pd")
+        self.assertEqual([blob["sha256"] for blob in result["blobs"]], [good_sha])
+        self.assertEqual([each["reason"] for each in result["skipped"]], ["bik", "bik"])
+
+    def test_a_rejected_blob_does_not_use_up_a_pack_slot(self):
+        pairs = self.sized_pairs(2)
+        liar = (pairs[0][0], "0" * 64)
+        result, _ = self.stage_run([liar, pairs[1]], "pd", "1001", self.NOW, max_packs=1)
+        self.assertEqual([blob["sha256"] for blob in result["blobs"]], [pairs[1][1]])
+        self.assertEqual(result["deferred"], [])
+
+
 class FetchTests(StoreTestCase):
     def test_roundtrip_through_fake_github_in_clean_dir(self):
         big, big_sha = self.make_file("big.bin", 5000, 1)
@@ -631,6 +716,37 @@ class CliTests(StoreTestCase):
         code, out, _ = self.run_main("prune")
         self.assertEqual(code, 0)
         self.assertIn("0 to delete", out)
+
+    def test_stage_logs_totals_per_pack_and_reports_deferral(self):
+        pairs = [self.make_file("f%d.bin" % number, 700, number + 10)[:2] for number in range(3)]
+        manifest = self.tmp / "manifest.json"
+        manifest.write_text(json.dumps([{"path": str(path), "sha256": sha} for path, sha in pairs]))
+        summary_file = self.tmp / "summary.md"
+        with mock.patch.dict(os.environ, {"GITHUB_STEP_SUMMARY": str(summary_file)}):
+            code, out, err = self.run_main("stage", "--manifest-json", str(manifest), "--packdir",
+                                           str(self.tmp / "cli-pack"), "--part-size", "700",
+                                           "--pack-budget", "1000", "--max-packs", "2")
+        self.assertEqual(code, 0)
+        summary = json.loads(out)
+        self.assertEqual((len(summary["packs"]), len(summary["deferred"])), (2, 1))
+        self.assertIn("artstore: stage: manifest lists 3 file(s), 2100 bytes", err)
+        self.assertIn("artstore: stage: sealed 2 file(s) (1400 plain bytes) into 2 pack(s)", err)
+        self.assertIn("artstore: stage: pack artstore-pack-1001-1-0 files=1 stored_bytes=", err)
+        self.assertIn("::notice::artstore: 1 file(s) (700 bytes", err)
+        self.assertIn("staged first by the next refresh run", err)
+        table = summary_file.read_text(encoding="utf-8")
+        self.assertIn("| artstore-pack-1001-1-0 | 1 |", table)
+        self.assertIn("Deferred to the next refresh run: 1 file(s), 700 bytes", table)
+        for secret in (TOKEN, KEY):
+            self.assertNotIn(secret, out + err + table)
+
+    def test_stage_never_allows_more_packs_than_the_workflow_uploads(self):
+        manifest = self.tmp / "manifest.json"
+        manifest.write_text("[]")
+        for value in ("0", str(artstore.UPLOAD_SLOTS + 1)):
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                artstore.main(["stage", "--manifest-json", str(manifest), "--packdir", str(self.tmp / "p"),
+                               "--max-packs", value])
 
     def test_cli_without_token_degrades(self):
         out, err = io.StringIO(), io.StringIO()
