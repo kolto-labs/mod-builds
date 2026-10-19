@@ -1,0 +1,26 @@
+name: TSL full build (manual)
+on:
+  workflow_dispatch:
+    inputs:
+      platform:
+        description: Native platform for the build
+        type: choice
+        options: [windows, linux, macos]
+        default: windows
+permissions:
+  contents: read
+jobs:
+  full-build:
+    uses: ./.github/workflows/full-build-job.yml
+    with:
+      game: k2
+      mode: manual
+      platform: ${{ inputs.platform }}
+      implementation: manual
+      runner-mode: self-hosted
+    secrets:
+      FULL_BUILD_CONFIG: ${{ secrets.FULL_BUILD_CONFIG }}
+      PRIVATE_CI_TOKEN: ${{ secrets.PRIVATE_CI_TOKEN }}
+      PRIVATE_CI_RECIPIENT: ${{ secrets.PRIVATE_CI_RECIPIENT }}
+      CACHE_ACCESS_KEY_ID: ${{ secrets.CACHE_ACCESS_KEY_ID }}
+      CACHE_SECRET_ACCESS_KEY: ${{ secrets.CACHE_SECRET_ACCESS_KEY }}
