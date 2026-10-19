@@ -4536,5 +4536,370 @@ class StageProgressTests(unittest.TestCase):
         self.assertNotIn("stage durations", quiet.getvalue())
 
 
+TS_SESSION = "20261019-101606951-0aa35c"
+
+
+def ts_instruction_guid(number):
+    return f"a0000000-0000-5000-8000-{number:012d}"
+
+
+def ts_document(count=20, dependencies=None, shared=None):
+    """A converted TOML whose components own distinct instruction GUIDs (`shared` {n: m}: n owns m's)."""
+    dependencies = dependencies or {}
+    shared = shared or {}
+    blocks = []
+    for number in range(1, count + 1):
+        guid = quarantine_guid(number)
+        block = component(f"Mod {number:02d}", guid)
+        head, old, tail = block.rpartition('Guid = "' + guid[:-1] + '9"')
+        block = head + 'Guid = "' + ts_instruction_guid(shared.get(number, number)) + '"' + tail
+        if number in dependencies:
+            listed = ", ".join(f'"{reference}"' for reference in dependencies[number])
+            block = block.replace("IsSelected = false", "IsSelected = false\nDependencies = [" + listed + "]", 1)
+        blocks.append(block)
+    return document(*blocks)
+
+
+def ts_install_log(number, instruction=None, step=2, action="Patcher", total=20, session=TS_SESSION,
+                   message="GFFList a.dlg: a.dlg not found in /g/modules/a.mod nor in tslpatchdata",
+                   progress=True, steps=True, prefix=""):
+    """Synthetic TypeScript CLI install output stopping at an instruction of component `number`."""
+    guid = ts_instruction_guid(number if instruction is None else instruction)
+    lines = [f"{prefix}[{number}/{total}] Mod {number:02d}"] if progress else []
+    if steps:
+        lines += [f"{prefix}  1. Extract: auto-generated",
+                  f'{prefix}     ok Success - extracted "Mod.{{zip,rar,7z}}" -> "/a/Mod" (19ms) '
+                  f"[checkpoint {session}-{number + 2}]",
+                  f"{prefix}  {step}. {action}: auto-generated"]
+    lines += [f"{prefix}ERROR: Instruction {guid} failed (PatcherError); installation stopped with recovery "
+              f"pending: {message}",
+              "", "Install finished: 1 succeeded, 0 failed, 0 skipped",
+              f"Checkpoint session: {session}"]
+    return "\n".join(lines) + "\n"
+
+
+class TypeScriptInstallFailureParserTests(unittest.TestCase):
+    def test_the_component_comes_from_the_progress_line_and_the_step_from_the_step_line(self):
+        parsed, = ports.parse_typescript_install_failures(ts_install_log(5))
+        self.assertEqual((parsed["component"], parsed["step"], parsed["action"]), ("Mod 05", 2, "Patcher"))
+        self.assertEqual(parsed["instruction_guid"], ts_instruction_guid(5))
+        self.assertEqual(parsed["result_code"], "PatcherError")
+        self.assertTrue(parsed["error_line"].startswith("ERROR: Instruction " + ts_instruction_guid(5)))
+        self.assertTrue(parsed["message"].startswith("GFFList a.dlg: a.dlg not found in"))
+
+    def test_runner_timestamps_and_terminal_escapes_are_ignored_and_repeats_count_once(self):
+        stamp = "2026-10-19T10:24:11.7577164Z "
+        text = ts_install_log(5, prefix=stamp) + ts_install_log(5, prefix=stamp)
+        parsed = ports.parse_typescript_install_failures("\x1b[31m" + text + "\x1b[0m")
+        self.assertEqual([(item["component"], item["step"], item["action"]) for item in parsed],
+                         [("Mod 05", 2, "Patcher")])
+
+    def test_a_failure_before_any_progress_line_has_no_component_and_no_action(self):
+        parsed, = ports.parse_typescript_install_failures(ts_install_log(5, progress=False, steps=False))
+        self.assertIsNone(parsed["component"])
+        self.assertEqual((parsed["step"], parsed["action"]), (None, ""))
+
+    def test_the_component_failure_parsers_fall_back_to_the_typescript_form(self):
+        text = ts_install_log(5)
+        self.assertEqual(ports.parse_component_failure(text)["component"], "Mod 05")
+        self.assertEqual([item["component"] for item in ports.parse_component_failures(text)], ["Mod 05"])
+        self.assertIsNone(ports.parse_component_failure("Install finished: 0 succeeded, 0 failed\n"))
+        self.assertEqual(ports.parse_component_failures("ERROR: Instruction x failed\n"), [])
+
+    def test_the_rust_form_wins_when_both_appear(self):
+        text = ts_install_log(5) + "Error: Mod 06 / step 1 (Move): boom\n"
+        self.assertEqual(ports.parse_component_failure(text)["component"], "Mod 06")
+
+    def test_the_failure_is_recorded_with_its_component_instead_of_none(self):
+        report = {}
+        failure = ports.record_failure(ts_install_log(5), "install_base", 1, report)
+        self.assertEqual(ports.failure_location(failure), "component 'Mod 05', step 2 (Patcher)")
+
+    def test_the_session_is_the_last_one_the_log_printed(self):
+        self.assertEqual(ports.checkpoint_session(ts_install_log(5, session="s-1") + "Checkpoint session: s-2\n"),
+                         "s-2")
+        self.assertIsNone(ports.checkpoint_session("Install finished\n"))
+
+
+class TypeScriptInstallQuarantineTests(unittest.TestCase):
+    prepare = ExecuteCommandTests.prepare
+
+    def run_lane(self, install_failures=(), converted=None, max_fraction=None, restore_status="restored",
+                 max_quarantine=None):
+        """Run the TypeScript CLI lane; a scripted failure is a log text or (stage, log text), in order."""
+        root, args = self.prepare("k1")
+        args.guide.write_text(QUARANTINE_GUIDE, encoding="utf-8")
+        args.implementation = "typescript"
+        args.mode = "cli"
+        args.review_manifest = root / "review.json"
+        game = args.game_dir.resolve()
+        (game / "chitin.key").write_text("x", encoding="utf-8")
+        (game / "override").mkdir()
+        (game / "override" / "keep.2da").write_text("0123456789", encoding="utf-8")
+        self.initial = ports.tree_manifest(game)
+        if max_fraction is not None:
+            args.max_quarantine_fraction = max_fraction
+        if max_quarantine is not None:
+            args.max_quarantine = max_quarantine
+        pending = list(install_failures)
+        commands = []
+        self.seen = {}
+        self.restores = []
+
+        def fake_run(command, source, private, stage, report, env):
+            commands.append((stage, list(command)))
+            self.private = private
+            self.seen[stage] = {"tree": ports.tree_manifest(game)}
+            if stage == "convert":
+                (private / "converted.toml").write_text(converted or ts_document(), encoding="utf-8")
+            if stage.startswith("install") and pending and (
+                    isinstance(pending[0], str) or pending[0][0] == stage):
+                text = pending.pop(0)
+                text = text if isinstance(text, str) else text[1]
+                (game / "override" / "partial.2da").write_text("half", encoding="utf-8")
+                (game / "override" / "keep.2da").unlink(missing_ok=True)
+                state = game / ".modsync" / "checkpoints" / "sessions" / TS_SESSION
+                state.mkdir(parents=True, exist_ok=True)
+                (state / "session.json").write_text('{"pendingMutation": {}}', encoding="utf-8")
+                (private / (stage + ".log")).write_text(text, encoding="utf-8")
+                report["stage"] = stage
+                report["commands"].append({"stage": stage, "exit_code": 1})
+                raise ports.Blocked(stage + "_failed")
+
+        def fake_engine_restore(command, directories, source, private, stage, report, env, invocation=None):
+            self.restores.append((stage, directories, invocation))
+            record = {"stage": stage, "status": restore_status, "seconds": 0.0}
+            report["quarantine"].setdefault(ports.ENGINE_RESTORE_KEY, []).append(record)
+            return record
+
+        report = {"commands": []}
+        error = None
+        with mock.patch.object(ports, "run", fake_run), \
+                mock.patch.object(ports, "engine_restore", fake_engine_restore), \
+                mock.patch.object(ports, "review_manifest", return_value=[]):
+            try:
+                ports.execute(args, report)
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        self.assertEqual(pending, [], "every scripted failure was consumed")
+        self.game = game
+        return commands, report, error
+
+    def selected(self, command):
+        return [value for flag, value in zip(command, command[1:]) if flag == "--select"][0].split(",")
+
+    def installs(self, commands):
+        return [stage for stage, _ in commands if stage.startswith("install")]
+
+    def test_a_failing_instruction_quarantines_its_component_and_the_rest_installs(self):
+        commands, report, error = self.run_lane([ts_install_log(5)])
+        self.assertIsNone(error)
+        self.assertEqual(self.installs(commands), ["install_base", "install_base_retry_1",
+                                                   "install_widescreen_retry_1"])
+        by_stage = dict(commands)
+        everyone = [quarantine_guid(number) for number in range(1, 21)]
+        self.assertEqual(self.selected(by_stage["install_base"]), everyone)
+        self.assertEqual(self.selected(by_stage["install_base_retry_1"]),
+                         [guid for guid in everyone if guid != quarantine_guid(5)])
+        for stage in ("install_base", "install_base_retry_1"):
+            self.assertIn("--phase", by_stage[stage])
+            self.assertIn(ports.TYPESCRIPT_PHYSICAL_INSTALL_FLAG, by_stage[stage])
+        self.assertEqual(by_stage["install_base_retry_1"][by_stage["install_base_retry_1"].index("--phase") + 1],
+                         "base")
+        entry, = report["quarantined_install_failures"]
+        self.assertEqual((entry["kind"], entry["name"], entry["component_guid"], entry["step"],
+                          entry["action"], entry["stage"], entry["caused_by"], entry["instruction_guid"]),
+                         ("install_failure", "Mod 05", quarantine_guid(5), 2, "Patcher", "install_base",
+                          None, ts_instruction_guid(5)))
+        self.assertEqual(report["status"], "installed")
+        self.assertNotIn("failure", report)
+        self.assertIsNone(report["quarantine"]["stopped"])
+
+    def test_the_game_is_restored_to_the_baseline_after_the_engine_recovery_before_the_retry(self):
+        self.run_lane([ts_install_log(5)])
+        self.assertEqual(self.seen["install_base_retry_1"]["tree"], self.initial,
+                         "the game tree, its checkpoint store included, equals the baseline at the retry")
+        self.assertFalse((self.game / ".modsync").exists())
+        stage, directories, invocation = self.restores[0]
+        self.assertEqual(stage, "engine_restore_1")
+        self.assertEqual(invocation, ["checkpoints", "restore", TS_SESSION, "0", "--kotor", str(self.game),
+                                      ports.TYPESCRIPT_PHYSICAL_INSTALL_FLAG])
+
+    def test_a_failed_engine_recovery_is_recorded_and_the_baseline_restore_carries_it(self):
+        _, report, error = self.run_lane([ts_install_log(5)], restore_status="failed")
+        self.assertIsNone(error)
+        record, = report["quarantine"][ports.ENGINE_RESTORE_KEY]
+        self.assertEqual((record["status"], record["fallback"]), ("failed", "baseline_restore"))
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        self.assertIn("engine restore failed, fell back to baseline_restore", stderr.getvalue())
+
+    def test_the_instruction_guid_attributes_a_failure_with_no_progress_line(self):
+        commands, report, error = self.run_lane([ts_install_log(7, progress=False)])
+        self.assertIsNone(error)
+        entry, = report["quarantined_install_failures"]
+        self.assertEqual((entry["name"], entry["component_guid"], entry["step"], entry["action"]),
+                         ("Mod 07", quarantine_guid(7), 2, "Patcher"))
+        self.assertNotIn(quarantine_guid(7), self.selected(dict(commands)["install_base_retry_1"]))
+
+    def test_the_converted_instruction_supplies_the_action_when_the_log_has_no_step_line(self):
+        commands, report, error = self.run_lane([ts_install_log(7, progress=False, steps=False)])
+        self.assertIsNone(error)
+        entry, = report["quarantined_install_failures"]
+        self.assertEqual((entry["name"], entry["step"], entry["action"]), ("Mod 07", None, "Move"))
+        self.assertNotIn(quarantine_guid(7), self.selected(dict(commands)["install_base_retry_1"]))
+
+    def test_dependents_are_quarantined_and_left_out_of_the_retry(self):
+        converted = ts_document(dependencies={7: [quarantine_guid(5)], 8: [quarantine_guid(7)]})
+        commands, report, error = self.run_lane([ts_install_log(5)], converted=converted, max_fraction=0.25)
+        self.assertIsNone(error)
+        self.assertEqual([(item["kind"], item["component_guid"], item["caused_by"])
+                          for item in report["quarantined_install_failures"]],
+                         [("install_failure", quarantine_guid(5), None),
+                          ("dependent_of_quarantined", quarantine_guid(7), quarantine_guid(5)),
+                          ("dependent_of_quarantined", quarantine_guid(8), quarantine_guid(5))])
+        self.assertEqual(len(self.selected(dict(commands)["install_base_retry_1"])), 17)
+
+    def test_the_component_cap_stops_the_lane_visibly(self):
+        converted = ts_document(dependencies={n: [quarantine_guid(5)] for n in (6, 7, 8, 9)})
+        commands, report, error = self.run_lane([ts_install_log(5)], converted=converted)
+        self.assertEqual(error, "install_quarantine_cap_exceeded")
+        self.assertEqual(self.installs(commands), ["install_base"])
+        self.assertEqual(report["quarantined_install_failures"], [])
+        self.assertEqual(report["quarantine"]["max_components"], 3)
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "component_cap_exceeded")
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        self.assertIn("::error::ports: install failure not quarantined (component_cap_exceeded)",
+                      stderr.getvalue())
+
+    def test_a_widescreen_failure_restores_the_baseline_and_reruns_both_phases(self):
+        commands, report, error = self.run_lane([("install_widescreen", ts_install_log(6))])
+        self.assertIsNone(error)
+        self.assertEqual(self.installs(commands), ["install_base", "install_widescreen", "install_base_retry_1",
+                                                   "install_widescreen_retry_1"])
+        self.assertEqual(self.seen["install_base_retry_1"]["tree"], self.initial)
+        entry, = report["quarantined_install_failures"]
+        self.assertEqual((entry["name"], entry["stage"]), ("Mod 06", "install_widescreen"))
+        self.assertNotIn(quarantine_guid(6), self.selected(dict(commands)["install_widescreen_retry_1"]))
+
+    def test_the_log_lists_the_quarantine_as_warnings_for_a_partial_install(self):
+        converted = ts_document(dependencies={7: [quarantine_guid(5)]})
+        _, report, error = self.run_lane([ts_install_log(5)], converted=converted)
+        self.assertIsNone(error)
+        stderr = io.StringIO()
+        with contextlib.redirect_stderr(stderr):
+            ports.print_diagnostics(report)
+        text = stderr.getvalue()
+        self.assertIn("::warning::ports: 2 component(s) QUARANTINED after install failures (1 failing, "
+                      "1 dependent(s))", text)
+        self.assertIn("PARTIAL install", text)
+        self.assertIn("::warning::ports: quarantined Mod 05 [" + quarantine_guid(5)
+                      + "]: install failed at step 2 (Patcher): ERROR: Instruction", text)
+        self.assertIn("::warning::ports: quarantined Mod 07 [" + quarantine_guid(7)
+                      + "]: depends on quarantined " + quarantine_guid(5), text)
+        self.assertNotIn("::error::", text)
+
+    def test_a_guid_owned_by_another_component_than_the_progress_line_refuses_the_pass(self):
+        commands, report, error = self.run_lane([ts_install_log(5, instruction=9)])
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(self.installs(commands), ["install_base"])
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "instruction_component_mismatch")
+        self.assertEqual(report["quarantined_install_failures"], [])
+
+    def test_a_guid_owned_by_two_components_refuses_the_pass(self):
+        converted = ts_document(shared={6: 5})
+        _, report, error = self.run_lane([ts_install_log(5)], converted=converted)
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "instruction_ambiguous")
+
+    def test_an_unknown_guid_keeps_the_progress_line_attribution(self):
+        commands, report, error = self.run_lane([ts_install_log(5, instruction=99)])
+        self.assertIsNone(error)
+        entry, = report["quarantined_install_failures"]
+        self.assertEqual((entry["name"], entry["component_guid"], entry["action"]),
+                         ("Mod 05", quarantine_guid(5), "Patcher"))
+        self.assertEqual(entry["instruction_guid"], ts_instruction_guid(99))
+
+    def test_a_failure_with_neither_progress_line_nor_known_guid_is_not_attributable(self):
+        commands, report, error = self.run_lane([ts_install_log(5, instruction=99, progress=False)])
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "error_not_attributable")
+        self.assertEqual(self.installs(commands), ["install_base"])
+
+    def test_an_action_outside_the_quarantinable_list_refuses_the_pass(self):
+        _, report, error = self.run_lane([ts_install_log(5, action="Execute")])
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "action_not_quarantinable")
+
+    def test_a_retry_the_engine_refuses_as_unfinished_is_reported_with_the_original_failure(self):
+        refusal = ("ERROR: Checkpoint setup failed before installation: Unfinished checkpoint session "
+                   + TS_SESSION + " requires recovery\n")
+        commands, report, error = self.run_lane([ts_install_log(5), refusal])
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(self.installs(commands), ["install_base", "install_base_retry_1"])
+        stopped = report["quarantine"]["stopped"]
+        self.assertEqual(stopped["reason"], ports.UNFINISHED_INSTALL_REASON)
+        self.assertEqual(stopped["original_failure"]["name"], "Mod 05")
+        self.assertEqual(report["quarantine"]["stopped"]["recovery"]["stage"], "engine_restore_1")
+
+    def test_zero_disables_the_install_quarantine_and_takes_no_baseline(self):
+        commands, report, error = self.run_lane([ts_install_log(5)], max_quarantine=0)
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(self.installs(commands), ["install_base"])
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "quarantine_disabled")
+        self.assertNotIn("baseline", report["quarantine"])
+        self.assertEqual(report["quarantined_install_failures"], [])
+
+    def test_a_passing_install_runs_each_phase_once(self):
+        commands, report, error = self.run_lane()
+        self.assertIsNone(error)
+        self.assertEqual(self.installs(commands), ["install_base", "install_widescreen"])
+        self.assertEqual(report["quarantined_install_failures"], [])
+        self.assertEqual(report["reason"], "native_install_commands_succeeded")
+
+
+class TypeScriptRecoveryTests(unittest.TestCase):
+    def setUp(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(root))
+        self.root, self.game = root, root / "game"
+        self.private = root / "private"
+        self.private.mkdir()
+        self.report = {"quarantine": {}}
+
+    def recover(self, text, returncode=0):
+        calls = []
+
+        def fake(command, **kwargs):
+            calls.append(command)
+            kwargs["stdout"].write(b"")
+            return mock.Mock(returncode=returncode)
+
+        with mock.patch.object(ports.subprocess, "run", fake), contextlib.redirect_stderr(io.StringIO()):
+            record = ports.recover_typescript_state(
+                ["node", "main.js"], self.game, text, self.root, self.private, "engine_restore_1",
+                self.report, {})
+        return record, calls
+
+    def test_the_checkpoints_restore_command_names_the_logged_session_and_the_first_checkpoint(self):
+        record, calls = self.recover(ts_install_log(5))
+        self.assertEqual(record["status"], "restored")
+        self.assertNotIn("fallback", record)
+        self.assertEqual(calls, [["node", "main.js", "checkpoints", "restore", TS_SESSION, "0", "--kotor",
+                                  str(self.game), "--ci-physical-install"]])
+
+    def test_a_failing_restore_command_leaves_the_baseline_restore_to_carry_the_recovery(self):
+        record, _ = self.recover(ts_install_log(5), returncode=1)
+        self.assertEqual((record["status"], record["fallback"]), ("failed", "baseline_restore"))
+
+    def test_a_log_without_a_session_runs_nothing(self):
+        record, calls = self.recover("ERROR: boom\n")
+        self.assertEqual((record["status"], record["fallback"]), ("unavailable", "baseline_restore"))
+        self.assertEqual(calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

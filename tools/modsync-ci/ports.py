@@ -167,6 +167,15 @@ COMPONENT_FAILURE = re.compile(
     r"(?:Error|Exception): (?:Install stopped\. Restore before retrying; snapshot: .+?: )?"
     r"(?P<component>.+?) / step (?P<step>\d+) "
     r"\((?P<action>[^)]*)\): (?P<message>.*?)\s*$")
+TS_LOG_PREFIX = r"(?:\d{4}-\d\d-\d\dT[\d:.]+Z\s+)?"
+TS_MOD_PROGRESS = re.compile(
+    r"^" + TS_LOG_PREFIX + r"\[(?P<index>\d+)/(?P<total>\d+)\]\s+(?P<name>\S.*?)\s*$")
+TS_STEP_PROGRESS = re.compile(r"^" + TS_LOG_PREFIX + r"\s+(?P<step>\d+)\.\s+(?P<action>[A-Za-z]+):")
+TS_INSTRUCTION_FAILURE = re.compile(
+    r"\bERROR: Instruction (?P<guid>[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12})"
+    r" failed \((?P<code>[^)]*)\)(?:; installation stopped with recovery pending)?(?:: (?P<message>.*?))?\s*$")
+TS_CHECKPOINT_ID = re.compile(r"\[checkpoint (?P<id>[0-9A-Za-z-]+)\]")
+TS_CHECKPOINT_SESSION = re.compile(r"^" + TS_LOG_PREFIX + r"Checkpoint session: (?P<id>[0-9A-Za-z-]+)\s*$")
 SECRET_PATTERNS = (
     (re.compile(r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]{8,}"), r"\1 ***"),
     (re.compile(r"(?i)\b([\w-]*(?:token|secret|passw(?:or)?d|api[_-]?key|access[_-]?key|authorization"
@@ -227,10 +236,47 @@ def component_failure_fields(match):
             "error_line": clean_line(match.group(0))}
 
 
+def parse_typescript_install_failures(text):
+    """Every `ERROR: Instruction <guid> failed (<Code>)...` line of a TypeScript CLI install log.
+
+    The TypeScript CLI names the failing instruction by GUID, not the component. The component and
+    step are the ones in force on that line: the last `[i/N] <Component>` progress line and the last
+    `  N. <Action>: ...` step line after it. `component` is None when no progress line precedes the
+    error; `action` is "" when no step line follows the progress line. A line repeated counts once.
+    """
+    found = []
+    seen = set()
+    component = step = action = None
+    for raw in text.splitlines():
+        line = ANSI_ESCAPE.sub("", raw).rstrip()
+        progress_line = TS_MOD_PROGRESS.match(line)
+        if progress_line:
+            component, step, action = progress_line.group("name").strip(), None, ""
+            continue
+        step_line = TS_STEP_PROGRESS.match(line)
+        if step_line:
+            step, action = int(step_line.group("step")), step_line.group("action")
+            continue
+        match = TS_INSTRUCTION_FAILURE.search(line)
+        if match is None:
+            continue
+        fields = {"component": component, "step": step, "action": action or "",
+                  "message": clean_line(match.group("message") or match.group("code")),
+                  "error_line": clean_line(match.group(0)),
+                  "instruction_guid": normalized_reference(match.group("guid")),
+                  "result_code": match.group("code")}
+        key = (fields["instruction_guid"], fields["component"], fields["message"])
+        if key not in seen:
+            seen.add(key)
+            found.append(fields)
+    return found
+
+
 def parse_component_failures(text):
     """Every distinct `Error: <Component> / step N (<Action>): <message>` line of a tool's output.
 
-    A line repeated (the log and the final error) counts once, at its last position.
+    A line repeated (the log and the final error) counts once, at its last position. A log with no
+    such line is read as a TypeScript CLI install log (`parse_typescript_install_failures`).
     """
     found = []
     seen = set()
@@ -244,17 +290,23 @@ def parse_component_failures(text):
                          if (item["component"], item["step"], item["action"], item["message"]) != key]
             seen.add(key)
             found.append(fields)
-    return found
+    return found or [item for item in parse_typescript_install_failures(text) if item["component"]]
 
 
 def parse_component_failure(text):
-    """The last `Error: <Component> / step N (<Action>): <message>` line of a tool's output, or None."""
+    """The last `Error: <Component> / step N (<Action>): <message>` line of a tool's output, or None.
+
+    Falls back to the last TypeScript `ERROR: Instruction <guid> failed` line that has a progress line.
+    """
     found = None
     for line in text.splitlines():
         match = COMPONENT_FAILURE.search(ANSI_ESCAPE.sub("", line))
         if match:
             found = match
-    return None if found is None else component_failure_fields(found)
+    if found is not None:
+        return component_failure_fields(found)
+    attributed = [item for item in parse_typescript_install_failures(text) if item["component"]]
+    return attributed[-1] if attributed else None
 
 
 def validate_error_lines(text):
@@ -1216,6 +1268,61 @@ def find_failing_component(components, name):
     return next(iter(matches.items())), None
 
 
+def instruction_index(components):
+    """{normalized instruction GUID: [(component GUID, instruction record)]} over the converted components.
+
+    Covers each component's own instructions and those of its options.
+    """
+    index = {}
+    for component in components:
+        identity = normalized_reference(component.get("Guid"))
+        records = list(component.get("Instructions") or [])
+        for option in component.get("Options") or []:
+            if isinstance(option, dict):
+                records += option.get("Instructions") or []
+        for record in records:
+            if isinstance(record, dict) and record.get("Guid"):
+                index.setdefault(normalized_reference(record["Guid"]), []).append((identity, record))
+    return index
+
+
+def resolve_instruction_failures(failures, components):
+    """(failures pinned to converted components by instruction GUID, or None; why not).
+
+    A failure carrying an `instruction_guid` takes its component from the converted instruction set
+    (`component_guid`, converted `component` name, and the instruction's Action when the log had no
+    step line). A GUID that several components own, or that belongs to a different component than the
+    log's `[i/N]` progress line names, refuses the pass. A GUID the converted set does not know keeps
+    the progress-line attribution. A failure with neither is dropped as unattributable.
+    """
+    index = instruction_index(components)
+    by_guid = {normalized_reference(component.get("Guid")): component for component in components}
+    resolved = []
+    for item in failures:
+        guid_ = item.get("instruction_guid")
+        if guid_ is None:
+            resolved.append(item)
+            continue
+        owners = index.get(guid_, [])
+        if len({identity for identity, _ in owners}) > 1:
+            return None, "instruction_ambiguous"
+        item = dict(item)
+        if owners:
+            identity, record = owners[0]
+            named = item.get("component")
+            if named:
+                match, _ = find_failing_component(components, named)
+                if match is not None and match[0] != identity:
+                    return None, "instruction_component_mismatch"
+            component = by_guid[identity]
+            item["component_guid"] = identity
+            item["component"] = str(component.get("Name", component.get("Heading")))
+            item["action"] = item.get("action") or str(record.get("Action") or "")
+        if item.get("component"):
+            resolved.append(item)
+    return resolved, None
+
+
 def transitive_dependents(components, root, excluded):
     """Every not-yet-excluded component that depends, directly or through others, on `root`."""
     found = {}
@@ -1284,7 +1391,12 @@ def quarantine_failure(phase, parsed, stage, components, deselect, game, report,
         stop("iteration_cap_exceeded", True)
     if not game.is_dir() or not any(game.iterdir()) or GAME_MISSING.search(parsed["message"]):
         stop("game_missing")
-    match, problem = find_failing_component(components, parsed["component"])
+    hinted = parsed.get("component_guid")
+    by_guid = {normalized_reference(each.get("Guid")): each for each in components}
+    if hinted in by_guid:
+        match, problem = (hinted, by_guid[hinted]), None
+    else:
+        match, problem = find_failing_component(components, parsed["component"])
     if problem:
         stop(problem)
     identity, component = match
@@ -1303,6 +1415,8 @@ def quarantine_failure(phase, parsed, stage, components, deselect, game, report,
         "kind": settings["kind"], "name": component.get("Name", component.get("Heading")),
         "component_guid": identity, "step": parsed["step"], "action": parsed["action"],
         "error_line": parsed["error_line"], "stage": stage, "caused_by": None})
+    if parsed.get("instruction_guid"):
+        quarantined[-1]["instruction_guid"] = parsed["instruction_guid"]
     for dependent_guid, dependent in dependents.items():
         quarantined.append({
             "kind": QUARANTINE_DEPENDENT_KIND,
@@ -1508,6 +1622,10 @@ def restore_game(game, baseline, manifest):
 
 ENGINE_STATE_NAME = re.compile(r"\.modsync-[0-9a-f]{16}")
 UNFINISHED_INSTALL = "an unfinished install exists"
+TS_UNFINISHED_INSTALL = "unfinished checkpoint"
+UNFINISHED_INSTALL_MARKERS = (UNFINISHED_INSTALL, TS_UNFINISHED_INSTALL)
+TYPESCRIPT_INSTALL_PHASES = ("base", "widescreen")
+TYPESCRIPT_FIRST_CHECKPOINT = "0"
 NOTHING_TO_RESTORE = "no unfinished install to restore"
 ENGINE_RESTORE_KEY = "engine_restores"
 ENGINE_RESTORE_TIMEOUT = BASELINE_COPY_TIMEOUT
@@ -1552,15 +1670,16 @@ def restore_arguments(directories):
     return found
 
 
-def engine_restore(command, directories, source, private, stage, report, env):
+def engine_restore(command, directories, source, private, stage, report, env, invocation=None):
     """Run the CLI's own `restore` for the game; returns the record appended to engine_restores.
 
     `status` is restored, nothing_pending (the engine had no unfinished install), failed or
-    unavailable (no binary or no directory arguments).
+    unavailable (no binary or no directory arguments). `invocation` replaces the Rust
+    `restore --game-dir X --source-dir Y` arguments (the TypeScript CLI's `checkpoints restore ...`).
     """
     record = {"stage": stage, "status": "unavailable", "seconds": 0.0}
     report["quarantine"].setdefault(ENGINE_RESTORE_KEY, []).append(record)
-    arguments = restore_arguments(directories)
+    arguments = restore_arguments(directories) if invocation is None else invocation
     if arguments is None:
         return record
     log = private / (stage + ".log")
@@ -1570,7 +1689,7 @@ def engine_restore(command, directories, source, private, stage, report, env):
     try:
         with log.open("wb") as output:
             completed = subprocess.run(
-                command + ["restore"] + arguments, cwd=source, env=env, stdin=subprocess.DEVNULL,
+                command + (["restore"] + arguments if invocation is None else arguments), cwd=source, env=env, stdin=subprocess.DEVNULL,
                 stdout=output, stderr=subprocess.STDOUT, timeout=ENGINE_RESTORE_TIMEOUT)
         text = log.read_text(encoding="utf-8", errors="replace")
         if completed.returncode == 0:
@@ -1606,10 +1725,52 @@ def recover_engine_state(command, directories, game, source, private, stage, rep
         raise OSError("the engine's unfinished-install marker is still present")
 
 
+def checkpoint_session(text):
+    """The last `Checkpoint session: <id>` a TypeScript install log printed, or None."""
+    found = None
+    for line in text.splitlines():
+        match = TS_CHECKPOINT_SESSION.match(ANSI_ESCAPE.sub("", line).rstrip())
+        if match:
+            found = match.group("id")
+    return found
+
+
+def recover_typescript_state(command, game, text, source, private, stage, report, env):
+    """Ask the TypeScript CLI to roll the game back to its session's anchor before the baseline restore.
+
+    The TypeScript engine records a pending mutation in `<game>/.modsync/checkpoints` and refuses to
+    start another session until it is resolved ("... requires recovery"). Its own recovery is
+    `checkpoints restore <session> 0 --kotor <game> --ci-physical-install`, with the session printed
+    in the failed install's log. It is best effort, recorded in engine_restores: when it is unavailable
+    (no session in the log) or fails, `fallback` says the baseline restore carries the recovery, which
+    empties the game directory, and with it the checkpoint store and any restore intent in it.
+    """
+    session = checkpoint_session(text)
+    invocation = None if session is None else [
+        "checkpoints", "restore", session, TYPESCRIPT_FIRST_CHECKPOINT, "--kotor", str(game),
+        TYPESCRIPT_PHYSICAL_INSTALL_FLAG]
+    record = engine_restore(command, [], source, private, stage, report, env, invocation)
+    if record["status"] != "restored":
+        record["fallback"] = "baseline_restore"
+    return record
+
+
 def install_with_quarantine(command, directories, deselect, converted, game, source, private, report,
                             env, max_iterations=QUARANTINE_MAX_ITERATIONS,
-                            max_fraction=QUARANTINE_MAX_FRACTION):
+                            max_fraction=QUARANTINE_MAX_FRACTION, implementation="rust",
+                            arguments=None, selectable=None, extra=(), before_phase=None):
     """Run `install`; when one component's step stops it, restore the game, omit that component and retry.
+
+    TypeScript (`implementation="typescript"`): each attempt runs `install --phase base` then
+    `--phase widescreen` (`install_base`, `install_widescreen`; retries `install_base_retry_N`, ...)
+    with `arguments(deselect)` as the directory/selection arguments and `extra` after the phase.
+    The TypeScript CLI names the failing instruction by GUID
+    (`ERROR: Instruction <guid> failed (PatcherError); installation stopped with recovery pending`)
+    after its `[i/N] <Component>` and `  N. <Action>:` progress lines: the component is the one
+    owning that instruction GUID in the converted TOML (see `resolve_instruction_failures`), the
+    step and action come from the progress lines. The retry restore is `recover_typescript_state`
+    then the baseline restore; a failure in either phase restores the whole baseline and reruns
+    both phases. `before_phase()` runs before every phase command.
 
     A copy of the game directory is taken before the first install. A failed install is only
     quarantined when its output names exactly one (component, step) whose action is in
@@ -1624,7 +1785,11 @@ def install_with_quarantine(command, directories, deselect, converted, game, sou
     else leaves the lane failed. Every quarantined component is
     listed in report["quarantined_install_failures"]: the lane is a partial install.
     """
+    typescript = implementation == "typescript"
     components = converted_components(converted)
+    if selectable is not None:
+        components = [component for component in components
+                      if normalized_reference(component.get("Guid")) in selectable]
     policy = report.get("quarantine") or start_quarantine(
         components, deselect, report, max_iterations, max_fraction)
     report.setdefault(INSTALL_QUARANTINE_KEY, [])
@@ -1639,17 +1804,31 @@ def install_with_quarantine(command, directories, deselect, converted, game, sou
     protected = (Path(source_dir),) if source_dir else ()
     attempt = 0
     while True:
-        stage = "install" if attempt == 0 else f"install_retry_{attempt}"
+        suffix = "" if attempt == 0 else f"_retry_{attempt}"
         policy["install_attempts"] = attempt + 1
+        stage = "install" + suffix
         try:
-            run(command + ["install"] + directories + deselect + ["--non-interactive", "--phase", "all"],
-                source, private, stage, report, env)
+            for phase in (TYPESCRIPT_INSTALL_PHASES if typescript else (None,)):
+                stage = ("install" if phase is None else "install_" + phase) + suffix
+                if before_phase is not None:
+                    before_phase()
+                if typescript:
+                    phase_arguments = arguments(deselect) + ["--phase", phase] + list(extra)
+                else:
+                    phase_arguments = directories + deselect + ["--non-interactive", "--phase", "all"]
+                run(command + ["install"] + phase_arguments, source, private, stage, report, env)
         except Blocked as failure:
             if str(failure) != stage + "_failed":
                 raise
             text, code = read_stage_log(private, stage, report)
             record_failure(text, stage, code, report)
-            failures = parse_component_failures(text)
+            problem = None
+            if typescript:
+                failures, problem = resolve_instruction_failures(
+                    parse_typescript_install_failures(text), components)
+                failures = failures or []
+            else:
+                failures = parse_component_failures(text)
             parsed = failures[-1] if failures else None
 
             def stop(reason, parsed=parsed, stage=stage, failure=failure):
@@ -1658,11 +1837,12 @@ def install_with_quarantine(command, directories, deselect, converted, game, sou
             lowered = ANSI_ESCAPE.sub("", text).lower()
             if policy["max_iterations"] <= 0:
                 stop("quarantine_disabled")
-            if UNFINISHED_INSTALL in lowered and not failures:
+            if any(marker in lowered for marker in UNFINISHED_INSTALL_MARKERS) and not failures:
                 original = next((item for item in reversed(report.get(INSTALL_QUARANTINE_KEY) or ())
                                  if item["kind"] == INSTALL_FAILURE_KIND), None)
                 unfinished = next((clean_line(line) for line in text.splitlines()
-                                   if UNFINISHED_INSTALL in line.lower()), None)
+                                   if any(marker in line.lower() for marker in UNFINISHED_INSTALL_MARKERS)),
+                                  None)
                 report["failure"].update({
                     "unfinished_install": True, "error_line": unfinished,
                     "original_failure": original and {
@@ -1677,6 +1857,8 @@ def install_with_quarantine(command, directories, deselect, converted, game, sou
                 stop("panic_detected")
             if "rollback failed" in lowered:
                 stop("rollback_failed")
+            if problem:
+                stop(problem)
             if not failures:
                 stop("error_not_attributable")
             if len({(item["component"].casefold(), item["step"]) for item in failures}) > 1:
@@ -1688,11 +1870,15 @@ def install_with_quarantine(command, directories, deselect, converted, game, sou
             if baseline is None:
                 stop("baseline_copy_failed")
 
-            def restore(parsed=parsed, stage=stage, failure=failure):
+            def restore(parsed=parsed, stage=stage, failure=failure, text=text):
                 number = attempt + 1
                 try:
-                    recover_engine_state(command, directories, game, source, private,
-                                         f"engine_restore_{number}", report, env, protected)
+                    if typescript:
+                        recover_typescript_state(command, game, text, source, private,
+                                                 f"engine_restore_{number}", report, env)
+                    else:
+                        recover_engine_state(command, directories, game, source, private,
+                                             f"engine_restore_{number}", report, env, protected)
                     started = time.monotonic()
                     progress(f"baseline_restore_{number}: started")
                     restore_game(game, baseline[0], baseline[1])
@@ -2332,6 +2518,7 @@ def execute(args, report):
                        for component in document.get("thisMod", document.get("Components", []))
                        if guid(component["Guid"]) not in policy_guids]
         report["installable_component_count"] = len(installable)
+        all_installable = list(installable)
         alias_archives(converted, args.archive_map, archives, set(installable), report,
                        load_archive_aliases(guide.parent.name))
         def validate_arguments(taken):
@@ -2417,13 +2604,23 @@ def execute(args, report):
             report["status"] = "installed"
             report["reason"] = result["reason"]
             return
-        for phase in ("base", "widescreen"):
+        def reviewed_inputs_unchanged():
             if (digest(guide) != report["guide_sha256"]
                     or digest(converted) != report["converted_sha256"]):
                 raise Blocked("reviewed_inputs_changed")
-            run(command + ["install"] + directories + ["--phase", phase] + choices
-                + [TYPESCRIPT_PHYSICAL_INSTALL_FLAG],
-                source, private, "install_" + phase, report, env)
+
+        install_with_quarantine(
+            command, directories, deselect, converted, game, source, private, report, env,
+            getattr(args, "max_quarantine", QUARANTINE_MAX_ITERATIONS),
+            getattr(args, "max_quarantine_fraction", QUARANTINE_MAX_FRACTION),
+            implementation="typescript", arguments=validate_arguments,
+            selectable={normalized_reference(each) for each in all_installable},
+            extra=choices + [TYPESCRIPT_PHYSICAL_INSTALL_FLAG], before_phase=reviewed_inputs_unchanged)
+        if report.get(INSTALL_QUARANTINE_KEY):
+            omitted = {item["component_guid"] for item in quarantined_entries(report)}
+            report.setdefault("installable_before_quarantine_count", len(all_installable))
+            report["installable_component_count"] = len(
+                [each for each in all_installable if normalized_reference(each) not in omitted])
         report["status"] = "installed"
         report["reason"] = "native_install_commands_succeeded"
         return

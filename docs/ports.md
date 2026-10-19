@@ -293,8 +293,8 @@ caps) when:
   (`quarantine_disabled`).
 
 Restore, convert, coverage and draft-review problems happen before `validate` and are
-never quarantined. TypeScript lanes do not use the loop. `install` failures have their own
-stage with a game-directory restore (next section).
+never quarantined. `install` failures have their own stage with a game-directory restore
+(next two sections).
 
 **A green lane with quarantined components is a partial install.** The quarantined
 components were not installed and not verified, so the lane is not guide parity, and it
@@ -423,6 +423,55 @@ is not guide parity. Reporting:
   `::error::ports: install failure not quarantined (<reason>)`.
 - The GUI lane (`--mode gui`) does not use this stage; it keeps the `validate` quarantine
   only, and a failed GUI install still fails the lane.
+
+### Runtime quarantine of install failures (TypeScript CLI lane)
+
+The TypeScript CLI (`--implementation typescript --mode cli`) runs `install --phase base`
+and `install --phase widescreen` (`install_base`, `install_widescreen`) through the same
+`install_with_quarantine` loop, against the same shared budget, baseline copy and
+`--deselect`/`--select` bookkeeping as the Rust lane (retry stages `install_base_retry_N`,
+`install_widescreen_retry_N`). A failure in either phase restores the whole baseline and
+reruns both phases, so the base install is repeated after a widescreen failure.
+
+**Attribution.** The TypeScript CLI never prints the Rust `<Component> / step N (<Action>)`
+line. It prints `[i/N] <Component>` and `  N. <Action>: ...` progress lines and then
+`ERROR: Instruction <guid> failed (PatcherError); installation stopped with recovery
+pending: <message>`. Before this change the lane failed with `no component could be
+attributed` (K1 `KOTOR Community Patch`, K2 `Classic Class Attack`) and the quarantine never
+engaged. Now:
+
+- the component is the one that owns that instruction GUID in the converted TOML (its own
+  `Instructions` or those of its `Options`); the GUID is also recorded as `instruction_guid`;
+- the step and action are those of the last progress lines before the error; when the log
+  has no step line the converted instruction's `Action` is used (`step` stays `null`);
+- a GUID the converted TOML does not know falls back to the `[i/N]` component name; a
+  failure with neither is `error_not_attributable`;
+- a GUID owned by two components (`instruction_ambiguous`), or by a different component
+  than the `[i/N]` line names (`instruction_component_mismatch`), refuses the quarantine;
+- the failure evidence and the `failed at component ...` log line carry the same component
+  and step, so the `##[error]` line no longer says `no component could be attributed`.
+
+The failing component and its transitive dependents are quarantined with the same rules as
+above: actions limited to `Patcher`, `Extract`, `Move`, `Copy`, `Rename`, `Delete`, at most
+15 failing components and 15% of the selected components (`install_quarantine_cap_exceeded`
+otherwise), a `::warning::` per component and a `PARTIAL install` notice, never silent.
+
+**Recovery before every retry.** The TypeScript engine records a pending mutation in
+`<game>/.modsync/checkpoints` and refuses to start another session until it is resolved
+(`Unfinished checkpoint session <id> requires recovery`). Its only recovery command is
+`checkpoints restore`, so, in order:
+
+1. `node packages/cli/dist/main.js checkpoints restore <session> 0 --kotor <game>
+   --ci-physical-install` (stage `engine_restore_N`; `<session>` is the `Checkpoint session:`
+   line of the failed log; checkpoint `0` is the pre-install anchor). It is recorded in
+   `quarantine.engine_restores`; if it is unavailable or fails the record gets
+   `fallback: baseline_restore` and a `::warning::`.
+2. The baseline restore (`baseline_restore_N`) empties and refills the game directory, which
+   also removes `<game>/.modsync`, i.e. the checkpoint store and any pending marker, so the
+   retry starts a fresh session whatever step 1 did.
+
+A retry that is still refused as an unfinished checkpoint session is reported as
+`unfinished_install_not_recovered` with the original attributed failure, exactly as for Rust.
 
 ### Stage durations and progress
 
