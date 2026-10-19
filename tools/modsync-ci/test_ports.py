@@ -5089,5 +5089,147 @@ class BindDiagnosticTests(unittest.TestCase):
                           if "bind_diagnostic" in skip])
 
 
+class GuiInstallQuarantineTests(unittest.TestCase):
+    ALPHA = "10000000-0000-0000-0000-000000000011"
+    BETA = "10000000-0000-0000-0000-000000000021"
+    ALPHA_INSTRUCTION = "10000000-0000-0000-0000-000000000019"
+    BETA_INSTRUCTION = "10000000-0000-0000-0000-000000000029"
+    SESSION = "session-1"
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.game = self.root / "game"
+        self.game.mkdir()
+        (self.game / "chitin.key").write_text("x", encoding="utf-8")
+        self.archives = self.root / "archives"
+        self.archives.mkdir()
+        self.private = self.root / "private"
+        self.private.mkdir()
+        self.converted = self.private / "converted.toml"
+        self.converted.write_text(document(
+            component("Alpha", self.ALPHA), component("Beta", self.BETA)), encoding="utf-8")
+        self.selectable = {self.ALPHA, self.BETA}
+
+    def failure(self, error=None, mod_guid=None, **extra):
+        failure = {
+            "trigger": ports.GUI_INSTALL_FAILURE_REASON, "recovery_pending": True,
+            "error": error if error is not None else (
+                f"Instruction {self.ALPHA_INSTRUCTION.upper()} failed (PatcherError); installation "
+                f"stopped with recovery pending: could not write a file"),
+            "mod_guid": mod_guid or self.ALPHA, "mod_name": "Alpha", "mod_index": 1, "mod_total": 2,
+            "action": "Move", "step": 1, "checkpoint_session_id": self.SESSION,
+            "log_tail": ["error: install failed"]}
+        failure.update(extra)
+        return failure
+
+    def run_loop(self, failures, reason=ports.GUI_INSTALL_FAILURE_REASON, **options):
+        pending = list(failures)
+        stages = []
+        inputs = {}
+
+        def fake_run(command, source, private, stage, report, env):
+            stages.append(stage)
+            inputs[stage] = Path(command[command.index("--input") + 1])
+            if pending:
+                document_ = {"status": "blocked", "reason": reason}
+                failure = pending.pop(0)
+                if failure is not None:
+                    document_["install_failure"] = failure
+                Path(command[command.index("--report") + 1]).write_text(
+                    json.dumps(document_), encoding="utf-8")
+                (self.game / "partial.bin").write_text("partial", encoding="utf-8")
+                report["commands"].append({"stage": stage, "exit_code": 1})
+                report["failure"] = {"stage": stage, "exit_code": 1, "component": None, "step": None,
+                                     "action": None, "error_line": None}
+                raise ports.Blocked(stage + "_failed")
+            report["commands"].append({"stage": stage, "exit_code": 0})
+
+        report = {"commands": []}
+        verified = {"reason": "real_ui_install_and_checkpoint_hashes_verified"}
+        with mock.patch.object(ports, "run", fake_run), \
+                mock.patch.object(ports, "verify_typescript_gui_result", return_value=verified), \
+                mock.patch.object(ports, "recover_typescript_state") as recover:
+            error = None
+            result = None
+            try:
+                result = ports.install_gui_with_quarantine(
+                    ["node", "cli.js"], self.root, self.private, self.game, self.archives, self.converted,
+                    self.converted, set(), [], self.selectable, report, {},
+                    options.get("max_iterations", 15), options.get("max_fraction", 0.5))
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        return stages, inputs, report, error, result, recover
+
+    def test_the_failing_instruction_is_attributed_to_its_component_like_the_cli(self):
+        components = ports.converted_components(self.converted)
+        failures, problem = ports.attribute_gui_install_failure(self.failure(), components)
+        self.assertIsNone(problem)
+        self.assertEqual([(item["component"], item["component_guid"], item["step"], item["action"],
+                           item["instruction_guid"], item["result_code"]) for item in failures],
+                         [("Alpha", self.ALPHA, 1, "Move", self.ALPHA_INSTRUCTION, "PatcherError")])
+
+    def test_a_ui_mod_that_disagrees_with_the_instruction_owner_is_refused(self):
+        components = ports.converted_components(self.converted)
+        self.assertEqual(ports.attribute_gui_install_failure(self.failure(mod_guid=self.BETA), components),
+                         ([], "instruction_component_mismatch"))
+
+    def test_errors_that_name_no_instruction_are_not_attributable(self):
+        components = ports.converted_components(self.converted)
+        for error in ("Checkpoint baseline failed before mutation: disk full",
+                      "Unfinished checkpoint session abc requires recovery", ""):
+            self.assertEqual(ports.attribute_gui_install_failure(self.failure(error=error), components),
+                             ([], None), error)
+        self.assertEqual(ports.attribute_gui_install_failure(None, components), ([], None))
+
+    def test_an_attributable_gui_failure_is_quarantined_and_the_install_retried_on_a_restored_game(self):
+        stages, inputs, report, error, result, recover = self.run_loop([self.failure()])
+        self.assertIsNone(error)
+        self.assertEqual(stages, ["gui", "gui_retry_1"])
+        retried = tomllib.loads(inputs["gui_retry_1"].read_text(encoding="utf-8"))["thisMod"]
+        self.assertEqual({item["Guid"]: item["IsSelected"] for item in retried},
+                         {self.ALPHA: False, self.BETA: True})
+        quarantined = report[ports.INSTALL_QUARANTINE_KEY]
+        self.assertEqual([(item["component_guid"], item["instruction_guid"], item["stage"])
+                          for item in quarantined], [(self.ALPHA, self.ALPHA_INSTRUCTION, "gui")])
+        self.assertFalse((self.game / "partial.bin").exists())
+        self.assertTrue((self.game / "chitin.key").is_file())
+        self.assertIn(f"Checkpoint session: {self.SESSION}", recover.call_args.args[2])
+        self.assertEqual(report["quarantine"]["install_attempts"], 2)
+        self.assertEqual(report[ports.GUI_INSTALL_FAILURES_KEY][0]["stage"], "gui")
+        self.assertNotIn("failure", report)
+        self.assertEqual(result, {"reason": "real_ui_install_and_checkpoint_hashes_verified"})
+
+    def test_an_unattributable_gui_install_failure_stays_a_hard_failure_without_a_retry(self):
+        stages, _, report, error, _, recover = self.run_loop(
+            [self.failure(error="Checkpoint baseline failed before mutation: disk full")])
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(stages, ["gui"])
+        recover.assert_not_called()
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "error_not_attributable")
+        self.assertIn("disk full", report["quarantine"]["stopped"]["error_line"])
+        self.assertFalse(report[ports.INSTALL_QUARANTINE_KEY])
+
+    def test_a_driver_failure_outside_installation_is_not_quarantined(self):
+        stages, _, report, error, _, _ = self.run_loop([None], reason="validation_blocked")
+        self.assertEqual(error, "gui_failed")
+        self.assertEqual(stages, ["gui"])
+        self.assertEqual(report["failure"]["driver_reason"], "validation_blocked")
+        self.assertFalse(report[ports.INSTALL_QUARANTINE_KEY])
+
+    def test_the_quarantine_budget_bounds_the_retries(self):
+        stages, _, report, error, _, _ = self.run_loop([self.failure()], max_iterations=0)
+        self.assertEqual((error, stages), ("install_failed", ["gui"]))
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "quarantine_disabled")
+
+    def test_a_missing_game_directory_stays_a_hard_failure(self):
+        for child in self.game.iterdir():
+            child.unlink()
+        stages, _, report, error, _, _ = self.run_loop([self.failure()])
+        self.assertEqual((error, stages), ("install_failed", ["gui"]))
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "game_missing")
+
+
 if __name__ == "__main__":
     unittest.main()

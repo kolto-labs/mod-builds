@@ -34,6 +34,8 @@ FAILURE_TAIL_LINES = 80
 GUI_STAGE = "gui"
 STAGE_DURATIONS_KEY = "stage_durations"
 GUI_REPORT_NAME = "gui-report.json"
+GUI_INSTALL_FAILURE_REASON = "backend_install_gate_or_failure"
+GUI_INSTALL_FAILURES_KEY = "gui_install_failures"
 GUI_TAIL_LINES = 200
 GUI_TAIL_GROUP = "::group::gui worker tail"
 DIAGNOSTICS_MAX_DEPTH = 4
@@ -69,6 +71,19 @@ def load_worker_diagnostics(path):
     if not isinstance(diagnostics, dict) or not diagnostics:
         return None
     return sanitize_diagnostics(diagnostics)
+
+
+def gui_stage_name(attempt):
+    """`gui` for the first GUI attempt, `gui_retry_N` for the quarantine retries."""
+    return GUI_STAGE if attempt == 0 else f"{GUI_STAGE}_retry_{attempt}"
+
+
+def is_gui_stage(stage):
+    return stage == GUI_STAGE or stage.startswith(GUI_STAGE + "_retry_")
+
+
+def gui_report_name(stage):
+    return GUI_REPORT_NAME if stage == GUI_STAGE else f"{stage}-report.json"
 
 
 def reemit_gui_failure(text, driver_report, report):
@@ -137,8 +152,8 @@ def run(command, source, private, stage, report, env):
     report["commands"].append({"stage": stage, "exit_code": code})
     if code:
         text = log.read_text(encoding="utf-8", errors="replace")
-        if stage == GUI_STAGE:
-            reemit_gui_failure(text, private / GUI_REPORT_NAME, report)
+        if is_gui_stage(stage):
+            reemit_gui_failure(text, private / gui_report_name(stage), report)
         else:
             lines = text.splitlines()[-FAILURE_TAIL_LINES:]
             print(f"::group::{stage} output (last {FAILURE_TAIL_LINES} lines)", file=sys.stderr)
@@ -1985,6 +2000,257 @@ def install_with_quarantine(command, directories, deselect, converted, game, sou
         return
 
 
+def load_gui_driver_failure(path):
+    """(driver reason, sanitized install failure) of a failed TypeScript GUI driver report.
+
+    `(None, None)` when the report is absent, a symlink or unreadable. The install failure is the
+    one `gui_typescript.py` captured from `/api/install/status` and `/api/logs` (error text,
+    recovery details, failed instruction and mod, last log entries); it is None for a driver
+    failure that did not happen during installation.
+    """
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None, None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    return gui_diag.bounded_text(data.get("reason"), 120), gui_diag.sanitize_install_failure(
+        data.get("install_failure"))
+
+
+GUI_ACTION_NAME = re.compile(r"[A-Za-z]+")
+
+
+def gui_failure_log(install_failure):
+    """The lines the TypeScript CLI would have printed for a failure the GUI worker captured.
+
+    `[i/N] <Mod>`, `  N. <Action>:` and `ERROR: <summary.error>` (the web server's install error is
+    the CLI's `Instruction <guid> failed (<Code>); installation stopped with recovery pending: ...`
+    text), so the GUI failure goes through `parse_typescript_install_failures` unchanged.
+    """
+    lines = []
+    name = install_failure.get("mod_name")
+    if name:
+        lines.append("[%d/%d] %s" % (int(install_failure.get("mod_index") or 0),
+                                     int(install_failure.get("mod_total") or 0), name))
+        action = install_failure.get("action") or ""
+        if install_failure.get("step") is not None and GUI_ACTION_NAME.fullmatch(action):
+            lines.append("  %d. %s: " % (int(install_failure["step"]), action))
+    if install_failure.get("error"):
+        lines.append("ERROR: " + install_failure["error"])
+    return lines
+
+
+def attribute_gui_install_failure(install_failure, components):
+    """(failures, problem): a GUI install failure pinned to a converted component, like the CLI's.
+
+    The failure is attributed only when the web server's install error names an
+    `Instruction <guid> failed (<Code>)`: the component is the one that owns that instruction GUID
+    in the converted TOML (`resolve_instruction_failures`: ambiguous or mismatching owners refuse),
+    and the web UI's own mod GUID must agree with it (`instruction_component_mismatch` otherwise).
+    Anything else (no error text, a checkpoint or lock error, a prompt, a missing mod) returns
+    ([], None): not attributable, so the caller fails the lane.
+    """
+    if not install_failure:
+        return [], None
+    failures = parse_typescript_install_failures("\n".join(gui_failure_log(install_failure)))
+    resolved, problem = resolve_instruction_failures(failures, components)
+    if problem:
+        return [], problem
+    mod_guid = install_failure.get("mod_guid")
+    for item in resolved:
+        if mod_guid and item.get("component_guid") and normalized_reference(mod_guid) != item["component_guid"]:
+            return [], "instruction_component_mismatch"
+    return resolved, None
+
+
+def verify_typescript_gui_result(driver_report, selected_input, gui_work, game, reviewed_inputs_unchanged):
+    """The TypeScript GUI driver's completion report, after every receipt and output hash is checked."""
+    if not driver_report.is_file() or driver_report.is_symlink():
+        raise Blocked("gui_completion_report_missing")
+    result = json.loads(driver_report.read_text(encoding="utf-8"))
+    if (not isinstance(result, dict)
+            or result.get("schema_version") != 1
+            or result.get("implementation") != "typescript"
+            or result.get("mode") != "gui"
+            or result.get("runtime") != "playwright-web"
+            or result.get("status") != "installed"
+            or result.get("reason") != "real_ui_install_and_checkpoint_hashes_verified"
+            or result.get("ui_completed") is not True
+            or result.get("input_sha256") != digest(selected_input)
+            or type(result.get("verified_game_files")) is not int
+            or result["verified_game_files"] <= 0):
+        raise Blocked("gui_completion_not_verified")
+    receipts = result.get("checkpoint_receipts")
+    if (not isinstance(receipts, dict) or "session.json" not in receipts
+            or len(receipts) < 3 or any(
+                not isinstance(checksum, str)
+                or re.fullmatch(r"[0-9a-f]{64}", checksum) is None
+                for checksum in receipts.values())):
+        raise Blocked("gui_checkpoint_receipts_missing")
+    evidence = Path(result["evidence_directory"])
+    if evidence.is_symlink() or not evidence.resolve().is_relative_to(gui_work.resolve()):
+        raise Blocked("gui_evidence_directory_invalid")
+    for name, key in (("install-status.json", "receipt_sha256"),
+                      ("verified-output-hashes.json", "output_manifest_sha256")):
+        artifact = evidence / name
+        if (artifact.is_symlink() or not artifact.is_file()
+                or digest(artifact) != result.get(key)):
+            raise Blocked("gui_completion_hash_mismatch")
+    outputs = json.loads((evidence / "verified-output-hashes.json").read_text())
+    if not isinstance(outputs, dict) or len(outputs) != result["verified_game_files"]:
+        raise Blocked("gui_output_manifest_invalid")
+    for relative, checksum in outputs.items():
+        target = game / relative
+        if (Path(relative).is_absolute() or ".." in Path(relative).parts
+                or target.is_symlink() or not target.resolve().is_relative_to(game)
+                or not target.is_file() or digest(target) != checksum):
+            raise Blocked("gui_output_hash_mismatch")
+    reviewed_inputs_unchanged()
+    return result
+
+
+def install_gui_with_quarantine(command, source, private, game, archives, converted, selected_input,
+                                policy_guids, deselect, selectable, report, env,
+                                max_iterations=QUARANTINE_MAX_ITERATIONS,
+                                max_fraction=QUARANTINE_MAX_FRACTION, reviewed_inputs_unchanged=None):
+    """Run the TypeScript GUI driver; when one component's install step stops it, restore, omit it and retry.
+
+    The same loop as `install_with_quarantine`, with the GUI driver as the install: stages `gui`,
+    `gui_retry_1`, ... against the one budget shared with validate and the CLI lane, one baseline
+    copy of the game taken before the first attempt, and the same refusals. The failure is read
+    from the driver report's `install_failure` (the web server's install error, recovery details,
+    failed instruction and mod, last log entries; see `attribute_gui_install_failure`), so only a
+    driver failure with reason `backend_install_gate_or_failure` whose error names an
+    `Instruction <guid> failed (<Code>)` of exactly one converted component, with an action in
+    INSTALL_QUARANTINE_ACTIONS, is quarantined. Before each retry the CLI's own `checkpoints
+    restore` for the failed session runs, then the game directory is restored to the baseline and
+    verified, and the component plus its dependents are unselected in a new copy of the input
+    (`converted-gui_retry_N.toml`). Any other driver failure (no install failure captured, a
+    prompt, a missing game, a failed rollback, a budget cap) is re-raised or recorded in
+    report["quarantine"]["stopped"]; nothing is skipped silently. Every quarantined component is
+    listed in report["quarantined_install_failures"]: the lane is a partial install. Returns the
+    verified driver report of the attempt that installed.
+    """
+    components = [component for component in converted_components(converted)
+                  if normalized_reference(component.get("Guid")) in selectable]
+    policy = report.get("quarantine") or start_quarantine(
+        components, deselect, report, max_iterations, max_fraction)
+    report.setdefault(INSTALL_QUARANTINE_KEY, [])
+    reviewed_inputs_unchanged = reviewed_inputs_unchanged or (lambda: None)
+    baseline = None
+    if policy["max_iterations"] > 0:
+        started = time.monotonic()
+        progress("baseline_copy: started")
+        baseline = take_baseline(game, private, report)
+        finish_stage(report, "baseline_copy", started, (policy.get("baseline") or {}).get("status"))
+    attempt = 0
+    while True:
+        stage = gui_stage_name(attempt)
+        policy["install_attempts"] = attempt + 1
+        if attempt:
+            omitted = policy_guids | {item["component_guid"] for item in quarantined_entries(report)}
+            selected_input = private / f"converted-{stage}.toml"
+            report["selected_after_policy_count"] = select_base_components(
+                converted, omitted, selected_input)
+        reviewed_inputs_unchanged()
+        driver_report = private / gui_report_name(stage)
+        gui_work = private / ("gui-work" if attempt == 0 else f"gui-work-{stage}")
+        try:
+            run([sys.executable, str(Path(__file__).resolve().with_name("gui_typescript.py")),
+                 "--source", str(source), "--input", str(selected_input),
+                 "--game-dir", str(game), "--archives", str(archives),
+                 "--work-dir", str(gui_work), "--report", str(driver_report),
+                 "--timeout", "7000"],
+                source, private, stage, report, env)
+        except Blocked as failure:
+            if str(failure) != stage + "_failed":
+                raise
+            recorded = report.setdefault("failure", {
+                "stage": stage, "exit_code": None, "component": None, "step": None,
+                "action": None, "error_line": None})
+            reason, install_failure = load_gui_driver_failure(driver_report)
+            if reason:
+                recorded["driver_reason"] = reason
+            if install_failure is None or reason != GUI_INSTALL_FAILURE_REASON:
+                progress(f"{stage}: driver failure ({reason or 'no driver report'}) is not an "
+                         f"attributable install failure; not quarantined")
+                raise
+            report.setdefault(GUI_INSTALL_FAILURES_KEY, []).append({"stage": stage, **install_failure})
+            failures, problem = attribute_gui_install_failure(install_failure, components)
+            parsed = failures[-1] if failures else None
+            error_line = clean_line(install_failure.get("error") or "")
+            if parsed:
+                recorded.update({key: parsed[key] for key in ("component", "step", "action", "error_line")})
+                recorded["instruction_guid"] = parsed.get("instruction_guid")
+                progress(f"{stage} failed at component '{parsed['component']}', step {parsed['step']} "
+                         f"({parsed['action']}), instruction {parsed.get('instruction_guid')}")
+            else:
+                recorded["error_line"] = error_line or None
+                progress(f"{stage} failed with an install error that names no converted component: "
+                         f"{error_line or 'no error text captured'}")
+
+            def stop(reason, parsed=parsed, stage=stage, failure=failure, error_line=error_line):
+                quarantine_stop(report, "install", stage, reason, parsed, failure,
+                                details=None if parsed else {"error_line": error_line})
+
+            lowered = ANSI_ESCAPE.sub("", install_failure.get("error") or "").lower()
+            if policy["max_iterations"] <= 0:
+                stop("quarantine_disabled")
+            if any(marker in lowered for marker in UNFINISHED_INSTALL_MARKERS) and not failures:
+                original = next((item for item in reversed(report.get(INSTALL_QUARANTINE_KEY) or ())
+                                 if item["kind"] == INSTALL_FAILURE_KIND), None)
+                recorded.update({
+                    "unfinished_install": True, "error_line": error_line,
+                    "original_failure": original and {
+                        key: original[key] for key in ("name", "component_guid", "step", "action",
+                                                       "error_line", "stage")}})
+                quarantine_stop(
+                    report, "install", stage, UNFINISHED_INSTALL_REASON, None, failure,
+                    details={"error_line": error_line,
+                             "original_failure": recorded["original_failure"],
+                             "recovery": (policy.get(ENGINE_RESTORE_KEY) or [None])[-1]})
+            if "rollback failed" in lowered:
+                stop("rollback_failed")
+            if problem:
+                stop(problem)
+            if not failures:
+                stop("error_not_attributable")
+            if parsed["action"].casefold() not in INSTALL_QUARANTINE_ACTIONS:
+                stop("action_not_quarantinable")
+            if not game_is_populated(game):
+                stop("game_missing")
+            if baseline is None:
+                stop("baseline_copy_failed")
+
+            def restore(parsed=parsed, stage=stage, failure=failure, install_failure=install_failure):
+                number = attempt + 1
+                session = install_failure.get("checkpoint_session_id") or ""
+                text = f"Checkpoint session: {session}\n" if re.fullmatch(r"[0-9A-Za-z-]+", session) else ""
+                try:
+                    recover_typescript_state(command, game, text, source, private,
+                                             f"engine_restore_{number}", report, env)
+                    started = time.monotonic()
+                    progress(f"baseline_restore_{number}: started")
+                    restore_game(game, baseline[0], baseline[1])
+                    finish_stage(report, f"baseline_restore_{number}", started, "verified")
+                except (OSError, subprocess.SubprocessError, shutil.Error):
+                    quarantine_stop(report, "install", stage, "restore_failed", parsed, failure)
+
+            quarantine_failure("install", parsed, stage, components, deselect, game, report, failure,
+                               before_commit=restore)
+            attempt += 1
+            continue
+        result = verify_typescript_gui_result(
+            driver_report, selected_input, gui_work, game, reviewed_inputs_unchanged)
+        report.pop("failure", None)
+        if baseline is not None:
+            shutil.rmtree(baseline[0], ignore_errors=True)
+        return result
+
+
 def print_diagnostics(report):
     """Put the skip causes and every uncovered step in the CI log so one read is enough."""
     durations = report.get(STAGE_DURATIONS_KEY)
@@ -2060,6 +2326,11 @@ def print_diagnostics(report):
             else:
                 print(f"::warning::ports: quarantined {item['name']} [{item['component_guid']}]: "
                       f"depends on quarantined {item['caused_by']}", file=sys.stderr)
+    for item in report.get(GUI_INSTALL_FAILURES_KEY) or ():
+        print("\n".join(gui_diag.render_install_failure(
+            {key: value for key, value in item.items() if key not in ("stage", "log_tail")},
+            title=f"{item['stage']} install failure (summary; the log tail is in the gui worker output above)")),
+            file=sys.stderr)
     for item in (report.get("quarantine") or {}).get(ENGINE_RESTORE_KEY) or ():
         if item["status"] not in ("restored", "nothing_pending"):
             print(f"::warning::ports: {item['stage']}: engine restore {item['status']}"
@@ -2082,6 +2353,10 @@ def print_diagnostics(report):
     failure = report.get("failure")
     if failure and report.get("status") != "installed":
         where = failure_location(failure)
+        if failure.get("driver_reason"):
+            where += f" [driver reason: {failure['driver_reason']}]"
+        if failure.get("error_line") and not failure.get("component"):
+            where += f" [error: {failure['error_line']}]"
         print(f"::error::ports: {failure['stage']} failed (exit {failure['exit_code']}): {where}",
               file=sys.stderr)
         if failure.get("unfinished_install"):
@@ -2691,71 +2966,28 @@ def execute(args, report):
             selected_input = private / "converted-policy.toml"
             report["selected_after_policy_count"] = select_base_components(
                 converted, policy_guids | quarantined_guids, selected_input)
-        if args.mode == "gui":
-            if (digest(guide) != report["guide_sha256"]
-                    or digest(converted) != report["converted_sha256"]):
-                raise Blocked("reviewed_inputs_changed")
-            driver_report = private / "gui-report.json"
-            gui_work = private / "gui-work"
-            run([sys.executable, str(Path(__file__).resolve().with_name("gui_typescript.py")),
-                 "--source", str(source), "--input", str(selected_input),
-                 "--game-dir", str(game), "--archives", str(archives),
-                 "--work-dir", str(gui_work), "--report", str(driver_report),
-                 "--timeout", "7000"],
-                source, private, "gui", report, env)
-            if not driver_report.is_file() or driver_report.is_symlink():
-                raise Blocked("gui_completion_report_missing")
-            result = json.loads(driver_report.read_text(encoding="utf-8"))
-            if (not isinstance(result, dict)
-                    or result.get("schema_version") != 1
-                    or result.get("implementation") != "typescript"
-                    or result.get("mode") != "gui"
-                    or result.get("runtime") != "playwright-web"
-                    or result.get("status") != "installed"
-                    or result.get("reason") != "real_ui_install_and_checkpoint_hashes_verified"
-                    or result.get("ui_completed") is not True
-                    or result.get("input_sha256") != digest(selected_input)
-                    or type(result.get("verified_game_files")) is not int
-                    or result["verified_game_files"] <= 0):
-                raise Blocked("gui_completion_not_verified")
-            receipts = result.get("checkpoint_receipts")
-            if (not isinstance(receipts, dict) or "session.json" not in receipts
-                    or len(receipts) < 3 or any(
-                        not isinstance(checksum, str)
-                        or re.fullmatch(r"[0-9a-f]{64}", checksum) is None
-                        for checksum in receipts.values())):
-                raise Blocked("gui_checkpoint_receipts_missing")
-            evidence = Path(result["evidence_directory"])
-            if evidence.is_symlink() or not evidence.resolve().is_relative_to(gui_work.resolve()):
-                raise Blocked("gui_evidence_directory_invalid")
-            for name, key in (("install-status.json", "receipt_sha256"),
-                              ("verified-output-hashes.json", "output_manifest_sha256")):
-                artifact = evidence / name
-                if (artifact.is_symlink() or not artifact.is_file()
-                        or digest(artifact) != result.get(key)):
-                    raise Blocked("gui_completion_hash_mismatch")
-            outputs = json.loads((evidence / "verified-output-hashes.json").read_text())
-            if not isinstance(outputs, dict) or len(outputs) != result["verified_game_files"]:
-                raise Blocked("gui_output_manifest_invalid")
-            for relative, checksum in outputs.items():
-                target = game / relative
-                if (Path(relative).is_absolute() or ".." in Path(relative).parts
-                        or target.is_symlink() or not target.resolve().is_relative_to(game)
-                        or not target.is_file() or digest(target) != checksum):
-                    raise Blocked("gui_output_hash_mismatch")
-            if (digest(guide) != report["guide_sha256"]
-                    or digest(converted) != report["converted_sha256"]):
-                raise Blocked("reviewed_inputs_changed")
-            report["gui"] = result
-            report["proof"] = "native_gui_and_verified_completion_receipt"
-            report["status"] = "installed"
-            report["reason"] = result["reason"]
-            return
         def reviewed_inputs_unchanged():
             if (digest(guide) != report["guide_sha256"]
                     or digest(converted) != report["converted_sha256"]):
                 raise Blocked("reviewed_inputs_changed")
 
+        if args.mode == "gui":
+            result = install_gui_with_quarantine(
+                command, source, private, game, archives, converted, selected_input,
+                policy_guids, deselect, {normalized_reference(each) for each in all_installable},
+                report, env, getattr(args, "max_quarantine", QUARANTINE_MAX_ITERATIONS),
+                getattr(args, "max_quarantine_fraction", QUARANTINE_MAX_FRACTION),
+                reviewed_inputs_unchanged)
+            if report.get(INSTALL_QUARANTINE_KEY):
+                omitted = {item["component_guid"] for item in quarantined_entries(report)}
+                report.setdefault("installable_before_quarantine_count", len(all_installable))
+                report["installable_component_count"] = len(
+                    [each for each in all_installable if normalized_reference(each) not in omitted])
+            report["gui"] = result
+            report["proof"] = "native_gui_and_verified_completion_receipt"
+            report["status"] = "installed"
+            report["reason"] = result["reason"]
+            return
         install_with_quarantine(
             command, directories, deselect, converted, game, source, private, report, env,
             getattr(args, "max_quarantine", QUARANTINE_MAX_ITERATIONS),

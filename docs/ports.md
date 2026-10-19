@@ -473,6 +473,41 @@ otherwise), a `::warning::` per component and a `PARTIAL install` notice, never 
 A retry that is still refused as an unfinished checkpoint session is reported as
 `unfinished_install_not_recovered` with the original attributed failure, exactly as for Rust.
 
+### Runtime quarantine of install failures (TypeScript GUI lane)
+
+CI run 39254033758 (k1 and k2 `typescript gui`) clicked `Install N mods` and then failed
+with `backend_install_gate_or_failure`, an empty `driver.log` and `no component could be
+attributed`. `gui_typescript.py` now records why, and `ports.py` feeds it to the same
+attribution and quarantine loop as the TypeScript CLI lane (`install_gui_with_quarantine`).
+
+- **Diagnostics.** While installing, the worker prints `[i/N] <mod>` when the current mod
+  changes and a heartbeat every 30 s to `driver.log` (flushed). When `/api/install/status` shows
+  an error or `recoveryPending` (or a prompt, an incomplete receipt, a visible failure) it
+  captures the summary error text, recovery details (checkpoint session, pending mutation),
+  the failed instruction GUID, result code, action, step, mod GUID, name and index, the failed
+  instruction results and the last 40 `/api/logs` entries, scrubbed (paths to `$GAME`,
+  `$ARCHIVES`, ..., tokens and secrets redacted) and size-bounded. They are printed to
+  `driver.log`, stored as `install_failure` in the driver report and the lane report
+  (`gui_install_failures`), and `ports.py` repeats a summary at the end of the log.
+- **Attribution.** The web server's error is the CLI's `Instruction <guid> failed (<Code>);
+  installation stopped with recovery pending: ...` text, so `attribute_gui_install_failure`
+  runs it through `parse_typescript_install_failures` and `resolve_instruction_failures`:
+  the component is the converted-TOML owner of that instruction GUID, and the web UI's own mod
+  GUID must agree (`instruction_component_mismatch` otherwise). Errors that name no
+  instruction (checkpoint, lock, prompt) are `error_not_attributable`.
+- **Retry loop.** An attributable failure with a quarantinable action restores the game
+  (`checkpoints restore` for the failed session as `engine_restore_N`, then the baseline copy
+  taken before the first attempt as `baseline_restore_N`), quarantines the component and its
+  dependents into `quarantined_install_failures` and reruns the driver as `gui_retry_N` on a
+  new input (`converted-gui_retry_N.toml`) with them unselected, against the budget shared
+  with validate and the CLI lane (`--max-quarantine`, `--max-quarantine-fraction`). Each
+  attempt waits for validation inside the worker again, so a retry costs minutes.
+- **Still hard failures.** A driver failure that is not an install-stage failure, an
+  unattributable or ambiguous error, a non-quarantinable action, a missing game, a failed
+  rollback or restore, the budget caps and `--max-quarantine 0` fail the lane
+  (`quarantine.stopped` records why). Quarantined components are never skipped silently:
+  every one gets a `::warning::` and the `PARTIAL install` notice.
+
 ### Stage durations and progress
 
 Every command `ports.py` runs (`build`, `convert`, the bind stages, `validate` and its

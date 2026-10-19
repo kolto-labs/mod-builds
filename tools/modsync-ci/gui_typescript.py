@@ -61,8 +61,38 @@ const mark = async next => {
 await mark();
 const clicks = [];
 const fail = reason => {throw new Error(reason);};
+const REDACTED = '[REDACTED]';
+const LOG_TAIL = 40;
+const HEARTBEAT_MS = 30000;
+let serverToken = '';
+let installFailure = null;
+const scrubPaths = [[config.private, '$EVIDENCE'], [config.game_dir, '$GAME'], [config.archives, '$ARCHIVES'], [config.source, '$SOURCE'], [config.input, '$INPUT']]
+  .filter(([path]) => typeof path === 'string' && path.length > 3)
+  .map(([path, label]) => [path.replace(/\/+$/, ''), label])
+  .sort((left, right) => right[0].length - left[0].length);
+const secretValues = Object.entries(process.env)
+  .filter(([name, value]) => /token|secret|key|passw|credential/i.test(name) && value && value.length >= 8 && !value.includes('\n'))
+  .map(([, value]) => value);
+const scrub = (value, limit = 360) => {
+  let text = String(value ?? '').replace(/\x1b\[[0-9;]*[A-Za-z]/g, '').replace(/[\x00-\x1f\x7f]+/g, ' ').replace(/\s+/g, ' ').trim();
+  for (const secret of [serverToken, ...secretValues]) if (secret) text = text.split(secret).join(REDACTED);
+  for (const [path, label] of scrubPaths) text = text.split(path).join(label);
+  text = text.replace(/\/(?:home|Users)\/[^\/\s:'")\]]+/g, '~')
+    .replace(/(authorization["']?\s*[:=]\s*)(?:(?:bearer|basic)\s+)?\S+/gi, '$1' + REDACTED)
+    .replace(/\b(bearer|basic)\s+[A-Za-z0-9._~+\/=-]{8,}/gi, '$1 ' + REDACTED)
+    .replace(/\bgh[pousr]_[A-Za-z0-9]{20,}/g, REDACTED)
+    .replace(/\bgithub_pat_[A-Za-z0-9_]{20,}/g, REDACTED)
+    .replace(/(:\/\/)[^\/\s:@]+:[^\/\s@]+@/g, '$1' + REDACTED + '@')
+    .replace(/([?&](?:token|key|sig|signature)=)[^&\s]+/gi, '$1' + REDACTED)
+    .replace(/(\b[\w.-]*(?:key|token|secret|passw(?:or)?d)["']?\s*[=:]\s*["']?)(?!\[REDACTED\])[^\s"'&,;]{8,}/gi, '$1' + REDACTED);
+  if (text.startsWith('::') || text.startsWith('##[')) text = ' ' + text;
+  return text.length > limit ? text.slice(0, limit) + ' ...[truncated]' : text;
+};
+const say = line => process.stdout.write(`gui-ts: ${line}\n`);
+const sayWrapped = (label, text) => {for (let at = 0; at < text.length; at += 300) say(label + text.slice(at, at + 300));};
 try {
   const token = randomBytes(32).toString('hex');
+  serverToken = token;
   server = await createModSyncServer({token, staticDir: join(config.source, 'packages/web/dist'), settingsPath: join(config.private, 'settings.json')});
   const address = await server.listen(0, '127.0.0.1');
   await mark('first_screenshot');
@@ -144,26 +174,133 @@ try {
   await click('I have read them');
   await click(`Install ${expected.length} mods`);
   stage = 'installation';
+  await mark();
+  const installStarted = Date.now();
+  const elapsed = () => Math.round((Date.now() - installStarted) / 1000);
+  const names = new Map(file.mods.map(mod => [mod.guid, scrub(mod.name, 120)]));
+  const SOFT_CODES = new Set(['Success', 'Skipped', 'DependencyNotSelected', 'RestrictionSelected']);
+  let lastOrder = [];
+  let seenMod;
+  let lastBeat = Date.now();
+  const position = guid => `[${guid ? lastOrder.indexOf(guid) + 1 : 0}/${lastOrder.length || expected.length}] ${names.get(guid) ?? guid ?? 'waiting for the first mod'}`;
+  const locate = guid => {
+    for (const mod of file.mods) {
+      let step = 0;
+      for (const instruction of mod.instructions || []) {
+        step++;
+        if (String(instruction.guid).toLowerCase() === guid) return {mod, instruction, step};
+      }
+      for (const option of mod.options || []) {
+        for (const instruction of option.instructions || []) {
+          step++;
+          if (String(instruction.guid).toLowerCase() === guid) return {mod, option, instruction, step};
+        }
+      }
+    }
+    return null;
+  };
+  const checkpointLine = failure => failure.checkpoint_session_id || failure.pending_mutation || failure.recovery_note
+    ? `INSTALL FAILURE recovery: session=${failure.checkpoint_session_id ?? 'none'} pending_mutation=${failure.pending_mutation ?? 'none'}${failure.recovery_note ? ' note=' + failure.recovery_note : ''}`
+    : null;
+  const captureInstallFailure = async (status, trigger) => {
+    try {
+      const summary = status.summary || {};
+      const rawError = typeof summary.error === 'string' ? summary.error : '';
+      const found = /Instruction ([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}) failed \(([^)]*)\)(?:; installation stopped with recovery pending)?(?::\s*([\s\S]*))?$/i.exec(rawError);
+      const instructionGuid = found ? found[1].toLowerCase() : null;
+      const where = instructionGuid ? locate(instructionGuid) : null;
+      const modGuid = where?.mod.guid ?? status.currentMod ?? seenMod ?? null;
+      const mod = where?.mod ?? file.mods.find(candidate => candidate.guid === modGuid);
+      const order = Array.isArray(status.order) && status.order.length ? status.order : lastOrder;
+      let pendingMutation = null;
+      let recoveryNote = null;
+      if (typeof summary.checkpointSessionId === 'string' && /^[0-9A-Za-z_-]+$/.test(summary.checkpointSessionId)) {
+        try {
+          const root = settings.checkpointDirectory || join(config.game_dir, '.modsync', 'checkpoints');
+          const session = JSON.parse(await readFile(join(root, 'sessions', summary.checkpointSessionId, 'session.json'), 'utf8'));
+          if (session.pendingMutation) pendingMutation = scrub(JSON.stringify(session.pendingMutation), 400);
+        } catch (error) {
+          recoveryNote = scrub(`checkpoint session.json unreadable: ${error.message}`, 200);
+        }
+      }
+      const logs = await read('/api/logs').catch(() => []);
+      const logTail = (Array.isArray(logs) ? logs : []).slice(-LOG_TAIL).map(line => scrub(line, 360));
+      const failedResults = (summary.mods || []).flatMap(result => (result.instructionResults || [])
+        .filter(item => !SOFT_CODES.has(item.code))
+        .map(item => ({mod_guid: result.modGuid, mod_name: names.get(result.modGuid) ?? null, instruction_guid: item.instructionGuid, option_guid: item.optionGuid ?? null, action: item.action, code: item.code, message: scrub(item.message ?? '', 400)}))).slice(-10);
+      const index = modGuid ? order.indexOf(modGuid) + 1 : 0;
+      installFailure = {
+        trigger,
+        error: rawError ? scrub(rawError, 2000) : null,
+        recovery_pending: Boolean(summary.recoveryPending),
+        checkpoint_session_id: summary.checkpointSessionId ?? null,
+        phase: status.phase ?? null,
+        instruction_guid: instructionGuid,
+        result_code: found ? scrub(found[2], 80) : null,
+        instruction_message: found?.[3] ? scrub(found[3], 600) : null,
+        action: where ? scrub(where.instruction.action, 40) : null,
+        step: where?.step ?? null,
+        option_guid: where?.option?.guid ?? null,
+        mod_guid: modGuid,
+        mod_name: mod ? scrub(mod.name, 200) : null,
+        mod_index: index || null,
+        mod_total: order.length || expected.length,
+        pending_mutation: pendingMutation,
+        recovery_note: recoveryNote,
+        counts: {selected: expected.length, succeeded: summary.succeeded ?? 0, failed: summary.failed ?? 0, skipped: summary.skipped ?? 0, mods_reported: (summary.mods || []).length},
+        failed_instruction_results: failedResults,
+        prompt: status.pendingPrompt ? {kind: status.pendingPrompt.kind, title: scrub(status.pendingPrompt.title, 200), message: scrub(status.pendingPrompt.message, 400), mod_guid: status.pendingPrompt.modGuid ?? null, instruction_guid: status.pendingPrompt.instructionGuid ?? null} : null,
+        elapsed_seconds: elapsed(),
+        log_tail: logTail,
+      };
+      say(`INSTALL FAILURE trigger=${trigger} recovery_pending=${installFailure.recovery_pending} mod=[${installFailure.mod_index ?? '?'}/${installFailure.mod_total}] "${installFailure.mod_name ?? 'unknown'}" (${modGuid ?? 'unknown'}) instruction=${instructionGuid ?? 'unknown'} action=${installFailure.action ?? 'unknown'} step=${installFailure.step ?? 'unknown'} code=${installFailure.result_code ?? 'unknown'}`);
+      if (installFailure.error) sayWrapped('INSTALL FAILURE error: ', installFailure.error);
+      if (checkpointLine(installFailure)) say(checkpointLine(installFailure));
+      for (const item of failedResults) say(`INSTALL FAILURE failed instruction: ${JSON.stringify(item)}`);
+      if (installFailure.prompt) say(`INSTALL FAILURE prompt: ${JSON.stringify(installFailure.prompt)}`);
+      say(`INSTALL FAILURE last ${logTail.length} log entries:`);
+      for (const line of logTail) say(`INSTALL FAILURE log: ${line}`);
+    } catch (error) {
+      installFailure ??= {trigger, error: null};
+      say(`install failure capture failed: ${scrub(error.message)}`);
+    }
+  };
+  const failInstall = async (status, reason) => {
+    await captureInstallFailure(status, reason);
+    fail(reason);
+  };
+  say(`installation started: ${expected.length} mod(s) selected`);
   for (;;) {
     const status = await read('/api/install/status');
     await evidence('install-status.json', status);
-    if (status.pendingPrompt) fail('deliberate_install_choice_requires_operator');
-    if (status.summary?.error || status.summary?.recoveryPending) fail('backend_install_gate_or_failure');
+    if (Array.isArray(status.order) && status.order.length) lastOrder = status.order;
+    if (status.currentMod && status.currentMod !== seenMod) {
+      seenMod = status.currentMod;
+      say(`${position(seenMod)} t+${elapsed()}s`);
+      lastBeat = Date.now();
+    } else if (Date.now() - lastBeat >= HEARTBEAT_MS) {
+      say(`still installing: ${position(status.currentMod ?? seenMod)} running=${status.running} t+${elapsed()}s`);
+      lastBeat = Date.now();
+    }
+    if (status.pendingPrompt) await failInstall(status, 'deliberate_install_choice_requires_operator');
+    if (status.summary?.error || status.summary?.recoveryPending) await failInstall(status, 'backend_install_gate_or_failure');
     if (!status.running && status.summary) {
       const summary = status.summary;
-      if (summary.virtualPrediction || summary.failed !== 0 || summary.skipped !== 0 || summary.succeeded !== expected.length || !summary.checkpointSessionId) fail('physical_install_receipt_incomplete');
-      if (summary.mods.length !== expected.length || summary.mods.some(mod => mod.state !== 'Installed') || new Set(summary.mods.map(mod => mod.modGuid)).size !== expected.length || expected.some(guid => !summary.mods.some(mod => mod.modGuid === guid))) fail('receipt_selection_mismatch');
+      if (summary.virtualPrediction || summary.failed !== 0 || summary.skipped !== 0 || summary.succeeded !== expected.length || !summary.checkpointSessionId) await failInstall(status, 'physical_install_receipt_incomplete');
+      if (summary.mods.length !== expected.length || summary.mods.some(mod => mod.state !== 'Installed') || new Set(summary.mods.map(mod => mod.modGuid)).size !== expected.length || expected.some(guid => !summary.mods.some(mod => mod.modGuid === guid))) await failInstall(status, 'receipt_selection_mismatch');
+      say(`installation finished: ${summary.succeeded}/${expected.length} mod(s) installed t+${elapsed()}s`);
       await page.getByRole('heading', {name: 'Installation finished', exact: true}).waitFor({timeout: 300000});
       await page.screenshot({path: join(config.private, 'finished.png'), fullPage: true});
       await evidence('worker-result.json', {status: 'receipt_required', stage, ui_completed: true});
       break;
     }
-    if (await page.getByRole('heading', {name: 'Installation failed', exact: true}).count()) fail('visible_installation_failure');
+    if (await page.getByRole('heading', {name: 'Installation failed', exact: true}).count()) await failInstall(status, 'visible_installation_failure');
     await page.waitForTimeout(300);
   }
 } catch (error) {
   if (page) await page.screenshot({path: join(config.private, 'blocked.png'), fullPage: true}).catch(() => {});
-  await evidence('worker-result.json', {status: 'blocked', stage, reason: error.message, ui_completed: false});
+  say(`blocked: stage=${stage} reason=${scrub(error.message)}`);
+  await evidence('worker-result.json', {status: 'blocked', stage, reason: error.message, ui_completed: false, ...(installFailure ? {install_failure: installFailure} : {})});
 } finally {
   if (browser) await browser.close();
   if (server) await server.close();
@@ -295,6 +432,13 @@ def execute(args, result):
             raise Blocked("ui_worker_failed_see_private_driver_log")
         worker = json.loads(worker_path.read_text())
         result.update(worker)
+        if "install_failure" in result:
+            result["install_failure"] = gui_diag.sanitize_install_failure(
+                result["install_failure"],
+                paths={private: "$EVIDENCE", args.work_dir: "$WORK_DIR", args.source: "$SOURCE",
+                       args.game_dir: "$GAME", args.archives: "$ARCHIVES"})
+            if not result["install_failure"]:
+                del result["install_failure"]
         if process.returncode or worker.get("status") != "receipt_required":
             raise Blocked(worker.get("reason", "ui_worker_failed"))
         verify(args, private, result)
@@ -363,7 +507,14 @@ def main():
     diagnostics = result.get("worker_diagnostics")
     if diagnostics:
         print("\n".join(gui_diag.render_group(diagnostics)), flush=True)
-    print(json.dumps({key: value for key, value in result.items() if key != "worker_diagnostics"}))
+    failure = result.get("install_failure")
+    if failure:
+        print("gui_typescript: install failure: " + " ".join(
+            f"{key}={failure[key]}" for key in ("trigger", "mod_name", "instruction_guid", "action", "step",
+                                                "result_code") if key in failure)
+              + " error=" + failure.get("error", "none")[:300], flush=True)
+    print(json.dumps({key: value for key, value in result.items()
+                      if key not in ("worker_diagnostics", "install_failure")}))
     return 0 if result["status"] == "installed" else 1
 
 
