@@ -926,6 +926,13 @@ partial install without the duplicate removal the guide marks as critical (the R
 its own handling of the step). The K1 guide step has the same Extract, `Execute` `*.bat`, Move
 shape and the same interactive prompt; the unprompted-exit failure was observed for K2 and is
 inferred for K1.
+K1 `HR Menus` (section `Optional Widescreen & Extended Widescreen Support Mods`) is omitted from
+the TypeScript lane the same way: its converted `Execute` step runs a batch script that needs the
+widescreen-patched `swkotor.exe` copied next to the `.bat`, the guide's replace-the-game-exe step
+has no instruction the converter can turn into that copy, and CI has no non-interactive
+equivalent, so the script exits 2 with stdin closed. It is reported as a reviewed policy skip and
+a green TypeScript lane is a partial install without it; the Rust lane already deselects it as an
+unreviewed draft.
 The skip lives in `lane_skips`, the source `gen_ts_review.py` reads, so regenerate
 `ci/k1-typescript-review.json` and `ci/k2-typescript-review.json` with that tool (`--check`
 stays consistent) instead of editing them.

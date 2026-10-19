@@ -1309,6 +1309,12 @@
         "heading": "Remove Duplicate TGA/TPC",
         "reason": "visible policy skip: the converted Execute step runs the guide's interactive Windows batch script (DelDuplicateTGA-TPC.bat), which expects to live in the game root and prompts on stdin for the file type to delete; the K1 guide step is the same Extract, Execute *.bat, Move shape as K2, where the script under wine in CI prints 'Unknown Input, Exiting' and ModSync.ts reports an ExecuteError, so the step cannot be reproduced non-interactively and Execute is deliberately not quarantinable. The guide marks the duplicate removal as critical, so a green TypeScript lane is a PARTIAL install without it; the Rust lane keeps its own handling (reviewed unreviewed_draft deselect) and the guide's Linux .sh deduper is the non-interactive equivalent",
         "lane": "typescript"
+      },
+      {
+        "section": "Optional Widescreen & Extended Widescreen Support Mods",
+        "heading": "HR Menus",
+        "reason": "visible policy skip: the converted Execute step runs the guide's batch script, which needs the widescreen-patched swkotor.exe copied next to the .bat; the guide's replace-the-game-exe step carries no instruction the converter can turn into that copy, so the TypeScript CLI emits none, stdin is closed in CI and the script exits 2 at component HR Menus step 2 (Execute). CI has no non-interactive equivalent and Execute is deliberately not quarantinable. The skip makes a green TypeScript lane a PARTIAL install without the HR menus; the Rust lane already deselects it as an unreviewed draft",
+        "lane": "typescript"
       }
     ],
     "k2": [
