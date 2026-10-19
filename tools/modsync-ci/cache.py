@@ -1967,8 +1967,9 @@ def archive_map(report):
         if entry.get("status") != "restored":
             continue
         names = [each["file"] for each in entry["files"]] if "files" in entry else [entry["file"]]
-        mapping[entry["url"]] = names[0] if len(names) == 1 else names
-    return mapping
+        merged = mapping.setdefault(entry["url"], [])
+        merged.extend(name for name in names if name not in merged)
+    return {url: names[0] if len(names) == 1 else names for url, names in mapping.items()}
 
 
 def safe_reason(error):

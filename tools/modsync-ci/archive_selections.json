@@ -2119,6 +2119,210 @@
         "reason": "unreviewed draft: not generated from resolved archive filenames (prose/multi-archive/executable method) and left unreviewed by the verified-draft review; deselected pending human review, delegated by owner 2026-10-18",
         "guid": "600d2fa2-c148-846f-bf3b-a44f10daf103",
         "kind": "unreviewed_draft"
+      },
+      {
+        "section": "Mod List",
+        "heading": "TSLRCM",
+        "reason": "visible policy skip: the TypeScript lanes cannot install TSLRCM: its only restored file is tslrcm2022.exe, a pre-built Windows installer (selections 578: the guide runs it as an Executable and the page serves no archive) that is not a recognised archive, so validate rejects it as 'not a supported archive' and its Execute step cannot run without wine; skipped instead of aliasing the .exe as an archive",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "TSLRCM Tweak Pack",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Silent Sion",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Thematic KOTOR 2 Companions",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "K2CP",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Honest Merchant",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "PartySwap",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Extended Enclave",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Extended Korriban Arrival",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Balance Tweak Pack",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Thematic Sith Lords",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Jekk'Jekk'Tarr Thugs",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Logical Jekk'Jekk Tarr",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Mira's Vanilla Escape",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Visas VO Tweak",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Sion and a Male Exile",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Expanded Ending",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Consistent Bastila Recognition",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      },
+      {
+        "section": "Mod List",
+        "heading": "Fixed Hologram Models",
+        "reason": "visible policy skip: depends, directly or through other skipped components, on TSLRCM, which the TypeScript lanes skip because tslrcm2022.exe is an installer and not an archive; the coverage check requires every dependent of a skipped component to be skipped as well",
+        "lane": "typescript"
+      }
+    ]
+  },
+  "archive_aliases": {
+    "k1": [
+      {
+        "heading": "Ultimate Character Overhaul",
+        "guid": "77cdad13-0b75-58f9-b921-1c8086815971",
+        "files": [
+          "Ultimate Character Overhaul -REDUX- ( LITE ) - TPC Version-1282-4-1-1628550322.rar"
+        ],
+        "reason": "guide: download just the main .tpc package and ignore the patches; the compatibility patches of nexus mods/1282?tab=files are the next step and share this link's canonical map key"
+      },
+      {
+        "heading": "Korriban Sith Art",
+        "guid": "eab6db56-cc6e-58f6-8f5c-f443ef54e56a",
+        "files": [
+          "Door Mural-1632-1-0-1713374023.zip",
+          "Sith Art-1632-1-1713373365.zip"
+        ],
+        "reason": "guide: download and install both files; nexus mods/1632 maps to exactly these two, a door mural and a Sith art archive, whose names share no token with the glob"
+      },
+      {
+        "heading": "HQ Skyboxes II",
+        "guid": "3b9c63fd-e493-59c7-82fd-2e902c410731",
+        "files": [
+          "HQSkyboxesII_K1.7z"
+        ],
+        "reason": "guide: simply download the 'HQSkyboxesII_K1.7z' file; the second link of the step is the separate model-fix download"
+      }
+    ],
+    "k2": [
+      {
+        "heading": "Ultimate Character Overhaul",
+        "guid": "77cdad13-0b75-58f9-b921-1c8086815971",
+        "files": [
+          "Ultimate Character Overhaul -REDUX- ( LITE ) - TPC Version-1060-3-0-1628674441.rar"
+        ],
+        "reason": "guide: download just the main package (Lite, .tpc) and ignore the patches; the compatibility patches of nexus mods/1060?tab=files are the next step and share this link's canonical map key"
+      },
+      {
+        "heading": "Ultimate Character Overhaul Patches",
+        "guid": "3c1619b0-143a-5951-b461-350f13dac801",
+        "files": [
+          "The Sith Lords Restored Content Mod - Compatibility Patch-1060-3-0-1629717420.rar",
+          "KOTOR 2 Community Patch - Compatibility Patch-1060-3-0-1629717259.rar",
+          "JC_s Minor Fixes - Compatibility Patch-1060-3-0-1629717168.rar",
+          "Fixed Hologram Models and Admiralty Redux - Compatibility Patch-1060-3-0-1629717121.rar",
+          "Miscellaneous Compatibility Patches-1060-3-0-1629717320.rar",
+          "Canonical Jedi Exile - Compatibility Patch-1060-3-0-1629717058.rar"
+        ],
+        "reason": "guide: install the compatibility patches for all content chosen (TSLRCM, K2CP, JC's Minor Fixes, then the remaining matching content); the six files of nexus mods/1060?tab=files are exactly the six reviewed pins and every one matches a mod of this build"
+      },
+      {
+        "heading": "Korriban Sith Art",
+        "guid": "eab6db56-cc6e-58f6-8f5c-f443ef54e56a",
+        "files": [
+          "Door Mural-1632-1-0-1713374023.zip",
+          "Sith Art-1632-1-1713373365.zip"
+        ],
+        "reason": "guide: download and install both files; nexus mods/1632 maps to exactly these two, a door mural and a Sith art archive, whose names share no token with the glob"
+      },
+      {
+        "heading": "Handmaiden Fit Model",
+        "guid": "10fb89f0-e193-5ac8-b5bd-1e8b8ea0d1c8",
+        "files": [
+          "FS_Fit_Handmaiden.7z"
+        ],
+        "reason": "guide: use the TSLPatcher of the main download (deadlystream 846); the mega patch link maps to a bucket shared with unrelated mods and its two loose files are copied by hand, not extracted by this glob"
+      },
+      {
+        "heading": "Replacement Loadscreens",
+        "guid": "19034423-0618-56b0-9ec1-b504f709fe60",
+        "files": [
+          "Replacement Loading Screens for KotOR2 Original Pack Part 1.7z",
+          "Sith Holocron - Replacement Loading Screens for KotOR2 Original Pack_ part 2.7z",
+          "Replacement Loading Screens for KotOR2 Original Pack Part 3.7z"
+        ],
+        "reason": "guide: three downloads (deadlystream 1255, 1256, 1257), all moved to override; each link maps to exactly one of these files, and 'Loading' never matches the glob's 'Loadscreens'"
+      },
+      {
+        "heading": "Relighting TSL",
+        "guid": "3e3bfb0d-b11d-57cc-87e4-fd1114da0a7d",
+        "files": [
+          "relightingtsl_101PERt_2.1.zip",
+          "relightingtsl_102PERfklnt_1.0.zip",
+          "relightingtsl_003EBOg_1.2.zip",
+          "relightingtsl_298TELk_1.0.zip"
+        ],
+        "reason": "guide: download and apply all files; the TSLRCM-only file is included because the build uses TSLRCM (same four files as selections 2752)"
       }
     ]
   }

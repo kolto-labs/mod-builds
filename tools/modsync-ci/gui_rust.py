@@ -2,8 +2,8 @@
 """Install a supplied converted TOML through the production Rust egui desktop.
 
 Requires Python 3.11+, xvfb-run, xauth, tesseract, pyautogui, pytesseract and
-Pillow. Evidence is private under --work-dir; --report contains no OCR or mod
-names. The supplied game/workspace are real writable install targets. Failures
+Pillow. Evidence is private under --work-dir; --report contains no OCR beyond
+the numeric "Base build" summary line and no mod names. The supplied game/workspace are real writable install targets. Failures
 leave application recovery state intact; this driver never retries an install.
 
 Subset installs: --deselect GUID (repeatable, reviewed policy skips) and
@@ -12,6 +12,13 @@ driver never edits the supplied file: it writes IsSelected into a private copy
 (the GUI honors authored IsSelected when any component is selected, via
 Guide::load_for_install) and skips "Select all" when that would re-select a
 deselected base component. Deselected components are reported, never covered.
+
+The "Base build: N of M mods selected" count the GUI shows is the application's
+(`selection::counts` after `game::enforce_selectable` and the dependency rules), so a
+subset run asks the same binary (`modsync selection --json`) before launching and
+refuses any difference from the plan. The OCR of that line is retried for 15 s and
+the lines read, a screenshot and the attempts are recorded in `selection_summary`
+before a mismatch is raised.
 """
 
 import argparse
@@ -34,6 +41,11 @@ import gui_diag
 
 
 WORKER_LOGS = (("worker", "driver.log", gui_diag.TAIL_LINES),)
+SUMMARY_WINDOW_SECONDS = 15
+SUMMARY_SCREENSHOT = "selection-summary.png"
+SUMMARY_PATTERN = re.compile(r"Base\s*build\s*:?\s*(\d+)\s*of\s*(\d+)\s*mods?\s*selected", re.IGNORECASE)
+SUMMARY_FRAGMENT = re.compile(r"Base\s*build.{0,70}", re.IGNORECASE)
+QUERY_TIMEOUT_SECONDS = 120
 
 
 class Blocked(Exception):
@@ -108,6 +120,7 @@ def plan_selection(components, deselect=(), exclude_widescreen=False):
     base = [identity not in widescreen for identity in identities]
     return {
         "selection": selection,
+        "identities": identities,
         "expected_components": [identity for identity, keep in zip(identities, selection) if keep],
         "skipped_by_reviewed_policy": sorted(policy),
         "excluded_widescreen": sorted(not_installed),
@@ -118,6 +131,108 @@ def plan_selection(components, deselect=(), exclude_widescreen=False):
         "click_select_all": not any(identity in policy for identity, is_base
                                     in zip(identities, base) if is_base),
     }
+
+
+def query_application_selection(binary, driven_input, game_dir, select_all, private,
+                                run=subprocess.run):
+    """Ask the real binary what the desktop will show: `modsync selection --json`.
+
+    The GUI count is `selection::counts` after the application's own rules
+    (`game::enforce_selectable` unselects AspyrExclusive components unless the game is
+    the Aspyr K2, and unselecting cascades to dependents), so it is read from the same
+    code rather than re-derived. `select_all` mirrors the "Select all" click
+    (`select_visible` over every base component, then the dependency closure).
+    Returns (lowercase GUIDs of every selected node, counts).
+    """
+    home = private / "selection-query-home"
+    home.mkdir(mode=0o700, exist_ok=True)
+    environment = os.environ.copy()
+    for name in ("HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"):
+        directory = home / name.lower()
+        directory.mkdir(mode=0o700, exist_ok=True)
+        environment[name] = str(directory)
+    command = [str(binary), "selection", "--input", str(driven_input), "--game-dir", str(game_dir),
+               "--use-file-selection", "--json"]
+    if select_all:
+        command += ["--select-visible-search", ""]
+    log = private / "selection-query.log"
+    try:
+        completed = run(command, cwd=private, env=environment, stdin=subprocess.DEVNULL,
+                        capture_output=True, text=True, timeout=QUERY_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError) as error:
+        log.write_text(type(error).__name__ + "\n", encoding="utf-8")
+        raise Blocked("application_selection_query_failed") from None
+    log.write_text((completed.stderr or "") + "\n" + str(completed.returncode) + "\n", encoding="utf-8")
+    try:
+        if completed.returncode:
+            raise ValueError("exit")
+        document = json.loads(completed.stdout)
+        counts = {name: int(document["counts"][name]) for name in ("selected", "total")}
+        selected = [str(guid).lower() for guid in document["selected"]]
+    except (ValueError, KeyError, TypeError):
+        raise Blocked("application_selection_query_failed") from None
+    return selected, counts
+
+
+def reconcile_selection(plan, application_selected, counts, result=None):
+    """Make the plan's summary numbers the application's own, or refuse a different subset.
+
+    The application may only agree with the plan. Anything it unselects (Aspyr-exclusive
+    mods on a non-Aspyr game, dependents of those) or adds is listed by GUID and blocks
+    before the desktop starts: the driver never installs or reports a different subset
+    than the one it was asked for.
+    """
+    expected = set(plan["expected_components"])
+    top = set(plan["identities"])
+    chosen = set(application_selected) & top
+    oracle = {
+        "status": "matched" if chosen == expected else "differs_from_plan",
+        "application_base_selected": counts["selected"], "application_base_total": counts["total"],
+        "plan_base_selected": plan["base_selected"], "plan_base_total": plan["base_total"],
+        "unselected_by_application": sorted(expected - chosen),
+        "selected_by_application": sorted(chosen - expected),
+    }
+    if result is not None:
+        result["selection_oracle"] = oracle
+    if oracle["status"] != "matched":
+        raise Blocked("application_selection_differs_from_plan")
+    plan["base_selected"], plan["base_total"] = counts["selected"], counts["total"]
+    return plan
+
+
+def wait_for_selection_summary(observe, plan, result, private, window=SUMMARY_WINDOW_SECONDS,
+                               clock=time.monotonic, sleep=time.sleep):
+    """Retry OCR for `window` seconds until the expected Base build line shows.
+
+    Only OCR noise is tolerated by retrying; a different count is never accepted. The
+    expected line, every distinct Base build fragment read, the attempts and a
+    screenshot are recorded in result["selection_summary"] before a mismatch is raised.
+    """
+    expected = (plan["base_selected"], plan["base_total"])
+    summary = {"expected": "Base build: %d of %d mods selected" % expected,
+               "observed": [], "attempts": 0, "matched": False}
+    result["selection_summary"] = summary
+    limit = clock() + window
+    while True:
+        shot, _, lines = observe()
+        summary["attempts"] += 1
+        for text, _ in lines:
+            for fragment in SUMMARY_FRAGMENT.finditer(text):
+                shown = " ".join(fragment.group(0).split())
+                found = SUMMARY_PATTERN.search(shown)
+                if found and (int(found.group(1)), int(found.group(2))) == expected:
+                    summary["matched"] = True
+                if shown not in summary["observed"]:
+                    summary["observed"] = (summary["observed"] + [shown])[-6:]
+        if summary["matched"] or clock() >= limit:
+            shot.save(private / SUMMARY_SCREENSHOT)
+            summary["screenshot"] = SUMMARY_SCREENSHOT
+        save(private / "selection-summary.json", summary)
+        if summary["matched"]:
+            return summary
+        if clock() >= limit:
+            raise Blocked("selection_summary_does_not_match_expected_subset")
+        sleep(0.5)
 
 
 def rewrite_selection(text, selection):
@@ -307,9 +422,7 @@ def drive(args, private, result):
             if plan["subset"]:
                 result["stage"] = "selection_summary"
                 mark()
-                label = "Base build: %d of %d mods selected" % (plan["base_selected"], plan["base_total"])
-                if locate(label, optional=True) is None:
-                    raise Blocked("selection_summary_does_not_match_expected_subset")
+                wait_for_selection_summary(observe, plan, result, private)
             click("Validation / install")
             click("Run validation")
             result["stage"] = "validation"
@@ -424,6 +537,13 @@ def execute(args, result):
         encoding="utf-8")
     result["driven_input_sha256"] = digest(private / "input.toml")
     save(private / "selection-plan.json", plan)
+    if plan["subset"]:
+        selected, counts = query_application_selection(
+            args.binary, private / "input.toml", args.game_dir, plan["click_select_all"], private)
+        try:
+            reconcile_selection(plan, selected, counts, result)
+        finally:
+            save(private / "selection-plan.json", plan)
     command = ["xvfb-run", "--auto-servernum", "--server-args=-screen 0 1600x1200x24 -nolisten tcp",
                sys.executable, str(Path(__file__).resolve()),
                *sys.argv[1:], "--private-worker", str(private)]
@@ -460,6 +580,8 @@ def execute(args, result):
                 private, WORKER_LOGS, code if code is not None or process is None else process.returncode,
                 timed_out, (private / "result.json").is_file(), failure,
                 paths={private: "$EVIDENCE", args.work_dir: "$WORK_DIR"})
+            if "selection_summary" in result:
+                result["worker_diagnostics"]["selection_summary"] = result["selection_summary"]
             if not (private / "result.json").is_file():
                 result["stage"] = (result["worker_diagnostics"]["stage"]
                                    or result["worker_diagnostics"]["phase"])

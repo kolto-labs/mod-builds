@@ -454,6 +454,51 @@ ALIAS_STEM_STRIP = re.compile(r'[<>:"/\\|?*\x00-\x1f\x7f]+')
 ALIAS_STEM_LIMIT = 100
 ALIAS_COLLISION_LIMIT = 50
 ALIAS_FAILED_KEY = "archive_alias_failed"
+ALIAS_RULE_KEYS = frozenset({"heading", "guid", "files", "reason"})
+
+
+def safe_archive_name(name):
+    return (isinstance(name, str) and name == name.strip() and name not in ("", ".", "..")
+            and len(name) <= 255 and not ALIAS_UNSAFE_NAME.search(name))
+
+
+def load_archive_aliases(game, path=None):
+    """The reviewed archive_aliases rules of one game from archive_selections.json, keyed by GUID.
+
+    The `archive_aliases` table maps k1/k2 to a list of {heading, guid, files, reason}: the
+    component with that GUID takes exactly the listed restored files for its Extract glob,
+    where the map evidence alone cannot choose (a link that maps to several files, or names
+    that share no tokens with the glob). The whole table is validated whatever the game, so a
+    malformed entry for the other game still blocks. A missing file or table declares nothing.
+    """
+    path = Path(path or LANE_SKIPS_PATH)
+    if not path.is_file():
+        return {}
+    document = json.loads(path.read_text(encoding="utf-8"))
+    table = document.get("archive_aliases", {}) if isinstance(document, dict) else None
+    if not isinstance(table, dict) or not table.keys() <= set(LANE_SKIP_GAMES):
+        raise Blocked("archive_aliases_invalid")
+    result = {}
+    for name, entries in table.items():
+        if not isinstance(entries, list):
+            raise Blocked("archive_aliases_invalid")
+        seen_guids, seen_headings = set(), set()
+        for entry in entries:
+            if (not isinstance(entry, dict) or entry.keys() != ALIAS_RULE_KEYS
+                    or any(not isinstance(entry[key], str) or not entry[key].strip()
+                           or entry[key] != entry[key].strip() for key in ("heading", "guid", "reason"))
+                    or not canonical_guid(entry["guid"])
+                    or not isinstance(entry["files"], list) or not entry["files"]
+                    or not all(safe_archive_name(each) for each in entry["files"])):
+                raise Blocked("archive_aliases_invalid")
+            if (len(set(entry["files"])) != len(entry["files"])
+                    or entry["guid"] in seen_guids or entry["heading"] in seen_headings):
+                raise Blocked("archive_aliases_duplicate")
+            seen_guids.add(entry["guid"])
+            seen_headings.add(entry["heading"])
+            if name == game:
+                result[entry["guid"]] = entry
+    return result
 
 
 def glob_regex(segment):
@@ -647,7 +692,18 @@ def alias_identical_groups(archives, names):
     return groups
 
 
-def alias_source_names(pending, links, choices, reference, literal, archives):
+def declared_source_names(pending, literal, declared, archives):
+    """([declared file names], None) when every one is a restored archive, else (None, reason)."""
+    if pending != 1 or (literal is not None and len(declared) != 1):
+        return None, "declared_archives_not_applicable"
+    for name in declared:
+        problem = alias_file_problem(archives, name)
+        if problem:
+            return None, "declared_" + problem
+    return list(declared), None
+
+
+def alias_source_names(pending, links, choices, reference, literal, archives, declared=None):
     """([restored file names], None) for one unmatched pattern, or (None, reason).
 
     `pending` is how many distinct patterns of the component are unmatched, `choices` is
@@ -658,7 +714,12 @@ def alias_source_names(pending, links, choices, reference, literal, archives):
     that file, URL slug) contain every token of `reference` are the matches. A wildcard
     pattern really matches all of them, so each is returned; a literal one needs exactly
     one. Anything else stays unresolved with the reason, never guessed.
+
+    `declared` is the reviewed `archive_aliases` file list of the component: it replaces the
+    inference, and every listed file must be a restored archive or nothing is aliased.
     """
+    if declared is not None:
+        return declared_source_names(pending, literal, declared, archives)
     origins = {}
     multi = False
     for link in links:
@@ -705,7 +766,7 @@ def link_alias(source, alias):
         return "symlink"
 
 
-def alias_archives(converted, archive_map, archives, selected, report):
+def alias_archives(converted, archive_map, archives, selected, report, rules=None):
     """Give restored archives names the converted TOML's Extract globs match (TypeScript lanes).
 
     ModSync.ts guesses archive globs from mod names or URL basenames while cache.py restore
@@ -719,8 +780,12 @@ def alias_archives(converted, archive_map, archives, selected, report):
     The validator reads `{zip,rar,7z}` literally, so a braced glob is only matched by a name
     that ends in that literal group (`Name.{zip,rar,7z}`); it still opens the file by content,
     which is why the source must be a real archive (`alias_file_problem`).
+
+    `rules` is `load_archive_aliases`: a component with a rule takes exactly its declared files,
+    each under its own alias name, independent of what the map says.
     """
     aliases, unresolved = [], []
+    rules = rules or {}
     report["archive_aliases"] = {"count": 0, "aliases": aliases}
     report["alias_unresolved"] = unresolved
     choices, map_problem = {}, None
@@ -750,6 +815,10 @@ def alias_archives(converted, archive_map, archives, selected, report):
     for component, identity, missing in needs:
         links = component_links(component)
         name = component.get("Name", component.get("Heading", ""))
+        rule = rules.get(identity)
+        declared = None
+        if rule is not None:
+            declared = rule["files"] if rule["heading"] == name else []
         failures = []
         for raw, relative in missing:
             segments = [part for part in relative.split("/") if part not in ("", ".")]
@@ -761,11 +830,14 @@ def alias_archives(converted, archive_map, archives, selected, report):
                 continue
             segment = segments[0]
             wildcard = "*" in segment or "?" in segment
+            if declared == []:
+                failures.append({"pattern": raw, "reason": "declared_heading_mismatch"})
+                continue
             source_names, reason = alias_source_names(
                 len(missing), links, choices, alias_reference(segment),
-                None if wildcard else segment, archives)
+                None if wildcard else segment, archives, declared)
             if source_names is None:
-                failures.append({"pattern": raw, "reason": map_problem or reason})
+                failures.append({"pattern": raw, "reason": reason if rule is not None else map_problem or reason})
                 continue
             matcher = glob_regex(segment)
             for source_name in source_names:
@@ -790,8 +862,11 @@ def alias_archives(converted, archive_map, archives, selected, report):
                         break
                     taken.add(key)
                     created[key] = source_name
-                    aliases.append({"component": name, "component_guid": identity,
-                                    "alias": candidate, "source": source_name, "method": method})
+                    record = {"component": name, "component_guid": identity,
+                              "alias": candidate, "source": source_name, "method": method}
+                    if rule is not None:
+                        record["rule"] = "archive_aliases"
+                    aliases.append(record)
                     placed = candidate
                     break
                 if placed is None:
@@ -1098,6 +1173,7 @@ LANE_SKIPS_PATH = Path(__file__).with_name("archive_selections.json")
 LANE_SKIP_GAMES = ("k1", "k2")
 LANE_SKIP_KEYS = frozenset({"section", "heading", "reason"})
 LANE_SKIP_PINNED_KEYS = frozenset({"guid", "kind"})
+LANE_SKIP_LANES = ("typescript",)
 LANE_SKIP_KINDS = ("unreviewed_draft", "dependent_of_deselected")
 PENDING_REVIEW_KEY = "deselected_pending_review"
 
@@ -1139,7 +1215,9 @@ def load_lane_skips(game, path=None, implementation="rust"):
     malformed entry for the other game still blocks. A missing file or table
     skips nothing. Entries pinned with a `guid`/`kind` record the Rust converter's
     unreviewed-draft state and name Rust GUIDs, so the TypeScript lanes apply only
-    the unpinned entries (the policy skips such as the 4GB Patcher).
+    the unpinned entries (the policy skips such as the 4GB Patcher). An unpinned entry
+    with `"lane": "typescript"` applies to the TypeScript lanes alone, and may share a
+    step with a pinned Rust entry.
     """
     path = Path(path or LANE_SKIPS_PATH)
     if not path.is_file():
@@ -1152,14 +1230,17 @@ def load_lane_skips(game, path=None, implementation="rust"):
     for name, entries in table.items():
         if not isinstance(entries, list):
             raise Blocked("lane_skips_invalid")
-        seen = set()
+        seen = {"rust": set(), "typescript": set()}
         seen_guids = set()
         for entry in entries:
             if (not isinstance(entry, dict) or not LANE_SKIP_KEYS <= entry.keys()
-                    or not entry.keys() <= LANE_SKIP_KEYS | LANE_SKIP_PINNED_KEYS
+                    or not entry.keys() <= LANE_SKIP_KEYS | LANE_SKIP_PINNED_KEYS | {"lane"}
                     or any(not isinstance(entry[key], str) or not entry[key].strip()
                            or entry[key] != entry[key].strip()
                            for key in entry.keys() & (LANE_SKIP_KEYS | {"guid"}))):
+                raise Blocked("lane_skips_invalid")
+            if "lane" in entry and (entry["lane"] not in LANE_SKIP_LANES
+                                    or entry.keys() & LANE_SKIP_PINNED_KEYS):
                 raise Blocked("lane_skips_invalid")
             if entry.keys() & LANE_SKIP_PINNED_KEYS:
                 if (entry.keys() & LANE_SKIP_PINNED_KEYS != LANE_SKIP_PINNED_KEYS
@@ -1168,11 +1249,14 @@ def load_lane_skips(game, path=None, implementation="rust"):
                 if entry["guid"] in seen_guids:
                     raise Blocked("lane_skips_duplicate")
                 seen_guids.add(entry["guid"])
+            lanes = ({entry["lane"]} if "lane" in entry
+                     else {"rust"} if "guid" in entry else {"rust", "typescript"})
             key = (entry["section"], entry["heading"])
-            if key in seen:
+            if any(key in seen[lane] for lane in lanes):
                 raise Blocked("lane_skips_duplicate")
-            seen.add(key)
-            if name == game and not (implementation == "typescript" and "guid" in entry):
+            for lane in lanes:
+                seen[lane].add(key)
+            if name == game and implementation in lanes:
                 skip = {"section": entry["section"], "heading": entry["heading"],
                         "reason": entry["reason"], "urls": [], "source": "lane_skips"}
                 if "guid" in entry:
@@ -1592,7 +1676,8 @@ def execute(args, report):
                        for component in document.get("thisMod", document.get("Components", []))
                        if guid(component["Guid"]) not in policy_guids]
         report["installable_component_count"] = len(installable)
-        alias_archives(converted, args.archive_map, archives, set(installable), report)
+        alias_archives(converted, args.archive_map, archives, set(installable), report,
+                       load_archive_aliases(guide.parent.name))
         directories = [str(converted), "--kotor", str(game),
                        "--mods", str(archives), "--select", ",".join(installable)]
         run(command + ["validate"] + directories,

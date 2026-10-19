@@ -704,6 +704,29 @@ class LooseCachePipelineTests(unittest.TestCase):
         self.assertEqual(code, 0)
         self.assertEqual(json.loads(map_path.read_text()), {DS_PAGE: "loose_texture.tga"})
 
+    def test_archive_map_keeps_both_files_sharing_one_url(self):
+        report = {"entries": [
+            {"status": "restored", "url": DS_PAGE, "file": "main_file.zip"},
+            {"status": "restored", "url": DS_PAGE, "file": "extra_file.zip"}]}
+        self.assertEqual(cache.archive_map(report), {DS_PAGE: ["main_file.zip", "extra_file.zip"]})
+
+    def test_archive_map_dedupes_the_same_file_and_keeps_single_as_string(self):
+        report = {"entries": [
+            {"status": "restored", "url": DS_PAGE, "file": "main_file.zip"},
+            {"status": "restored", "url": DS_PAGE, "file": "main_file.zip"},
+            {"status": "restored", "url": DRIVE_URL, "files": [{"file": "a.zip"}, {"file": "b.zip"}]},
+            {"status": "restored", "url": DRIVE_URL, "files": [{"file": "b.zip"}, {"file": "c.zip"}]},
+            {"status": "unresolved", "url": MEGA_URL, "file": "skipped.zip"}]}
+        self.assertEqual(cache.archive_map(report),
+                         {DS_PAGE: "main_file.zip", DRIVE_URL: ["a.zip", "b.zip", "c.zip"]})
+
+    def test_archive_map_order_is_entry_order_and_repeatable(self):
+        entries = [{"status": "restored", "url": DS_PAGE, "file": name} for name in ("z.zip", "a.zip", "m.zip")]
+        first = cache.archive_map({"entries": entries})
+        self.assertEqual(first[DS_PAGE], ["z.zip", "a.zip", "m.zip"])
+        self.assertEqual(cache.archive_map({"entries": list(entries)}), first)
+        self.assertEqual(json.dumps(cache.archive_map({"entries": entries})), json.dumps(first))
+
     def test_restore_returns_loose_files_intact_with_original_names(self):
         for url, name in ((DRIVE_URL, "dialog_sample.dlg"), (DS_PAGE, "loose_texture.tga")):
             guide, sha = self.seed(url, name, self.LOOSE_BYTES)

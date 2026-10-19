@@ -370,6 +370,8 @@ Every publish step has `continue-on-error: true`, and a final step prints a
 The pack and index artifacts use `if-exists: skip`, so a re-run attempt that reuses a
 name is not an error. Without `CACHE_ENCRYPTION_KEY` staging is skipped with a notice.
 
+The last step, `Verify artifact store round trip`, fetches the smallest blob just published (or the smallest one in `artstore.py list` when nothing was published) back with `artstore.py fetch`, compares its SHA-256 and writes `artstore round trip OK: <sha prefix> <bytes> in <seconds>s` to the step summary; a failure only emits a `::warning::`.
+
 `artstore refresh` (schedule and dispatch). Archives are stored for at most 90 days and
 the store has no way to extend an artifact, so close-to-expiry blobs are copied into a
 new pack. The job runs `artstore.py refresh-plan --within-days 21`, fetches those blobs

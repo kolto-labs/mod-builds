@@ -1409,6 +1409,80 @@ class ArchiveBindingTests(unittest.TestCase):
         self.assertNotIn(ports.BIND_STAGE, stages)
 
 
+ALIAS_RULE_GUID = "70000000-0000-0000-0000-000000000001"
+
+
+def alias_rule(**override):
+    rule = {"heading": "Generic Mod", "guid": ALIAS_RULE_GUID, "files": ["one.zip", "two.zip"],
+            "reason": "reviewed: test"}
+    rule.update(override)
+    return rule
+
+
+class ArchiveAliasRuleTableTests(unittest.TestCase):
+    def setUp(self):
+        self.directory = Path(tempfile.mkdtemp())
+        self.addCleanup(lambda: __import__("shutil").rmtree(self.directory))
+
+    def table(self, table):
+        path = self.directory / "aliases.json"
+        path.write_text(json.dumps({"archive_aliases": table}), encoding="utf-8")
+        return path
+
+    def test_rules_are_returned_by_guid_for_the_requested_game_only(self):
+        path = self.table({"k1": [alias_rule()], "k2": [alias_rule(guid=ALIAS_B, heading="Other")]})
+        self.assertEqual(list(ports.load_archive_aliases("k1", path)), [ALIAS_RULE_GUID])
+        self.assertEqual(ports.load_archive_aliases("k1", path)[ALIAS_RULE_GUID]["files"], ["one.zip", "two.zip"])
+        self.assertEqual(list(ports.load_archive_aliases("k2", path)), [ALIAS_B])
+        self.assertEqual(ports.load_archive_aliases("k3", path), {})
+
+    def test_missing_file_or_table_declares_nothing(self):
+        self.assertEqual(ports.load_archive_aliases("k1", self.directory / "absent.json"), {})
+        empty = self.directory / "empty.json"
+        empty.write_text("{}", encoding="utf-8")
+        self.assertEqual(ports.load_archive_aliases("k1", empty), {})
+
+    def test_malformed_tables_block_for_every_game(self):
+        for table in (
+            [],
+            {"k3": [alias_rule()]},
+            {"k2": alias_rule()},
+            {"k2": ["x"]},
+            {"k2": [alias_rule(extra="x")]},
+            {"k2": [{key: value for key, value in alias_rule().items() if key != "reason"}]},
+            {"k2": [alias_rule(reason=" ")]},
+            {"k2": [alias_rule(heading=" Generic Mod")]},
+            {"k2": [alias_rule(guid="{" + ALIAS_RULE_GUID.upper() + "}")]},
+            {"k2": [alias_rule(files=[])]},
+            {"k2": [alias_rule(files="one.zip")]},
+            {"k2": [alias_rule(files=["../one.zip"])]},
+            {"k2": [alias_rule(files=["a/one.zip"])]},
+            {"k2": [alias_rule(files=[".."])]},
+            {"k2": [alias_rule(files=[" one.zip"])]},
+            {"k2": [alias_rule(files=["x" * 256])]},
+            {"k2": [alias_rule(files=[3])]},
+            {"k2": [alias_rule(files=["one.zip", "one.zip"])]},
+            {"k2": [alias_rule(), alias_rule(heading="Other")]},
+            {"k2": [alias_rule(), alias_rule(guid=ALIAS_B)]},
+        ):
+            with self.subTest(table=table):
+                with self.assertRaisesRegex(ports.Blocked, "archive_aliases_(invalid|duplicate)"):
+                    ports.load_archive_aliases("k1", self.table(table))
+
+    def test_shipped_rules_are_valid_unique_and_reasoned_for_both_games(self):
+        for game in ("k1", "k2"):
+            rules = ports.load_archive_aliases(game, SHIPPED_LANE_SKIPS)
+            with self.subTest(game=game):
+                self.assertTrue(rules)
+                self.assertEqual(len({rule["heading"] for rule in rules.values()}), len(rules))
+                for rule in rules.values():
+                    self.assertTrue(rule["reason"])
+        self.assertEqual(
+            sorted(rule["heading"] for rule in ports.load_archive_aliases("k2", SHIPPED_LANE_SKIPS).values()),
+            ["Handmaiden Fit Model", "Korriban Sith Art", "Relighting TSL", "Replacement Loadscreens",
+             "Ultimate Character Overhaul", "Ultimate Character Overhaul Patches"])
+
+
 class LaneSkipTableTests(unittest.TestCase):
     def setUp(self):
         self.directory = Path(tempfile.mkdtemp())
@@ -1437,6 +1511,47 @@ class LaneSkipTableTests(unittest.TestCase):
                 for skip in pinned:
                     self.assertIn("deselected pending human review, delegated by owner 2026-10-18",
                                   skip["reason"])
+
+    def test_typescript_lane_entries_apply_to_the_typescript_lane_only(self):
+        path = lane_skips_file(self.directory, {"k2": [
+            lane_entry(), lane_entry(heading="TSLRCM", lane="typescript", reason="reviewed: installer")]})
+        self.assertEqual([skip["heading"] for skip in ports.load_lane_skips("k2", path)], ["4GB Patcher"])
+        self.assertEqual([skip["heading"] for skip in ports.load_lane_skips("k2", path, "typescript")],
+                         ["4GB Patcher", "TSLRCM"])
+        self.assertEqual(ports.load_lane_skips("k1", path, "typescript"), [])
+
+    def test_a_typescript_lane_entry_may_share_a_step_with_a_pinned_rust_entry(self):
+        pinned = lane_entry(heading="TSLRCM", guid="bee5a72b-d748-8f83-8261-81758a9bfc56",
+                            kind="unreviewed_draft")
+        path = lane_skips_file(self.directory, {"k2": [pinned, lane_entry(heading="TSLRCM", lane="typescript")]})
+        self.assertEqual([skip.get("kind") for skip in ports.load_lane_skips("k2", path)], ["unreviewed_draft"])
+        typescript = ports.load_lane_skips("k2", path, "typescript")
+        self.assertEqual([(skip["heading"], skip.get("kind")) for skip in typescript], [("TSLRCM", None)])
+
+    def test_malformed_or_clashing_lane_keys_block(self):
+        pinned = {"guid": "bee5a72b-d748-8f83-8261-81758a9bfc56", "kind": "unreviewed_draft"}
+        for table in (
+            {"k2": [lane_entry(lane="rust")]},
+            {"k2": [lane_entry(lane=3)]},
+            {"k2": [lane_entry(lane="typescript", **pinned)]},
+            {"k2": [lane_entry(), lane_entry(lane="typescript")]},
+            {"k2": [lane_entry(lane="typescript"), lane_entry()]},
+            {"k2": [lane_entry(lane="typescript"), lane_entry(lane="typescript", reason="again")]},
+        ):
+            with self.subTest(table=table):
+                path = lane_skips_file(self.directory, table)
+                with self.assertRaisesRegex(ports.Blocked, "lane_skips_(invalid|duplicate)"):
+                    ports.load_lane_skips("k1", path)
+
+    def test_shipped_k2_typescript_lane_skips_tslrcm_visibly_with_every_dependent(self):
+        skips = [skip for skip in ports.load_lane_skips("k2", SHIPPED_LANE_SKIPS, "typescript")
+                 if "kind" not in skip]
+        self.assertEqual([(skip["section"], skip["heading"]) for skip in skips][:2], [FOUR_GB, ("Mod List", "TSLRCM")])
+        self.assertEqual(len({skip["heading"] for skip in skips}), len(skips))
+        self.assertIn("tslrcm2022.exe", skips[1]["reason"])
+        self.assertEqual(len(skips), 2 + 18)
+        self.assertEqual([skip["heading"] for skip in ports.load_lane_skips("k1", SHIPPED_LANE_SKIPS, "typescript")],
+                         ["4GB Patcher"])
 
     def test_shipped_reasons_are_the_generated_reviewed_text(self):
         for game in ("k1", "k2"):
@@ -2693,7 +2808,7 @@ class ArchiveAliasTests(unittest.TestCase):
         (self.archives / name).write_bytes(b"PK\x03\x04" + name.encode() if data is None else data)
         return name
 
-    def alias(self, blocks, mapping, selected=(ALIAS_A, ALIAS_B), write_map=True):
+    def alias(self, blocks, mapping, selected=(ALIAS_A, ALIAS_B), write_map=True, rules=None):
         converted = self.root / "converted.toml"
         converted.write_text(document(*blocks), encoding="utf-8")
         if write_map:
@@ -2701,9 +2816,12 @@ class ArchiveAliasTests(unittest.TestCase):
         before = converted.read_bytes()
         report = {}
         ports.alias_archives(converted, self.map_path if write_map else None, self.archives,
-                             set(selected), report)
+                             set(selected), report, rules)
         self.assertEqual(converted.read_bytes(), before)
         return report
+
+    def rules(self, *files, heading="Generic Mod", identity=ALIAS_A):
+        return {identity: {"heading": heading, "guid": identity, "files": list(files), "reason": "reviewed: test"}}
 
     def names(self):
         return sorted(path.name for path in self.archives.iterdir())
@@ -2786,6 +2904,72 @@ class ArchiveAliasTests(unittest.TestCase):
         self.assertEqual([item["reason"] for item in report["alias_unresolved"]],
                          ["ambiguous_mapped_archives"] * 2)
         self.assertEqual(len(report["alias_unresolved"][1]["patterns"]), 2)
+
+    def test_a_declared_rule_picks_the_file_of_a_multi_file_map_entry(self):
+        self.restored("one.zip")
+        self.restored("two.zip")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], [BRACED])],
+            {ALIAS_URL_A: ["one.zip", "two.zip"]}, rules=self.rules("two.zip"))
+        self.assertEqual(report["alias_unresolved"], [])
+        self.assertEqual([(item["alias"], item["source"], item["rule"])
+                          for item in report["archive_aliases"]["aliases"]],
+                         [("Generic Mod.{zip,rar,7z}", "two.zip", "archive_aliases")])
+        self.assertTrue(os.path.samefile(self.archives / "two.zip", self.archives / "Generic Mod.{zip,rar,7z}"))
+
+    def test_a_declared_rule_aliases_every_file_in_order_and_needs_no_map_entry(self):
+        for name in ("a.zip", "b.zip", "c.zip"):
+            self.restored(name)
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], [BRACED])],
+            {}, write_map=False, rules=self.rules("c.zip", "a.zip"))
+        self.assertEqual(report["alias_unresolved"], [])
+        self.assertEqual([(item["alias"], item["source"]) for item in report["archive_aliases"]["aliases"]],
+                         [("Generic Mod.{zip,rar,7z}", "c.zip"), ("Generic Mod (2).{zip,rar,7z}", "a.zip")])
+        self.assertNotIn("b.zip", [item["source"] for item in report["archive_aliases"]["aliases"]])
+
+    def test_a_rule_for_another_component_changes_nothing(self):
+        self.restored("one.zip")
+        self.restored("two.zip")
+        report = self.alias(
+            [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], [BRACED])],
+            {ALIAS_URL_A: ["one.zip", "two.zip"]},
+            rules=self.rules("one.zip", heading="Second Mod", identity=ALIAS_B))
+        self.assertEqual([item["reason"] for item in report["alias_unresolved"]], ["multi_file_map_entry"])
+
+    def test_a_declared_file_that_is_missing_unsafe_or_not_an_archive_aliases_nothing(self):
+        self.restored("one.zip")
+        self.restored("notes.zip", b"plain text")
+        (self.archives / "link.zip").symlink_to("one.zip")
+        for declared, reason in ((("one.zip", "absent.zip"), "declared_mapped_archive_missing_or_unsafe"),
+                                 (("one.zip", "notes.zip"), "declared_mapped_file_not_archive"),
+                                 (("link.zip",), "declared_mapped_archive_missing_or_unsafe")):
+            with self.subTest(declared=declared):
+                report = self.alias(
+                    [alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], [BRACED])],
+                    {ALIAS_URL_A: ["one.zip"]}, rules=self.rules(*declared))
+                self.assertEqual(report["archive_aliases"]["count"], 0)
+                self.assertEqual([item["reason"] for item in report["alias_unresolved"]], [reason])
+        self.assertEqual(self.names(), ["link.zip", "notes.zip", "one.zip"])
+
+    def test_a_declared_rule_is_refused_when_the_heading_differs_or_the_pattern_is_not_single(self):
+        self.restored("one.zip")
+        self.restored("two.zip")
+        cases = (
+            ([alias_component("Renamed Mod", ALIAS_A, [ALIAS_URL_A], [BRACED])],
+             self.rules("one.zip"), "declared_heading_mismatch"),
+            ([alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A],
+                              ["<<modDirectory>>\\First.zip", "<<modDirectory>>\\Second.zip"])],
+             self.rules("one.zip"), "declared_archives_not_applicable"),
+            ([alias_component("Generic Mod", ALIAS_A, [ALIAS_URL_A], ["<<modDirectory>>\\Wanted.zip"])],
+             self.rules("one.zip", "two.zip"), "declared_archives_not_applicable"),
+        )
+        for blocks, rules, reason in cases:
+            with self.subTest(reason=reason):
+                report = self.alias(blocks, {ALIAS_URL_A: ["one.zip", "two.zip"]}, rules=rules)
+                self.assertEqual(report["archive_aliases"]["count"], 0)
+                self.assertEqual([item["reason"] for item in report["alias_unresolved"]], [reason])
+        self.assertEqual(self.names(), ["one.zip", "two.zip"])
 
     def test_a_literal_name_is_paired_with_the_link_that_ends_in_it(self):
         self.restored("one.zip")

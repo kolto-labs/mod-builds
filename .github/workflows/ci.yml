@@ -331,6 +331,107 @@ jobs:
       - name: Report artifact store publish problems
         if: ${{ always() && (steps.stage.outcome == 'failure' || steps.up1.outcome == 'failure' || steps.up2.outcome == 'failure' || steps.up3.outcome == 'failure' || steps.upindex.outcome == 'failure') }}
         run: echo "::warning::Artifact store publish failed; the install lanes fall back to the other archive sources."
+      # Read-path proof from a real runner: fetch the smallest blob just published (or, when nothing was
+      # published this run, the smallest blob in `artstore.py list`) back through the store and compare its
+      # SHA-256. A failure is a visible ::warning:: and a failed (but non-blocking) step, never a failed job.
+      - name: Verify artifact store round trip
+        id: roundtrip
+        if: ${{ always() && contains(fromJSON('["push","schedule","release","workflow_dispatch"]'), github.event_name) }}
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "$CACHE_ENCRYPTION_KEY" ]]; then
+            echo "::notice::CACHE_ENCRYPTION_KEY is empty; skipping the artifact store round trip."
+            exit 0
+          fi
+          trap 'rm -rf "$RUNNER_TEMP/artstore-roundtrip"' EXIT
+          python3 - <<'PY'
+          import hashlib, json, os, re, subprocess, sys, time
+
+          temp = os.environ["RUNNER_TEMP"]
+          tool = "tools/modsync-ci/artstore.py"
+          sha_re = re.compile(r"^[0-9a-f]{64}$")
+          units = {"B": 1, "KiB": 1024, "MiB": 1024 ** 2, "GiB": 1024 ** 3}
+
+          def summary(line):
+              with open(os.environ["GITHUB_STEP_SUMMARY"], "a", encoding="utf-8") as stream:
+                  stream.write(line + "\n")
+
+          def fail(reason):
+              print("::warning::artstore round trip FAILED: %s" % reason, flush=True)
+              summary("artstore round trip FAILED: %s" % reason)
+              sys.exit(1)
+
+          def pick_published():
+              try:
+                  with open(os.path.join(temp, "artstore-stage.json"), encoding="utf-8") as stream:
+                      staged = json.load(stream).get("staged") or []
+                  with open(os.path.join(temp, "stage-manifest.json"), encoding="utf-8") as stream:
+                      paths = {entry["sha256"]: entry["path"] for entry in json.load(stream)}
+              except (OSError, ValueError, KeyError, TypeError):
+                  return None
+              sizes = {sha: os.path.getsize(paths[sha]) for sha in staged
+                       if sha in paths and os.path.isfile(paths[sha])}
+              if not sizes:
+                  return None
+              sha = min(sizes, key=lambda item: (sizes[item], item))
+              return sha, "published"
+
+          def pick_listed():
+              listing = subprocess.run([sys.executable, tool, "list"], stdout=subprocess.PIPE, text=True)
+              if listing.returncode != 0:
+                  fail("artstore list exited %d" % listing.returncode)
+              best = None
+              for line in listing.stdout.splitlines():
+                  cols = line.split()
+                  if len(cols) < 6 or not sha_re.match(cols[0]) or cols[-1] == "expired":
+                      continue
+                  try:
+                      size = float(cols[1]) * units[cols[2]]
+                  except (ValueError, KeyError):
+                      continue
+                  if best is None or (size, cols[0]) < best[0]:
+                      best = ((size, cols[0]), cols[0])
+              return (best[1], "listed") if best else None
+
+          picked = pick_published() or pick_listed()
+          if picked is None:
+              print("::notice::The artifact store lists no blobs and nothing was published; no round trip to verify.")
+              summary("artstore round trip skipped: the store holds no blobs")
+              sys.exit(0)
+          sha, source = picked
+
+          workdir = os.path.join(temp, "artstore-roundtrip")
+          os.makedirs(workdir, exist_ok=True)
+          dest = os.path.join(workdir, "blob")
+          for attempt in range(1, 4):
+              if os.path.exists(dest):
+                  os.remove(dest)
+              start = time.monotonic()
+              code = subprocess.run([sys.executable, tool, "fetch", "--sha256", sha, "--dest", dest,
+                                     "--workdir", workdir]).returncode
+              elapsed = time.monotonic() - start
+              if code != 3 or attempt == 3:
+                  break
+              time.sleep(20)
+          if code != 0:
+              fail("fetch of %s blob %s %s (exit %d)" % (source, sha[:12], "missed" if code == 3 else "failed", code))
+
+          digest = hashlib.sha256()
+          size = 0
+          with open(dest, "rb") as stream:
+              for chunk in iter(lambda: stream.read(1 << 20), b""):
+                  digest.update(chunk)
+                  size += len(chunk)
+          if digest.hexdigest() != sha:
+              fail("sha256 mismatch for %s blob %s" % (source, sha[:12]))
+          line = "artstore round trip OK: %s %d bytes in %.1fs (%s blob)" % (sha[:12], size, elapsed, source)
+          print(line, flush=True)
+          summary(line)
+          PY
 
   # Scheduled and manual only. Blobs whose artifact-store retention ends within 21 days are fetched,
   # sealed again into a new pack with a new index fragment, and then expired or superseded artifacts are

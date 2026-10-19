@@ -220,7 +220,7 @@ class ExecuteTests(unittest.TestCase):
             work_dir=root / "work", report=root / "report.json", timeout=60.0,
             deselect=[], exclude_widescreen=False, private_worker=None)
 
-    def run_execute(self, args, completed=None):
+    def run_execute(self, args, completed=None, application=None):
         result = {}
         launched = []
 
@@ -236,8 +236,20 @@ class ExecuteTests(unittest.TestCase):
                 (private / "result.json").write_text(json.dumps(payload), encoding="utf-8")
                 return 0
 
+        def agree(binary, driven_input, game_dir, select_all, private, **kwargs):
+            document = components(Path(driven_input).read_text(encoding="utf-8"))
+            chosen = [str(item["Guid"]).lower() for item in document if item["IsSelected"]]
+            total = sum(item.get("WidescreenOnly") is not True for item in document)
+            queried.append((select_all, chosen))
+            return chosen, {"selected": len([item for item in document if item["IsSelected"]
+                                             and item.get("WidescreenOnly") is not True]),
+                            "total": total}
+
+        queried = self.queried = []
+        query = application or agree
         with mock.patch.object(gui_rust.shutil, "which", return_value="/bin/true"), \
                 mock.patch.object(gui_rust.subprocess, "Popen", Process), \
+                mock.patch.object(gui_rust, "query_application_selection", query), \
                 mock.patch.object(gui_rust, "stop"):
             try:
                 gui_rust.execute(args, result)
@@ -290,6 +302,185 @@ class ExecuteTests(unittest.TestCase):
         _, args = self.prepare(document(block(BASE_ONE, "A"), block(WIDE_ONE, "W", widescreen=True)))
         _, error = self.run_execute(args)
         self.assertEqual(error, "full_input_contains_separate_widescreen_phase_driver_supports_single_phase_only")
+
+
+class ApplicationSelectionTests(unittest.TestCase):
+    prepare = ExecuteTests.prepare
+    run_execute = ExecuteTests.run_execute
+
+    def completed(self, payload=None, code=0, stderr=""):
+        return mock.Mock(stdout=json.dumps(payload) if payload is not None else "", stderr=stderr,
+                         returncode=code)
+
+    def query(self, outcome, select_all=False):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        calls = []
+
+        def run(command, **kwargs):
+            calls.append((command, kwargs))
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+        answer = gui_rust.query_application_selection(
+            Path("/bin/modsync"), root / "input.toml", root / "game", select_all, root, run=run)
+        return answer, calls[0], root
+
+    def test_asks_the_real_binary_with_the_game_dir_and_the_file_selection(self):
+        payload = {"counts": {"selected": 2, "total": 3, "required": 0, "optional": 2},
+                   "selected": [BASE_ONE.upper(), BASE_TWO]}
+        (selected, counts), (command, kwargs), root = self.query(self.completed(payload))
+        self.assertEqual((selected, counts), ([BASE_ONE, BASE_TWO], {"selected": 2, "total": 3}))
+        self.assertEqual(command[:2], ["/bin/modsync", "selection"])
+        self.assertIn("--use-file-selection", command)
+        self.assertEqual(command[command.index("--game-dir") + 1], str(root / "game"))
+        self.assertNotIn("--select-visible-search", command)
+        self.assertEqual(kwargs["cwd"], root)
+        self.assertTrue(str(kwargs["env"]["HOME"]).startswith(str(root)))
+
+    def test_select_all_is_the_filtered_bulk_selection_over_every_base_component(self):
+        payload = {"counts": {"selected": 1, "total": 1}, "selected": [BASE_ONE]}
+        _, (command, _), _ = self.query(self.completed(payload), select_all=True)
+        self.assertEqual(command[command.index("--select-visible-search") + 1], "")
+
+    def test_failed_unreadable_or_missing_binary_blocks(self):
+        for outcome in (self.completed(code=2, stderr="boom"), self.completed(),
+                        self.completed({"counts": {}}), OSError("gone"),
+                        gui_rust.subprocess.TimeoutExpired("x", 1)):
+            with self.assertRaisesRegex(gui_rust.Blocked, "application_selection_query_failed"):
+                self.query(outcome)
+
+    def plan(self):
+        return gui_rust.plan_selection(
+            components(document(block(BASE_ONE, "A"), block(BASE_TWO, "B"), block(BASE_THREE, "C"))),
+            [BASE_THREE])
+
+    def test_matching_application_selection_keeps_the_plan_numbers(self):
+        plan, result = self.plan(), {}
+        gui_rust.reconcile_selection(plan, [BASE_ONE, BASE_TWO], {"selected": 2, "total": 3}, result)
+        self.assertEqual((plan["base_selected"], plan["base_total"]), (2, 3))
+        self.assertEqual(result["selection_oracle"]["status"], "matched")
+
+    def test_application_unselecting_a_planned_component_blocks_and_names_it(self):
+        plan, result = self.plan(), {}
+        with self.assertRaisesRegex(gui_rust.Blocked, "application_selection_differs_from_plan"):
+            gui_rust.reconcile_selection(plan, [BASE_ONE], {"selected": 1, "total": 3}, result)
+        oracle = result["selection_oracle"]
+        self.assertEqual((oracle["unselected_by_application"], oracle["selected_by_application"]),
+                         ([BASE_TWO], []))
+        self.assertEqual((oracle["application_base_selected"], oracle["plan_base_selected"]), (1, 2))
+
+    def test_application_selecting_an_unplanned_component_blocks_and_names_it(self):
+        result = {}
+        with self.assertRaisesRegex(gui_rust.Blocked, "application_selection_differs_from_plan"):
+            gui_rust.reconcile_selection(self.plan(), [BASE_ONE, BASE_TWO, BASE_THREE],
+                                         {"selected": 3, "total": 3}, result)
+        self.assertEqual(result["selection_oracle"]["selected_by_application"], [BASE_THREE])
+
+    def test_execute_blocks_before_launching_and_reports_the_oracle(self):
+        _, args = self.prepare(document(block(BASE_ONE, "A"), block(BASE_TWO, "B")))
+        args.deselect = [BASE_TWO]
+
+        def application(*arguments, **kwargs):
+            return [], {"selected": 0, "total": 2}
+
+        result, error = self.run_execute(args, completed=1, application=application)
+        self.assertEqual(error, "application_selection_differs_from_plan")
+        self.assertEqual(result["selection_oracle"]["unselected_by_application"], [BASE_ONE])
+        self.assertNotIn("worker_diagnostics", result)
+
+    def test_execute_queries_with_the_private_copy_and_the_select_all_decision(self):
+        _, args = self.prepare(document(block(BASE_ONE, "A"), block(BASE_TWO, "B"),
+                                        block(WIDE_ONE, "W", widescreen=True)))
+        args.exclude_widescreen = True
+        result, error = self.run_execute(args, completed=2)
+        self.assertIsNone(error)
+        self.assertEqual(self.queried, [(True, [BASE_ONE, BASE_TWO])])
+        _, args = self.prepare(document(block(BASE_ONE, "A"), block(BASE_TWO, "B")))
+        args.deselect = [BASE_TWO]
+        self.run_execute(args, completed=1)
+        self.assertEqual(self.queried, [(False, [BASE_ONE])])
+
+    def test_unchanged_input_does_not_query(self):
+        _, args = self.prepare(document(block(BASE_ONE, "A"), block(BASE_TWO, "B")))
+        _, error = self.run_execute(args, completed=2)
+        self.assertIsNone(error)
+        self.assertEqual(self.queried, [])
+
+
+class SummaryWaitTests(unittest.TestCase):
+    def setUp(self):
+        self.private = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, self.private)
+        self.plan = {"base_selected": 30, "base_total": 145}
+        self.now = 0.0
+        self.shots = []
+
+    def clock(self):
+        return self.now
+
+    def sleep(self, seconds):
+        self.now += seconds
+
+    def observer(self, *texts):
+        readings = iter(texts)
+
+        def observe():
+            self.now += 5.0
+            shot = mock.Mock()
+            shot.save.side_effect = lambda path: Path(path).write_bytes(b"png")
+            self.shots.append(shot)
+            text = next(readings)
+            return shot, {}, [(line, []) for line in text.splitlines()]
+
+        return observe
+
+    def wait(self, *texts, window=15):
+        result = {}
+        try:
+            gui_rust.wait_for_selection_summary(
+                self.observer(*texts), self.plan, result, self.private, window=window,
+                clock=self.clock, sleep=self.sleep)
+            error = None
+        except gui_rust.Blocked as blocked:
+            error = str(blocked)
+        return result["selection_summary"], error
+
+    def test_matching_line_is_recorded_with_a_screenshot(self):
+        summary, error = self.wait("Summary\nBase build: 30 of 145 mods selected - 115 mods not selected")
+        self.assertIsNone(error)
+        self.assertEqual((summary["matched"], summary["attempts"]), (True, 1))
+        self.assertEqual(summary["screenshot"], gui_rust.SUMMARY_SCREENSHOT)
+        self.assertTrue((self.private / gui_rust.SUMMARY_SCREENSHOT).is_file())
+        self.assertEqual(json.loads((self.private / "selection-summary.json").read_text())["matched"], True)
+
+    def test_ocr_noise_is_retried_until_the_expected_count_reads(self):
+        summary, error = self.wait("nothing yet", "Base build: 3O of 145 mods selected",
+                                   "Base build 30 of 145 mods selected")
+        self.assertIsNone(error)
+        self.assertEqual((summary["matched"], summary["attempts"]), (True, 3))
+        self.assertIn("Base build: 3O of 145 mods selected", summary["observed"])
+
+    def test_a_different_count_is_never_accepted_and_is_recorded_before_blocking(self):
+        summary, error = self.wait(*(["Base build: 27 of 145 mods selected"] * 10))
+        self.assertEqual(error, "selection_summary_does_not_match_expected_subset")
+        self.assertFalse(summary["matched"])
+        self.assertEqual(summary["observed"], ["Base build: 27 of 145 mods selected"])
+        self.assertEqual(summary["expected"], "Base build: 30 of 145 mods selected")
+        self.assertGreater(summary["attempts"], 1)
+        self.assertLessEqual(self.now, 15 + 5 + 0.5)
+        self.assertEqual(summary["screenshot"], gui_rust.SUMMARY_SCREENSHOT)
+        self.assertTrue((self.private / gui_rust.SUMMARY_SCREENSHOT).is_file())
+
+    def test_a_total_that_differs_is_not_accepted(self):
+        _, error = self.wait(*(["Base build: 30 of 151 mods selected"] * 10))
+        self.assertEqual(error, "selection_summary_does_not_match_expected_subset")
+
+    def test_a_missing_line_records_that_nothing_was_read(self):
+        summary, error = self.wait(*(["Summary / selection"] * 10))
+        self.assertEqual(error, "selection_summary_does_not_match_expected_subset")
+        self.assertEqual(summary["observed"], [])
 
 
 class WorkerFailureTests(unittest.TestCase):
@@ -359,6 +550,37 @@ class WorkerFailureTests(unittest.TestCase):
         self.assertEqual(reason, "gui_timeout")
         self.assertTrue(result["worker_diagnostics"]["worker_result_present"])
         self.assertEqual(result["worker_diagnostics"]["phase"], "install")
+
+    def test_selection_summary_in_the_worker_report_reaches_the_diagnostics(self):
+        summary = {"expected": "Base build: 30 of 145 mods selected",
+                   "observed": ["Base build: 27 of 145 mods selected"], "attempts": 4,
+                   "matched": False, "screenshot": gui_rust.SUMMARY_SCREENSHOT}
+        _, args = self.prepare(document(block(BASE_ONE, "A"), block(BASE_TWO, "B")))
+        launched = []
+
+        class Process:
+            returncode = 1
+
+            def __init__(self, command, **kwargs):
+                launched.append(command)
+                self.pid = 0
+
+            def wait(self, timeout=None):
+                private = Path(launched[0][-1])
+                (private / "result.json").write_text(json.dumps({
+                    "status": "blocked", "reason": "selection_summary_does_not_match_expected_subset",
+                    "stage": "selection_summary", "selection_summary": summary}), encoding="utf-8")
+                return 1
+
+        result = {}
+        with mock.patch.object(gui_rust.shutil, "which", return_value="/bin/true"), \
+                mock.patch.object(gui_rust.subprocess, "Popen", Process), \
+                mock.patch.object(gui_rust, "stop"):
+            with self.assertRaises(gui_rust.Blocked):
+                gui_rust.execute(args, result)
+        self.assertEqual(result["selection_summary"], summary)
+        self.assertEqual(result["worker_diagnostics"]["selection_summary"], summary)
+        self.assertEqual(result["stage"], "selection_summary")
 
     def test_overall_timeout_is_marked(self):
         result, reason, _ = self.fail("still running\n", None, expire=True)

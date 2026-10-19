@@ -147,7 +147,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "be9e32aa-541f-5ba4-b8dc-c1c49dd069db": "yes"
@@ -178,7 +178,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "51a5c210-07d6-5af3-ba71-cf760a908bc5": "0"
@@ -209,7 +209,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {}
     },
@@ -238,7 +238,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "e1d33c52-fda9-5095-8404-f65af863a249": "0"
@@ -358,7 +358,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "13841c87-f3da-5e2b-b76d-0c2498a43ebc": "0"
@@ -799,7 +799,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "5b6a6734-e630-5e95-b1e6-e9dd622b47c3": "0"
@@ -2853,7 +2853,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "da714485-2ed4-58d7-89c4-cb103e89691b": "0"
@@ -2884,7 +2884,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "2d20af77-64b1-5c2a-acd2-b97daf447de7": "0"
@@ -2946,7 +2946,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "8135801e-2512-52ab-bd89-129984d23639": "0"
@@ -3008,7 +3008,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "3547d67e-2ffe-5436-923c-f0e2f45665a6": "0"
@@ -3101,7 +3101,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "fc62cf3b-429b-502f-bea0-825b4bf7c5ce": "0"
@@ -3256,7 +3256,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "a3843607-31d9-5d79-a117-cde0982aad2f": "0"
@@ -3287,7 +3287,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "0718dcfa-348c-5d95-a8ed-cc72d684bcff": "0"
@@ -3318,7 +3318,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "deb0d960-78c3-5e48-80ad-e1e35468274a": "0"
@@ -3411,7 +3411,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; no prompts.",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {}
     },
@@ -3440,7 +3440,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "1a5d7581-ea13-5417-aab8-946d7b41487a": "0"
@@ -3777,7 +3777,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "a3b69df7-ee6c-589c-ac11-5eb4f9b5188e": "0"
@@ -3808,7 +3808,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "bc6f7682-759c-5bb4-a3e7-e85f2687c02f": "0"
@@ -4050,7 +4050,7 @@
       ],
       "options": [],
       "phase": "base",
-      "assessment": "Delegated by the owner (2026-10-18) and not reviewed by hand: instructions and options are the byte-reproducible ModSync.ts import-md conversion of the guide; phase follows IsWidescreen; answers are the documented defaults (Patcher '0' = the first namespaces.ini entry, Execute 'yes' = inert, Execute never prompts).",
+      "assessment": "omitted by reviewed policy",
       "unresolved": [],
       "choices": {
         "74b81cc2-cc05-515f-a132-e96c729828b9": "0"

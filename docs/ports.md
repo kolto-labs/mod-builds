@@ -513,8 +513,15 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
     The driver refuses a plan with nothing selected, because the app would then
     select everything.
   - The driver skips the `Select all` click when a base component is policy-skipped
-    (`Select all` sets every base component selected again), and checks that the
-    app's `Base build: N of M mods selected` line shows the expected count.
+    (`Select all` sets every base component selected again). The expected count is
+    the application's own: before launching, the driver runs `modsync selection
+    --json` on the private copy with `--game-dir` (the Aspyr-exclusive and dependent
+    rules of `game::enforce_selectable`) and blocks with
+    `application_selection_differs_from_plan` (GUIDs in `selection_oracle`) if it
+    selects a different set. The GUI's `Base build: N of M mods selected` line must then
+    show that count; OCR is retried for 15 s, and the lines read, the attempts and a
+    screenshot path are recorded in `selection_summary` (also in `worker_diagnostics`)
+    before `selection_summary_does_not_match_expected_subset` is raised.
   - Components that remain selected must not depend on a deselected one
     (`selected_component_depends_on_deselected_component`).
   - Widescreen-only components are excluded, never installed: the report lists them as
@@ -596,6 +603,18 @@ directory), `alias_archives` links the restored archive under a matching name in
    which the generated `Mod*\...` sources match). Names are unique (`Mod (2).7z` on a
    collision) and never overwrite anything.
 4. `converted.toml` is not changed, so the review manifest hashes stay valid.
+
+Rule-based pairing. When a component cannot be paired by the rules above (several mapped
+files, or a loose-file link), `archive_selections.json` may carry a reviewed `archive_aliases`
+table: `{"k1"|"k2": [{"heading", "guid", "files", "reason"}]}`. Each entry names the restored
+files to alias for that component; `load_archive_aliases` in `ports.py` loads it strictly, and
+nothing is aliased unless every declared file is a restored, regular archive. Leave a component
+out of the table (and unresolved, with its reason) rather than guessing.
+
+A `lane_skips` entry may carry `"lane": "typescript"` to apply the skip to the TypeScript
+lanes only (the Rust lanes still install the component). It is used for components whose
+archive is a Windows installer `.exe` that ModSync.ts cannot extract; the dependents are
+skipped with it, and the skip is reported like any other policy skip.
 
 The restored file must be a regular, non-symlink file whose map name is a plain file name in
 the archive directory. Map entries with several or conflicting files, unmapped links,
