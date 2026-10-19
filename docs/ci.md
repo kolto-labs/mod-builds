@@ -36,11 +36,13 @@ them failed, as long as `game` was not skipped. Each lane is independent
 
 **`game`** — Looks up the sealed game in the Actions cache (nothing is downloaded
 on a hit) and the newest unexpired `game-<game>-sealed` backup artifact. On a miss it
-refills the cache from that artifact; only without an artifact does it download the game
+refills the cache from that artifact; without one it restores the game from the encrypted seed
+(`GAME_SEED_URL_<GAME>`, `GAME_SEED_KEY_<GAME>`, optional `GAME_SEED_SHA256_<GAME>`; a SHA-256 mismatch fails
+the job, any other seed problem is a warning), and only without a seed does it download the game
 once with SteamCMD, remove `.bik` movies, seal it and save it. If there is no complete game,
 or `modules/` holds no `.rim` file, at the end, the job fails (it prints a game inventory
 first). A cache hit with no backup, or one that expires within 14 days, restores the cache
-and uploads the backup (90 days); a fresh SteamCMD download uploads it too. The backup is the
+and uploads the backup (90 days); a fresh seed or SteamCMD result uploads it too. The backup is the
 `CACHE_ENCRYPTION_KEY` seal cut into sealed parts of at most 2000 MiB (artstore envelope, so
 the public artifact holds no game data in the clear) plus `manifest.json`. Backup problems
 are `::warning::`s. Runs k1, then k2, on one Steam account. The Monday/Thursday schedule keeps
@@ -324,6 +326,7 @@ Names only.
 | `STEAM_CONFIG_VDF` | secret, optional | Saved SteamCMD login, so CI needs no Steam Guard approval |
 | `STEAM_GUARD_CODES` | secret, optional | Single-use Steam backup codes, tried after the other sign-ins fail |
 | `CACHE_ENCRYPTION_KEY` | secret | Seals and unseals the game cache, the `game-<game>-sealed` backup artifact and the artifact-store blobs (not the archive bucket) |
+| `GAME_SEED_URL_K1`, `GAME_SEED_KEY_K1`, `GAME_SEED_SHA256_K1` (and `_K2`) | secret, optional | Encrypted game seed tried before SteamCMD; the SHA-256 is optional ([steam.md](steam.md#game-seed)) |
 | `DIAGNOSTICS_ENCRYPTION_KEY` | secret | Seals the `install` lane report and convert log before upload ([ports.md](ports.md#diagnosing-a-coverage-failure)) |
 | `MOD_CACHE_S3_ACCESS_KEY_ID`, `MOD_CACHE_S3_SECRET_ACCESS_KEY` | secret, optional | R2 read/write, `mods` job only |
 | `MOD_CACHE_S3_READ_ACCESS_KEY_ID`, `MOD_CACHE_S3_READ_SECRET_ACCESS_KEY` | secret, optional | R2 read only, `install` and `manual` |

@@ -17,8 +17,11 @@ Steam account. Fork and Dependabot pull requests get no secrets and skip it.
    same game is accepted as a fallback. A hit does not contact Steam.
 2. Look up the backup artifact (see [Game backup artifact](#game-backup-artifact)).
    On a cache miss with a live artifact, rebuild the sealed game from it and
-   continue at step 6; Steam is not contacted.
-3. On a miss without an artifact, run SteamCMD, forcing the Windows build, and stop at the first
+   continue at step 7; Steam is not contacted.
+3. On a miss for both, restore the game from the encrypted seed when its secrets exist
+   (see [Game seed](#game-seed)). A usable seed skips SteamCMD and continues at step 4. A
+   missing or failed seed is a `::warning::` and the job falls through to SteamCMD.
+4. Without a seed result, run SteamCMD, forcing the Windows build, and stop at the first
    attempt that leaves `chitin.key` in the install directory:
    1. With `STEAM_CONFIG_VDF` set, sign in with that saved login and the username
       only.
@@ -28,18 +31,18 @@ Steam account. Fork and Dependabot pull requests get no secrets and skip it.
       approvals have timed out this way).
    3. If that also failed, try each code in `STEAM_GUARD_CODES` in turn (see
       [Backup-code fallback](#backup-code-fallback)).
-4. `game_cache.py inventory --require-modules` prints the downloaded tree (see
+5. `game_cache.py inventory --require-modules` (the `Seal game` step) prints the restored tree (see
    [Game inventory](#game-inventory)) and fails the job when `modules/` holds no
    `.rim` file. A real Steam KOTOR install always ships `modules/*.rim`, so
    an empty `modules/` means a partial or wrong-depot download.
-5. `tools/modsync-ci/game_cache.py pack` repeats that check, drops every `*.bik`
+6. `tools/modsync-ci/game_cache.py pack` repeats that check, drops every `*.bik`
    movie, checks for `chitin.key`, `dialog.tlk`, and the game executable,
    records a SHA-256 inventory, and encrypts the tree with `CACHE_ENCRYPTION_KEY`.
-6. Save the result under `game-<game>-v1` and, unless it came from the artifact
+7. Save the result under `game-<game>-v1` and, unless it came from the artifact
    or the cache already had a fresh backup, upload the backup artifact.
 
 The job fails if the game is still missing after these steps (no cache, no live
-artifact, SteamCMD gave nothing) or has no module `.rim` files. Nothing partial is saved. Each SteamCMD attempt that exits nonzero
+artifact, no seed, SteamCMD gave nothing) or has no module `.rim` files. Nothing partial is saved. Each SteamCMD attempt that exits nonzero
 logs a `::warning::` with its status; the attempt loop still stops at the first
 one that leaves `chitin.key`, so a partial download that has `chitin.key` is
 caught by the `.rim` check, not retried.
@@ -56,6 +59,35 @@ by the `game` job's lookup, so a hit on a legacy entry ends the job without
 contacting Steam and without running the `.rim` check. If an install lane's
 inventory shows a legacy entry with no `.rim` files, delete that cache entry and
 re-run `game`.
+
+## Game seed
+
+A last-resort source for a game that the Actions cache and the backup artifact both lack, used
+before SteamCMD so a K1 rebuild needs no Steam Guard approval. The seed is the game directory as
+`tar | zstd | openssl enc -aes-256-cbc -pbkdf2 -iter 200000`, hosted at a private URL. Build one with:
+
+```
+tar -c -C <game dir> . | zstd -T0 | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -pass env:KEY -out seed.bin
+```
+
+Per game (`<GAME>` is `K1` or `K2`), repository secrets:
+
+| Secret | Purpose |
+| --- | --- |
+| `GAME_SEED_URL_<GAME>` | `https://` URL of the encrypted seed |
+| `GAME_SEED_KEY_<GAME>` | Passphrase for `openssl` |
+| `GAME_SEED_SHA256_<GAME>` | Optional SHA-256 of the file as downloaded |
+
+`tools/modsync-ci/game_seed.py restore` does the work. It masks the URL (`::add-mask::`), passes
+it to `curl` on stdin so it is not in the process list, and downloads with `curl -fL` (resumable,
+retried, https only) into a temporary file. With the SHA-256 secret set, a mismatch fails the job
+with an `::error::`; it never falls through to another source. It installs `zstd` when the runner
+lacks it, then streams `openssl enc -d ... -pass env:GAME_SEED_KEY_<GAME> | zstd -d | tar -x -C
+$RUNNER_TEMP/game`, so no decrypted copy is written apart from the extracted tree, and deletes the
+download. Output `restored=true` is set only when `chitin.key` exists afterwards. Any other
+problem (secrets unset, download or decrypt failure, no `chitin.key`) is a `::warning::`, the
+partial tree is removed and SteamCMD runs next. The restored tree then takes the same path as a
+SteamCMD result: inventory with `--require-modules`, `pack`, cache save and backup artifact upload.
 
 ## Game backup artifact
 
@@ -112,7 +144,7 @@ same text to `$GITHUB_STEP_SUMMARY`:
 - the `steamapps/appmanifest_*.acf` state (`StateFlags`, `buildid`) when it
   still exists, which is only right after SteamCMD.
 
-It runs in the `game` job right after SteamCMD (label `after SteamCMD`), and in
+It runs in the `game` job right after SteamCMD or the seed (label `after SteamCMD` or `after seed`), and in
 every `install` lane (label `<implementation> <mode>`) and the `manual` lane
 (label `manual`) right after `Normalize game case`, so a failure such as a TS
 `GFFList ... not found in modules/<name>.mod` can be read against what the cached
@@ -129,8 +161,8 @@ and Thursday 04:23 UTC); each scheduled run looks up both game caches in `game`
 and restores them in the `install` and `manual` jobs, so entries are read
 at least twice a week. That keeps them from the seven-day idle eviction; it does
 not protect against quota eviction. Eviction is not an error: the next run
-rebuilds the cache from the `game-<game>-sealed` artifact when one is live. Only without
-one does it download the game again, which needs a Steam sign-in: an approval in the mobile
+rebuilds the cache from the `game-<game>-sealed` artifact when one is live. Without one it
+uses the game seed when configured, and only then downloads the game again, which needs a Steam sign-in: an approval in the mobile
 app, unless `STEAM_CONFIG_VDF` is set or an unused backup code is available.
 
 ## Case normalization

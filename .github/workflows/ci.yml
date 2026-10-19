@@ -106,8 +106,21 @@ jobs:
           ARTIFACT_ID: ${{ steps.backup.outputs.artifact_id }}
         run: python tools/modsync-ci/game_backup.py fetch --game "$GAME" --artifact-id "$ARTIFACT_ID" --seal-dir "$RUNNER_TEMP/sealed"
 
-      - name: Download game with SteamCMD
+      - name: Restore game from seed
+        id: seed
         if: steps.cache.outputs.cache-matched-key == '' && steps.artifact.outputs.restored != 'true'
+        timeout-minutes: 30
+        env:
+          GAME_SEED_URL_K1: ${{ secrets.GAME_SEED_URL_K1 }}
+          GAME_SEED_KEY_K1: ${{ secrets.GAME_SEED_KEY_K1 }}
+          GAME_SEED_SHA256_K1: ${{ secrets.GAME_SEED_SHA256_K1 }}
+          GAME_SEED_URL_K2: ${{ secrets.GAME_SEED_URL_K2 }}
+          GAME_SEED_KEY_K2: ${{ secrets.GAME_SEED_KEY_K2 }}
+          GAME_SEED_SHA256_K2: ${{ secrets.GAME_SEED_SHA256_K2 }}
+        run: python tools/modsync-ci/game_seed.py restore --game "$GAME" --game-dir "$RUNNER_TEMP/game"
+
+      - name: Download game with SteamCMD
+        if: steps.cache.outputs.cache-matched-key == '' && steps.artifact.outputs.restored != 'true' && steps.seed.outputs.restored != 'true'
         timeout-minutes: 45
         env:
           STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
@@ -141,11 +154,19 @@ jobs:
             "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "$STEAM_PASSWORD" "$code" "${install[@]}" </dev/null || echo "::warning::steamcmd (backup code) exited with status $?"
           done
           test -f "$RUNNER_TEMP/game/chitin.key" \
-            || { echo "::error::$GAME has no game cache, no game-$GAME-sealed backup artifact and SteamCMD could not download it; see docs/steam.md"; exit 1; }
+            || { echo "::error::$GAME has no game cache, no game-$GAME-sealed backup artifact, no game seed (GAME_SEED_URL_${GAME^^}) and SteamCMD could not download it; see docs/steam.md"; exit 1; }
+
+      - name: Seal game
+        if: steps.cache.outputs.cache-matched-key == '' && steps.artifact.outputs.restored != 'true'
+        env:
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+          SOURCE: ${{ steps.seed.outputs.restored == 'true' && 'seed' || 'SteamCMD' }}
+        run: |
+          set -euo pipefail
           # A real Steam KOTOR install always ships modules/*.rim (K2 names the directory Modules/); fail the game job, never cache a partial download.
           python tools/modsync-ci/game_cache.py inventory --game "$GAME" --game-dir "$RUNNER_TEMP/game" \
-            --label "after SteamCMD" --require-modules \
-            || { echo "::error::$GAME SteamCMD download has no modules/*.rim; see the game inventory above and docs/steam.md"; exit 1; }
+            --label "after $SOURCE" --require-modules \
+            || { echo "::error::$GAME game from $SOURCE has no modules/*.rim; see the game inventory above and docs/steam.md"; exit 1; }
           python tools/modsync-ci/game_cache.py pack --game "$GAME" \
             --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
 
