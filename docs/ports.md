@@ -343,6 +343,31 @@ already changed the game directory, so the retry needs a restored game. The CLI 
    log). `converted.toml`, `RequiresReview` and the reviewed policy are never edited; the
    omission lives only in the `--deselect` list and the report.
 
+**The engine's own recovery state is cleared first.** The engine keeps its pre-install
+snapshot and a `pending` marker in a `.modsync-<16 hex of sha256(game path)>` directory
+*beside* the game directory (in CI: `$RUNNER_TEMP`), not inside it. Emptying and refilling
+the game directory does not touch it, so a retry on its own is refused at once with `An
+unfinished install exists. Run restore before retrying. Recovery: .../.modsync-<hash>`
+(CI run 39215712883: the failing component was attributed and quarantined, then the retry died
+in 17 s). Before every retry, in this order, as part of the restore in step 2:
+
+1. `modsync restore --game-dir <game> --source-dir <archives>` (stage `engine_restore_N`, log
+   `engine_restore_N.log`) runs the engine's own restore, which also puts the source
+   directory back from its snapshot and removes the `pending` marker. "There is no
+   unfinished install to restore" counts as success (`nothing_pending`).
+2. If that binary or subcommand is unavailable or the restore fails (`unavailable`,
+   `failed`), only this game's own `.modsync-<hash>` sibling is deleted, guarded: it must be
+   exactly the name the engine derives from the game path, a real directory (never a
+   symlink) directly beside the game directory, and not the game or source directory or
+   anything containing or inside them. The record gets `fallback: state_removed` (or
+   `state_absent`). A refused guard or a `pending` marker that is still there afterwards is
+   `restore_failed`.
+3. The game directory is then restored from the baseline as above (`baseline_restore_N`).
+
+`quarantine.engine_restores` lists each engine restore (`stage`, `status` one of `restored`,
+`nothing_pending`, `failed`, `unavailable`, `seconds`, and `fallback` when used); the CI log
+adds a `::warning::` for any that was not a clean restore.
+
 The install uses the same caps as `validate`, from one shared budget: `--max-quarantine`
 counts failing components over both stages, and `--max-quarantine-fraction` bounds the
 quarantined components (failing plus dependents) of both stages together, against the same
@@ -356,6 +381,14 @@ the caps), without quarantining and without restoring the game, when:
 - the output contains `panicked at` or `stack backtrace`, or the exit code is 101
   (`panic_detected`), or contains `Rollback FAILED` (`rollback_failed`): the game state is
   unknown;
+- a retry is refused with `An unfinished install exists` (`unfinished_install_not_recovered`):
+  the engine's recovery state was still in place, so this is not a new component failure.
+  It is reported on its own, never as `error_not_attributable`, and keeps the original
+  attributed failure: `quarantine.stopped` carries `original_failure` (`name`,
+  `component_guid`, `step`, `action`, `error_line`, `stage`) and `recovery` (the last engine
+  restore), `failure` gets `unfinished_install: true` and the same `original_failure`, and
+  the log prints `::error::ports: install_retry_N was refused as an unfinished install ...
+  the original failure was component '<name>', step N (<action>) in <stage>: <line>`;
 - it does not name exactly one distinct (component, step) pair: none
   (`error_not_attributable`) or several (`multiple_components_failed`);
 - the failing action is not `Patcher`, `Extract`, `Move`, `Copy`, `Rename` or `Delete`
@@ -390,6 +423,21 @@ is not guide parity. Reporting:
   `::error::ports: install failure not quarantined (<reason>)`.
 - The GUI lane (`--mode gui`) does not use this stage; it keeps the `validate` quarantine
   only, and a failed GUI install still fails the lane.
+
+### Stage durations and progress
+
+Every command `ports.py` runs (`build`, `convert`, the bind stages, `validate` and its
+retries, `install` and each `install_retry_N`, the GUI driver) logs a flushed
+`ports: <stage>: started` line when it starts and `ports: <stage>: finished in <time>
+(exit <code>)` when it ends, before any failure excerpt, so a long CI step shows where it is
+instead of printing everything at the end. The engine restores (`engine_restore_N`) and the
+baseline copy and restores (`baseline_copy`, `baseline_restore_N`) log the same way. The
+final report JSON line and the diagnostics are flushed as well (stdout and stderr are
+switched to line buffering).
+
+The lane report has `stage_durations`, an object of stage name to wall-clock seconds in run
+order (including failed and interrupted stages), and the CI log opens its diagnostics
+with `ports: stage durations: build 2m05s, convert 3.0s, ...; total 2m08s`.
 
 ### Failure evidence
 

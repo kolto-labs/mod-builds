@@ -12,9 +12,11 @@ from pathlib import Path
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
+import time
 import tomllib
 from urllib.parse import unquote, urldefrag, urlsplit, urlunsplit
 import uuid
@@ -30,6 +32,7 @@ def digest(path):
 
 FAILURE_TAIL_LINES = 80
 GUI_STAGE = "gui"
+STAGE_DURATIONS_KEY = "stage_durations"
 GUI_REPORT_NAME = "gui-report.json"
 GUI_TAIL_LINES = 200
 GUI_TAIL_GROUP = "::group::gui worker tail"
@@ -87,9 +90,33 @@ def reemit_gui_failure(text, driver_report, report):
         print("\n".join(gui_diag.render_group(diagnostics)), file=sys.stderr)
 
 
+def progress(message):
+    """One progress line in the CI log, flushed so it shows while the lane is still running."""
+    print("ports: " + message, file=sys.stderr, flush=True)
+
+
+def format_duration(seconds):
+    seconds = max(float(seconds), 0.0)
+    if seconds < 60:
+        return f"{seconds:.1f}s"
+    minutes, rest = divmod(round(seconds), 60)
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h{minutes:02d}m{rest:02d}s" if hours else f"{minutes}m{rest:02d}s"
+
+
+def finish_stage(report, stage, started, outcome):
+    """Record a stage's wall-clock seconds in report["stage_durations"] and log the finish line."""
+    seconds = time.monotonic() - started
+    report.setdefault(STAGE_DURATIONS_KEY, {})[stage] = round(seconds, 3)
+    progress(f"{stage}: finished in {format_duration(seconds)} ({outcome})")
+    return seconds
+
+
 def run(command, source, private, stage, report, env):
     report["stage"] = stage
     log = private / (stage + ".log")
+    started = time.monotonic()
+    progress(f"{stage}: started")
     with log.open("xb") as output:
         process = subprocess.Popen(
             command, cwd=source, env=env, stdin=subprocess.DEVNULL,
@@ -104,7 +131,9 @@ def run(command, source, private, stage, report, env):
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait()
+            finish_stage(report, stage, started, "interrupted or timed out")
             raise Blocked("command_interrupted_or_timed_out") from None
+    finish_stage(report, stage, started, f"exit {code}")
     report["commands"].append({"stage": stage, "exit_code": code})
     if code:
         text = log.read_text(encoding="utf-8", errors="replace")
@@ -1195,12 +1224,13 @@ def start_quarantine(components, deselect, report, max_iterations, max_fraction)
     return report["quarantine"]
 
 
-def quarantine_stop(report, phase, stage, reason, parsed, failure, cap=False):
+def quarantine_stop(report, phase, stage, reason, parsed, failure, cap=False, details=None):
     """Record why a failure was not quarantined and fail the lane."""
     settings = QUARANTINE_PHASES[phase]
     report["quarantine"]["stopped"] = {
         "phase": phase, "stage": stage, "reason": reason, "component": parsed and parsed["component"],
         "step": parsed and parsed["step"], "error_line": parsed and parsed["error_line"]}
+    report["quarantine"]["stopped"].update(details or {})
     raise Blocked(settings["cap"] if cap else settings["blocked"]) from failure
 
 
@@ -1450,6 +1480,106 @@ def restore_game(game, baseline, manifest):
         raise OSError("restored game directory differs from the baseline")
 
 
+ENGINE_STATE_NAME = re.compile(r"\.modsync-[0-9a-f]{16}")
+UNFINISHED_INSTALL = "an unfinished install exists"
+NOTHING_TO_RESTORE = "no unfinished install to restore"
+ENGINE_RESTORE_KEY = "engine_restores"
+ENGINE_RESTORE_TIMEOUT = BASELINE_COPY_TIMEOUT
+UNFINISHED_INSTALL_REASON = "unfinished_install_not_recovered"
+
+
+def engine_state_dir(game):
+    """The engine's recovery directory for `game`: a `.modsync-<16 hex of sha256(game path)>` sibling."""
+    key = hashlib.sha256(str(game).encode("utf-8", "replace")).hexdigest()
+    return game.parent / (".modsync-" + key[:16])
+
+
+def remove_engine_state(game, protected=()):
+    """Delete only this game's `.modsync-<hash>` sibling (snapshot + pending marker); returns what happened.
+
+    Refuses (OSError) anything but a real directory, directly beside the game directory, named
+    exactly as the engine names it, that is not one of `protected` or inside/around one.
+    """
+    state = engine_state_dir(game)
+    if state.parent != game.parent or not ENGINE_STATE_NAME.fullmatch(state.name):
+        raise OSError("recovery directory is not a sibling of the game directory")
+    for path in (game, *protected):
+        if state == path or state.is_relative_to(path) or path.is_relative_to(state):
+            raise OSError("recovery directory overlaps a protected directory")
+    try:
+        info = state.lstat()
+    except FileNotFoundError:
+        return "absent"
+    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode):
+        raise OSError("recovery path is not a plain directory")
+    shutil.rmtree(state)
+    return "removed"
+
+
+def restore_arguments(directories):
+    """`--game-dir X --source-dir Y` taken from an install's directory arguments, or None."""
+    found = []
+    for flag in ("--game-dir", "--source-dir"):
+        if flag not in directories or directories.index(flag) + 1 >= len(directories):
+            return None
+        found += [flag, directories[directories.index(flag) + 1]]
+    return found
+
+
+def engine_restore(command, directories, source, private, stage, report, env):
+    """Run the CLI's own `restore` for the game; returns the record appended to engine_restores.
+
+    `status` is restored, nothing_pending (the engine had no unfinished install), failed or
+    unavailable (no binary or no directory arguments).
+    """
+    record = {"stage": stage, "status": "unavailable", "seconds": 0.0}
+    report["quarantine"].setdefault(ENGINE_RESTORE_KEY, []).append(record)
+    arguments = restore_arguments(directories)
+    if arguments is None:
+        return record
+    log = private / (stage + ".log")
+    started = time.monotonic()
+    progress(f"{stage}: started")
+    status = "failed"
+    try:
+        with log.open("wb") as output:
+            completed = subprocess.run(
+                command + ["restore"] + arguments, cwd=source, env=env, stdin=subprocess.DEVNULL,
+                stdout=output, stderr=subprocess.STDOUT, timeout=ENGINE_RESTORE_TIMEOUT)
+        text = log.read_text(encoding="utf-8", errors="replace")
+        if completed.returncode == 0:
+            status = "restored"
+        elif NOTHING_TO_RESTORE in ANSI_ESCAPE.sub("", text).lower():
+            status = "nothing_pending"
+        else:
+            lines = text.splitlines()[-FAILURE_TAIL_LINES:]
+            print(f"::group::{stage} output (last {FAILURE_TAIL_LINES} lines)", file=sys.stderr)
+            print("\n".join(lines), file=sys.stderr)
+            print("::endgroup::", file=sys.stderr)
+    except (FileNotFoundError, PermissionError):
+        status = "unavailable"
+    except (OSError, subprocess.SubprocessError):
+        status = "failed"
+    record["status"] = status
+    record["seconds"] = round(finish_stage(report, stage, started, status), 3)
+    return record
+
+
+def recover_engine_state(command, directories, game, source, private, stage, report, env, protected=()):
+    """Clear the engine's unfinished-install state so the next `install` is allowed to start.
+
+    The engine keeps its pre-install snapshot and `pending` marker in `.modsync-<hash>` beside the
+    game directory, outside what `restore_game` empties and refills. The engine's own `restore`
+    is run first (it also puts the source directory back); when it is unavailable or fails, only
+    this game's recovery sibling is removed. Raises OSError when the marker is still there after.
+    """
+    record = engine_restore(command, directories, source, private, stage, report, env)
+    if record["status"] not in ("restored", "nothing_pending"):
+        record["fallback"] = "state_" + remove_engine_state(game, protected)
+    if (engine_state_dir(game) / "pending").exists():
+        raise OSError("the engine's unfinished-install marker is still present")
+
+
 def install_with_quarantine(command, directories, deselect, converted, game, source, private, report,
                             env, max_iterations=QUARANTINE_MAX_ITERATIONS,
                             max_fraction=QUARANTINE_MAX_FRACTION):
@@ -1459,16 +1589,28 @@ def install_with_quarantine(command, directories, deselect, converted, game, sou
     quarantined when its output names exactly one (component, step) whose action is in
     INSTALL_QUARANTINE_ACTIONS, shows no panic or failed rollback, the game directory is
     populated, the baseline copy exists, and the budget shared with validate still allows it.
-    The game directory is then restored in place and verified against the baseline, the
-    component and its dependents are appended to `deselect` and the install re-runs as
-    `install_retry_N`. Anything else leaves the lane failed. Every quarantined component is
+    Before every retry the engine's own `restore` runs for the game (its snapshot and `pending`
+    marker live in a `.modsync-<hash>` sibling that the game restore does not touch; see
+    recover_engine_state), then the game directory is restored in place and verified against the
+    baseline, the component and its dependents are appended to `deselect` and the install re-runs
+    as `install_retry_N`. A retry the engine still refuses as an unfinished install is reported as
+    `unfinished_install_not_recovered` together with the original attributed failure. Anything
+    else leaves the lane failed. Every quarantined component is
     listed in report["quarantined_install_failures"]: the lane is a partial install.
     """
     components = converted_components(converted)
     policy = report.get("quarantine") or start_quarantine(
         components, deselect, report, max_iterations, max_fraction)
     report.setdefault(INSTALL_QUARANTINE_KEY, [])
-    baseline = take_baseline(game, private, report) if policy["max_iterations"] > 0 else None
+    started = time.monotonic()
+    if policy["max_iterations"] > 0:
+        progress("baseline_copy: started")
+        baseline = take_baseline(game, private, report)
+        finish_stage(report, "baseline_copy", started, (report["quarantine"].get("baseline") or {}).get("status"))
+    else:
+        baseline = None
+    source_dir = directories[directories.index("--source-dir") + 1] if "--source-dir" in directories else None
+    protected = (Path(source_dir),) if source_dir else ()
     attempt = 0
     while True:
         stage = "install" if attempt == 0 else f"install_retry_{attempt}"
@@ -1490,6 +1632,21 @@ def install_with_quarantine(command, directories, deselect, converted, game, sou
             lowered = ANSI_ESCAPE.sub("", text).lower()
             if policy["max_iterations"] <= 0:
                 stop("quarantine_disabled")
+            if UNFINISHED_INSTALL in lowered and not failures:
+                original = next((item for item in reversed(report.get(INSTALL_QUARANTINE_KEY) or ())
+                                 if item["kind"] == INSTALL_FAILURE_KIND), None)
+                unfinished = next((clean_line(line) for line in text.splitlines()
+                                   if UNFINISHED_INSTALL in line.lower()), None)
+                report["failure"].update({
+                    "unfinished_install": True, "error_line": unfinished,
+                    "original_failure": original and {
+                        key: original[key] for key in ("name", "component_guid", "step", "action",
+                                                       "error_line", "stage")}})
+                quarantine_stop(
+                    report, "install", stage, UNFINISHED_INSTALL_REASON, None, failure,
+                    details={"error_line": unfinished,
+                             "original_failure": report["failure"]["original_failure"],
+                             "recovery": (policy.get(ENGINE_RESTORE_KEY) or [None])[-1]})
             if code == 101 or "panicked at" in lowered or "stack backtrace" in lowered:
                 stop("panic_detected")
             if "rollback failed" in lowered:
@@ -1506,8 +1663,14 @@ def install_with_quarantine(command, directories, deselect, converted, game, sou
                 stop("baseline_copy_failed")
 
             def restore(parsed=parsed, stage=stage, failure=failure):
+                number = attempt + 1
                 try:
+                    recover_engine_state(command, directories, game, source, private,
+                                         f"engine_restore_{number}", report, env, protected)
+                    started = time.monotonic()
+                    progress(f"baseline_restore_{number}: started")
                     restore_game(game, baseline[0], baseline[1])
+                    finish_stage(report, f"baseline_restore_{number}", started, "verified")
                 except (OSError, subprocess.SubprocessError, shutil.Error):
                     quarantine_stop(report, "install", stage, "restore_failed", parsed, failure)
 
@@ -1523,6 +1686,11 @@ def install_with_quarantine(command, directories, deselect, converted, game, sou
 
 def print_diagnostics(report):
     """Put the skip causes and every uncovered step in the CI log so one read is enough."""
+    durations = report.get(STAGE_DURATIONS_KEY)
+    if durations:
+        print("ports: stage durations: " + ", ".join(
+            f"{stage} {format_duration(seconds)}" for stage, seconds in durations.items())
+            + f"; total {format_duration(sum(durations.values()))}", file=sys.stderr)
     aliased = report.get("archive_aliases")
     if aliased and aliased.get("count"):
         print(f"ports: archive aliases created for {aliased['count']} Extract source(s) "
@@ -1579,6 +1747,10 @@ def print_diagnostics(report):
             else:
                 print(f"::warning::ports: quarantined {item['name']} [{item['component_guid']}]: "
                       f"depends on quarantined {item['caused_by']}", file=sys.stderr)
+    for item in (report.get("quarantine") or {}).get(ENGINE_RESTORE_KEY) or ():
+        if item["status"] not in ("restored", "nothing_pending"):
+            print(f"::warning::ports: {item['stage']}: engine restore {item['status']}"
+                  + (f", fell back to {item['fallback']}" if item.get("fallback") else ""), file=sys.stderr)
     baseline = (report.get("quarantine") or {}).get("baseline")
     if baseline and baseline.get("status") == "copy_failed":
         print("::warning::ports: the game directory baseline copy failed, so an install failure "
@@ -1599,6 +1771,14 @@ def print_diagnostics(report):
         where = failure_location(failure)
         print(f"::error::ports: {failure['stage']} failed (exit {failure['exit_code']}): {where}",
               file=sys.stderr)
+        if failure.get("unfinished_install"):
+            original = failure.get("original_failure")
+            cause = (f"the original failure was component '{original['name']}', step {original['step']} "
+                     f"({original['action']}) in {original['stage']}: {original['error_line']}"
+                     if original else "no earlier attributed failure was recorded")
+            print(f"::error::ports: {failure['stage']} was refused as an unfinished install, not a new "
+                  f"component failure; the engine's recovery state was not cleared before the retry; "
+                  f"{cause}", file=sys.stderr)
     uncovered = report.get("steps_without_instructions")
     if uncovered:
         print(f"::error::ports: {len(uncovered)} guide steps have no instructions", file=sys.stderr)
@@ -2309,6 +2489,11 @@ def main(argv=None):
     for name in ("source", "guide", "game-dir", "archives", "work-dir", "report"):
         parser.add_argument("--" + name, type=Path, required=True)
     args = parser.parse_args(argv)
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            stream.reconfigure(line_buffering=True)
+        except (AttributeError, ValueError, OSError):
+            pass
     report = {"schema_version": 1, "implementation": args.implementation,
               "mode": args.mode, "status": "blocked", "stage": "preflight",
               "commands": [], "proof": "native_commands_only"}
@@ -2332,8 +2517,9 @@ def main(argv=None):
         with destination.open("x", encoding="utf-8") as output:
             json.dump(report, output, indent=2)
             output.write("\n")
-        print(json.dumps(report))
+        print(json.dumps(report), flush=True)
         print_diagnostics(report)
+        sys.stderr.flush()
         return 0 if report["status"] == "installed" else 1
     except OSError:
         print("ports: unable to write sanitized report", file=sys.stderr)

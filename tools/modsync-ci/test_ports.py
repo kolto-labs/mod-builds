@@ -4185,5 +4185,321 @@ class ValidateQuarantinePassAccountingTests(unittest.TestCase):
         self.assertEqual(report["quarantine"]["iterations_used"], 0)
 
 
+UNFINISHED_INSTALL_TEXT = ("[2026-10-18 16:20:01] [Error] An unfinished install exists. Run restore before "
+                           "retrying. Recovery: /tmp/work/.modsync-0123456789abcdef\n"
+                           "Error: An unfinished install exists. Run restore before retrying. "
+                           "Recovery: /tmp/work/.modsync-0123456789abcdef\n")
+
+
+def fake_engine_restore(events, status="restored"):
+    """A stand-in for ports.engine_restore that records the stage and appends the real record shape."""
+    def fake(command, directories, source, private, stage, report, env):
+        events.append(("engine_restore", stage, list(directories)))
+        record = {"stage": stage, "status": status, "seconds": 0.0}
+        report["quarantine"].setdefault(ports.ENGINE_RESTORE_KEY, []).append(record)
+        return record
+    return fake
+
+
+class InstallRecoveryTests(unittest.TestCase):
+    prepare = ExecuteCommandTests.prepare
+    run_lane = InstallQuarantineTests.run_lane
+    installs = InstallQuarantineTests.installs
+    deselected = InstallQuarantineTests.deselected
+
+    def lane(self, events, install_failures, status="restored", **extra):
+        real_restore = ports.restore_game
+
+        def recording_restore(game, baseline, manifest):
+            events.append(("baseline_restore",))
+            return real_restore(game, baseline, manifest)
+
+        with mock.patch.object(ports, "engine_restore", fake_engine_restore(events, status)), \
+                mock.patch.object(ports, "restore_game", recording_restore):
+            return self.run_lane(install_failures=install_failures, **extra)
+
+    def test_the_engine_restore_runs_before_the_baseline_restore_of_every_retry(self):
+        events = []
+        commands, report, error = self.lane(events, [install_error("Mod 05"), install_error("Mod 06")])
+        self.assertIsNone(error)
+        self.assertEqual([stage for stage, _ in self.installs(commands)],
+                         ["install", "install_retry_1", "install_retry_2"])
+        self.assertEqual([event[0] for event in events],
+                         ["engine_restore", "baseline_restore", "engine_restore", "baseline_restore"])
+        self.assertEqual([event[1] for event in events if event[0] == "engine_restore"],
+                         ["engine_restore_1", "engine_restore_2"])
+        directories = events[0][2]
+        self.assertEqual(directories[directories.index("--game-dir") + 1], str(self.game))
+        self.assertIn("--source-dir", directories)
+        self.assertEqual([item["stage"] for item in report["quarantine"][ports.ENGINE_RESTORE_KEY]],
+                         ["engine_restore_1", "engine_restore_2"])
+        self.assertEqual(self.seen["install_retry_1"]["tree"], self.initial)
+
+    def test_a_quarantine_the_engine_refuses_to_restore_never_retries(self):
+        events = []
+        with mock.patch.object(ports, "remove_engine_state", side_effect=OSError("not plain")):
+            commands, report, error = self.lane(events, [install_error("Mod 05")], status="failed")
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "restore_failed")
+        self.assertEqual([event[0] for event in events], ["engine_restore"])
+        self.assertEqual(report["quarantined_install_failures"], [])
+        self.assertEqual([stage for stage, _ in self.installs(commands)], ["install"])
+
+    def test_a_failed_engine_restore_falls_back_to_removing_only_this_games_recovery_directory(self):
+        events = []
+        with mock.patch.object(ports, "remove_engine_state", return_value="removed") as removal:
+            commands, report, error = self.lane(events, [install_error("Mod 05")], status="unavailable")
+        self.assertIsNone(error)
+        removal.assert_called_once()
+        self.assertEqual(removal.call_args.args[0], self.game)
+        record, = report["quarantine"][ports.ENGINE_RESTORE_KEY]
+        self.assertEqual((record["status"], record["fallback"]), ("unavailable", "state_removed"))
+        self.assertEqual([event[0] for event in events], ["engine_restore", "baseline_restore"])
+
+    def test_a_retry_refused_as_an_unfinished_install_keeps_the_original_failure(self):
+        events = []
+        commands, report, error = self.lane(events, [install_error("Mod 05"), UNFINISHED_INSTALL_TEXT])
+        self.assertEqual(error, "install_failed")
+        self.assertEqual([stage for stage, _ in self.installs(commands)], ["install", "install_retry_1"])
+        stopped = report["quarantine"]["stopped"]
+        self.assertEqual((stopped["phase"], stopped["stage"], stopped["reason"]),
+                         ("install", "install_retry_1", ports.UNFINISHED_INSTALL_REASON))
+        self.assertNotEqual(stopped["reason"], "error_not_attributable")
+        self.assertIn("An unfinished install exists", stopped["error_line"])
+        original = stopped["original_failure"]
+        self.assertEqual((original["name"], original["step"], original["action"], original["stage"]),
+                         ("Mod 05", 2, "Patcher", "install"))
+        self.assertEqual(stopped["recovery"]["stage"], "engine_restore_1")
+        self.assertTrue(report["failure"]["unfinished_install"])
+        self.assertEqual(report["failure"]["original_failure"], original)
+        self.assertEqual([item["name"] for item in report["quarantined_install_failures"]], ["Mod 05"])
+
+    def test_the_log_names_the_unfinished_install_and_the_original_failure(self):
+        _, report, _ = self.lane([], [install_error("Mod 05"), UNFINISHED_INSTALL_TEXT])
+        report["status"] = "blocked"
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            ports.print_diagnostics(report)
+        text = log.getvalue()
+        self.assertIn("install failure not quarantined (unfinished_install_not_recovered): ", text)
+        self.assertIn("An unfinished install exists. Run restore before retrying", text)
+        self.assertNotIn("error_not_attributable", text)
+        self.assertIn("install_retry_1 was refused as an unfinished install, not a new component failure", text)
+        self.assertIn("the original failure was component 'Mod 05', step 2 (Patcher) in install:", text)
+
+    def test_an_unattributable_failure_without_the_unfinished_message_keeps_its_reason(self):
+        _, report, error = self.lane([], [install_error("Mod 05"), "Error: something else broke\n"])
+        self.assertEqual(error, "install_failed")
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "error_not_attributable")
+        self.assertNotIn("unfinished_install", report["failure"])
+
+    def test_the_first_installs_snapshot_message_is_not_an_unfinished_install(self):
+        self.assertNotIn(ports.UNFINISHED_INSTALL, install_error("Mod 05").lower())
+
+
+class EngineStateTests(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, self.root)
+        self.game = self.root / "game"
+        self.game.mkdir()
+        self.archives = self.root / "archives"
+        self.archives.mkdir()
+        self.private = self.root / "private"
+        self.private.mkdir()
+        self.report = {"quarantine": {}}
+
+    def state(self, pending=True):
+        state = ports.engine_state_dir(self.game)
+        (state / "snapshot" / "game").mkdir(parents=True)
+        (state / "snapshot.json").write_text("{}", encoding="utf-8")
+        if pending:
+            (state / "pending").write_text("pending\n", encoding="utf-8")
+        return state
+
+    def directories(self):
+        return ["--input", "converted.toml", "--game-dir", str(self.game), "--source-dir", str(self.archives)]
+
+    def test_the_recovery_directory_is_named_like_the_engine_names_it(self):
+        state = ports.engine_state_dir(Path("/tmp/ports-fixture/game"))
+        self.assertEqual(state, Path("/tmp/ports-fixture/.modsync-3bcc505ec6734337"))
+        self.assertRegex(state.name, r"^\.modsync-[0-9a-f]{16}$")
+
+    def test_removal_takes_only_this_games_recovery_sibling(self):
+        state = self.state()
+        other = self.root / ".modsync-0123456789abcdef"
+        other.mkdir()
+        (other / "pending").write_text("another game\n", encoding="utf-8")
+        self.assertEqual(ports.remove_engine_state(self.game, (self.archives,)), "removed")
+        self.assertFalse(state.exists())
+        self.assertTrue((other / "pending").is_file())
+        self.assertTrue(self.game.is_dir() and self.archives.is_dir())
+        self.assertEqual(ports.remove_engine_state(self.game, (self.archives,)), "absent")
+
+    def test_removal_refuses_a_symlink_a_plain_file_and_protected_paths(self):
+        state = ports.engine_state_dir(self.game)
+        target = self.root / "precious"
+        target.mkdir()
+        (target / "keep").write_text("x", encoding="utf-8")
+        state.symlink_to(target, target_is_directory=True)
+        with self.assertRaises(OSError):
+            ports.remove_engine_state(self.game)
+        self.assertTrue((target / "keep").is_file())
+        state.unlink()
+        state.write_text("file", encoding="utf-8")
+        with self.assertRaises(OSError):
+            ports.remove_engine_state(self.game)
+        self.assertTrue(state.is_file())
+        state.unlink()
+        self.state()
+        with self.assertRaises(OSError):
+            ports.remove_engine_state(self.game, (ports.engine_state_dir(self.game),))
+        with self.assertRaises(OSError):
+            ports.remove_engine_state(self.game, (self.root,))
+        self.assertTrue((ports.engine_state_dir(self.game) / "pending").is_file())
+
+    def test_restore_arguments_come_from_the_install_directories(self):
+        self.assertEqual(ports.restore_arguments(self.directories()),
+                         ["--game-dir", str(self.game), "--source-dir", str(self.archives)])
+        self.assertIsNone(ports.restore_arguments(["--input", "x", "--game-dir", str(self.game)]))
+        self.assertIsNone(ports.restore_arguments(["--game-dir"]))
+
+    def engine(self, returncode=0, output=b"", error=None):
+        calls = []
+
+        def fake(command, **kwargs):
+            calls.append((command, kwargs))
+            if error is not None:
+                raise error
+            kwargs["stdout"].write(output)
+            return mock.Mock(returncode=returncode)
+
+        with mock.patch.object(ports.subprocess, "run", fake), contextlib.redirect_stderr(io.StringIO()):
+            record = ports.engine_restore(["/bin/modsync"], self.directories(), self.root, self.private,
+                                          "engine_restore_1", self.report, {})
+        return record, calls
+
+    def test_the_cli_restore_subcommand_is_run_with_the_game_and_source_directories(self):
+        record, calls = self.engine()
+        self.assertEqual(record["status"], "restored")
+        command, kwargs = calls[0]
+        self.assertEqual(command, ["/bin/modsync", "restore", "--game-dir", str(self.game),
+                                   "--source-dir", str(self.archives)])
+        self.assertEqual(kwargs["cwd"], self.root)
+        self.assertEqual(self.report["quarantine"][ports.ENGINE_RESTORE_KEY], [record])
+        self.assertIn("engine_restore_1", self.report[ports.STAGE_DURATIONS_KEY])
+
+    def test_no_unfinished_install_to_restore_is_not_a_failure(self):
+        record, _ = self.engine(1, b"Error: There is no unfinished install to restore\n")
+        self.assertEqual(record["status"], "nothing_pending")
+
+    def test_other_failures_a_missing_binary_and_timeouts_are_reported(self):
+        self.assertEqual(self.engine(1, b"Error: Snapshot hashes differ; refusing to restore\n")[0]["status"],
+                         "failed")
+        self.assertEqual(self.engine(error=FileNotFoundError("modsync"))[0]["status"], "unavailable")
+        self.assertEqual(self.engine(error=ports.subprocess.TimeoutExpired("modsync", 1))[0]["status"], "failed")
+
+    def test_without_directory_arguments_the_engine_restore_is_unavailable(self):
+        record = ports.engine_restore(["/bin/modsync"], ["--input", "x"], self.root, self.private,
+                                      "engine_restore_1", self.report, {})
+        self.assertEqual(record["status"], "unavailable")
+
+    def recover(self, **engine):
+        calls = []
+
+        def fake(command, **kwargs):
+            calls.append(command)
+            for child in ports.engine_state_dir(self.game).glob("pending"):
+                if engine.get("clears"):
+                    child.unlink()
+            if engine.get("missing"):
+                raise FileNotFoundError("modsync")
+            return mock.Mock(returncode=engine.get("code", 0))
+
+        with mock.patch.object(ports.subprocess, "run", fake), contextlib.redirect_stderr(io.StringIO()):
+            ports.recover_engine_state(["/bin/modsync"], self.directories(), self.game, self.root,
+                                       self.private, "engine_restore_1", self.report, {}, (self.archives,))
+        return calls
+
+    def test_a_successful_engine_restore_that_clears_the_marker_leaves_the_directory_alone(self):
+        state = self.state()
+        self.recover(clears=True)
+        self.assertTrue(state.is_dir())
+        self.assertFalse((state / "pending").exists())
+        self.assertNotIn("fallback", self.report["quarantine"][ports.ENGINE_RESTORE_KEY][0])
+
+    def test_a_missing_binary_falls_back_to_removing_the_recovery_directory(self):
+        state = self.state()
+        self.recover(missing=True)
+        self.assertFalse(state.exists())
+        self.assertEqual(self.report["quarantine"][ports.ENGINE_RESTORE_KEY][0]["fallback"], "state_removed")
+
+    def test_a_restore_that_exits_zero_but_leaves_the_marker_raises(self):
+        self.state()
+        with self.assertRaises(OSError):
+            self.recover()
+
+
+class StageProgressTests(unittest.TestCase):
+    class Counting(io.StringIO):
+        flushes = 0
+
+        def flush(self):
+            self.flushes += 1
+            super().flush()
+
+    def run_stage(self, script, stage="validate"):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(__import__("shutil").rmtree, root)
+        report = {"commands": []}
+        stderr = self.Counting()
+        with contextlib.redirect_stderr(stderr):
+            try:
+                ports.run([__import__("sys").executable, "-c", script], root, root, stage, report, {})
+            except ports.Blocked:
+                pass
+        return report, stderr
+
+    def test_every_stage_logs_a_flushed_start_and_finish_line_and_records_its_duration(self):
+        report, stderr = self.run_stage("print('ok')", "build")
+        text = stderr.getvalue()
+        self.assertIn("ports: build: started\n", text)
+        self.assertRegex(text, r"ports: build: finished in [0-9.]+s \(exit 0\)\n")
+        self.assertGreaterEqual(stderr.flushes, 2)
+        self.assertGreaterEqual(report[ports.STAGE_DURATIONS_KEY]["build"], 0.0)
+        self.assertIsInstance(report[ports.STAGE_DURATIONS_KEY]["build"], float)
+
+    def test_a_failed_stage_still_records_its_duration_before_the_failure_evidence(self):
+        report, stderr = self.run_stage("import sys; sys.exit(3)", "install_retry_1")
+        text = stderr.getvalue()
+        self.assertIn("install_retry_1", report[ports.STAGE_DURATIONS_KEY])
+        self.assertLess(text.index("ports: install_retry_1: finished"), text.index("::group::install_retry_1"))
+        self.assertIn("(exit 3)", text)
+
+    def test_stages_accumulate_in_run_order(self):
+        report = {"commands": []}
+        for stage in ("build", "convert", "validate", "install", "install_retry_1"):
+            ports.finish_stage(report, stage, 0.0, "exit 0")
+        self.assertEqual(list(report[ports.STAGE_DURATIONS_KEY]),
+                         ["build", "convert", "validate", "install", "install_retry_1"])
+
+    def test_durations_are_formatted_for_a_person(self):
+        self.assertEqual(ports.format_duration(3.04), "3.0s")
+        self.assertEqual(ports.format_duration(125), "2m05s")
+        self.assertEqual(ports.format_duration(3725), "1h02m05s")
+        self.assertEqual(ports.format_duration(-1), "0.0s")
+
+    def test_the_diagnostics_carry_a_stage_duration_summary(self):
+        report = {"status": "installed", ports.STAGE_DURATIONS_KEY: {"build": 125.0, "install": 3.0}}
+        log = io.StringIO()
+        with contextlib.redirect_stderr(log):
+            ports.print_diagnostics(report)
+        self.assertIn("ports: stage durations: build 2m05s, install 3.0s; total 2m08s", log.getvalue())
+        quiet = io.StringIO()
+        with contextlib.redirect_stderr(quiet):
+            ports.print_diagnostics({"status": "installed"})
+        self.assertNotIn("stage durations", quiet.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
