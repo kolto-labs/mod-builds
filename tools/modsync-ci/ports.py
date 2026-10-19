@@ -1734,6 +1734,8 @@ NOTHING_TO_RESTORE = "no unfinished install to restore"
 ENGINE_RESTORE_KEY = "engine_restores"
 ENGINE_RESTORE_TIMEOUT = BASELINE_COPY_TIMEOUT
 UNFINISHED_INSTALL_REASON = "unfinished_install_not_recovered"
+GUI_LANE_GATE_MARKER = "physical installation is unavailable"
+GUI_LANE_CONFIGURATION_REASON = "lane_configuration_error"
 
 
 def engine_state_dir(game):
@@ -2181,7 +2183,7 @@ def install_gui_with_quarantine(command, source, private, game, archives, conver
             report.setdefault(GUI_INSTALL_FAILURES_KEY, []).append({"stage": stage, **install_failure})
             failures, problem = attribute_gui_install_failure(install_failure, components)
             parsed = failures[-1] if failures else None
-            error_line = clean_line(install_failure.get("error") or "")
+            error_line = clean_line(" ".join((install_failure.get("error") or "").split()))
             if parsed:
                 recorded.update({key: parsed[key] for key in ("component", "step", "action", "error_line")})
                 recorded["instruction_guid"] = parsed.get("instruction_guid")
@@ -2216,6 +2218,8 @@ def install_gui_with_quarantine(command, source, private, game, archives, conver
                 stop("rollback_failed")
             if problem:
                 stop(problem)
+            if not failures and GUI_LANE_GATE_MARKER in " ".join(lowered.split()):
+                stop(GUI_LANE_CONFIGURATION_REASON)
             if not failures:
                 stop("error_not_attributable")
             if parsed["action"].casefold() not in INSTALL_QUARANTINE_ACTIONS:

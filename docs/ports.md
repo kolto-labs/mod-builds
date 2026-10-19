@@ -508,6 +508,15 @@ attribution and quarantine loop as the TypeScript CLI lane (`install_gui_with_qu
   (`quarantine.stopped` records why). Quarantined components are never skipped silently:
   every one gets a `::warning::` and the `PARTIAL install` notice.
 
+**GUI physical-install opt-in.** `gui_typescript.py` runs the ModSync.ts web server in its own
+process, which refuses a physical install unless `MODSYNC_CI_PHYSICAL_INSTALL=1` is set (the
+server honours only this variable; the CLI lane passes `--ci-physical-install` instead). The
+worker environment sets it for the TypeScript GUI driver only. If the status error still says
+`physical installation is unavailable`, `ports.py` stops with `quarantine.stopped.reason`
+`lane_configuration_error` (a hard failure, never quarantined) instead of
+`error_not_attributable`. Wrapped multi-line status errors are joined into one line before they
+are printed or recorded as `error_line`.
+
 ### Stage durations and progress
 
 Every command `ports.py` runs (`build`, `convert`, the bind stages, `validate` and its
