@@ -380,6 +380,19 @@ WORKER = (WORKER_TEMPLATE.replace("__REVIEWED_CHOICE__", REVIEWED_CHOICE_JS)
           .replace("__PROMPT_POLL_LIMIT__", str(PROMPT_POLL_LIMIT)))
 
 
+def checkpoint_session_block_reason(session, session_id, game_dir):
+    if session.get("id") != session_id:
+        return "checkpoint_session_mismatch"
+    if session.get("kotorDirectory") != str(game_dir):
+        return "checkpoint_directory_mismatch"
+    mutation = session.get("pendingMutation")
+    if mutation and not (isinstance(mutation, dict) and mutation.get("completedCheckpointId")):
+        return "recovery_pending_mutation"
+    if session.get("pendingPublication"):
+        return "recovery_pending_publication"
+    return None
+
+
 def verify(args, private, result):
     status_path = private / "install-status.json"
     status = json.loads(status_path.read_text())
@@ -397,9 +410,9 @@ def verify(args, private, result):
     if session_path.is_symlink():
         raise Blocked("symlink_receipt_rejected")
     session = json.loads(session_path.read_text())
-    if (session.get("id") != session_id or session.get("kotorDirectory") != str(args.game_dir)
-            or session.get("pendingMutation") or session.get("pendingPublication")):
-        raise Blocked("checkpoint_binding_or_recovery_pending")
+    reason = checkpoint_session_block_reason(session, session_id, args.game_dir)
+    if reason:
+        raise Blocked(reason)
     checkpoints = session.get("checkpoints", [])
     if len(checkpoints) < 2:
         raise Blocked("physical_checkpoint_receipt_missing")

@@ -305,5 +305,57 @@ class PortsForwardsChoicesTests(unittest.TestCase):
             self.assertNotIn("--choice", self.drive(choices)[0])
 
 
+class CheckpointSessionGateTests(unittest.TestCase):
+    GAME = Path("/games/one")
+
+    def reason(self, **overrides):
+        session = {"id": "session-1", "kotorDirectory": str(self.GAME), "checkpoints": []}
+        session.update(overrides)
+        return gui_typescript.checkpoint_session_block_reason(session, "session-1", self.GAME)
+
+    def test_a_clean_bound_session_is_accepted(self):
+        self.assertIsNone(self.reason())
+
+    def test_a_completed_mutation_audit_identity_is_not_pending(self):
+        pending = {"instructionGuid": GUID_A, "previousCheckpointId": "a", "completedCheckpointId": "b"}
+        self.assertIsNone(self.reason(pendingMutation=pending))
+
+    def test_an_unfinished_mutation_is_pending(self):
+        pending = {"instructionGuid": GUID_A, "previousCheckpointId": "a"}
+        self.assertEqual(self.reason(pendingMutation=pending), "recovery_pending_mutation")
+        pending["completedCheckpointId"] = ""
+        self.assertEqual(self.reason(pendingMutation=pending), "recovery_pending_mutation")
+
+    def test_a_pending_publication_is_always_pending(self):
+        self.assertEqual(self.reason(pendingPublication={"kind": "checkpoint"}), "recovery_pending_publication")
+
+    def test_binding_mismatches_have_distinct_reasons(self):
+        self.assertEqual(self.reason(id="other"), "checkpoint_session_mismatch")
+        self.assertEqual(self.reason(kotorDirectory="/games/two"), "checkpoint_directory_mismatch")
+
+    def test_verify_passes_the_gate_for_a_completed_mutation(self):
+        with tempfile.TemporaryDirectory() as raw:
+            base = Path(raw)
+            game = base / "game"
+            private = base / "private"
+            directory = game / ".modsync/checkpoints/sessions/session-1"
+            directory.mkdir(parents=True)
+            private.mkdir()
+            (private / "install-status.json").write_text(json.dumps({"summary": {"checkpointSessionId": "session-1"}}))
+            (private / "settings-observed.json").write_text("{}")
+            session = {"id": "session-1", "kotorDirectory": str(game), "checkpoints": [],
+                       "pendingMutation": {"completedCheckpointId": "b"}}
+            (directory / "session.json").write_text(json.dumps(session))
+            args = argparse.Namespace(game_dir=game)
+            with self.assertRaises(gui_typescript.Blocked) as caught:
+                gui_typescript.verify(args, private, {})
+            self.assertEqual(str(caught.exception), "physical_checkpoint_receipt_missing")
+            session["pendingMutation"] = {"instructionGuid": GUID_A}
+            (directory / "session.json").write_text(json.dumps(session))
+            with self.assertRaises(gui_typescript.Blocked) as caught:
+                gui_typescript.verify(args, private, {})
+            self.assertEqual(str(caught.exception), "recovery_pending_mutation")
+
+
 if __name__ == "__main__":
     unittest.main()
