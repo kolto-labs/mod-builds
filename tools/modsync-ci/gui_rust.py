@@ -19,7 +19,8 @@ subset run asks the same binary (`modsync selection --json`) before launching an
 refuses any difference from the plan. The desktop starts in wizard mode (Welcome page), so the
 driver dismisses the telemetry prompt, then clicks the "Summary / selection" nav button and
 verifies the page by OCR (the "Base build" line or the page's controls) before reading it,
-re-locating and re-clicking every 10 s (the buttons are disabled while the app is busy) and
+re-locating and re-clicking every 10 s (the buttons are disabled while the app is busy; a busy
+indicator in the top bar pauses the clicks) for up to 300 s (later transitions get 90 s) and
 failing with `summary_page_not_reached` if it never appears. The OCR of the Base build line
 is then retried and the lines read, a screenshot and the attempts are recorded in
 `selection_summary` before a mismatch is raised. Every later page transition (Validation / install,
@@ -59,8 +60,19 @@ EDIT_GATE_PATTERN = re.compile(r"Pause\s*sharing\s*before\s*editing", re.IGNOREC
 SUMMARY_NAV_LABEL = "Summary / selection"
 SUMMARY_NAV_PATTERN = r"Summary\s*\S{0,2}\s*sel\w*"
 NAV_WINDOW_SECONDS = 90
+FIRST_NAV_WINDOW_SECONDS = 300
 NAV_RETRY_SECONDS = 10
+NAV_BUSY_PROBE_SECONDS = 30
 NAV_SETTLE_SECONDS = 0.7
+NAV_HOVER_SECONDS = 0.3
+NAV_PARK_DELAY_SECONDS = 0.3
+NAV_FULL_LOG_EVERY = 5
+NAV_LOG_LINES = 80
+TOP_BAR_FRACTION = 0.15
+BUSY_PATTERN = re.compile(
+    r"\b(?:Loading|Parsing|Working|Busy|Resolving|Syncing|Saving|Scanning|"
+    r"Initiali[sz]ing|Please\s*wait)\w*", re.IGNORECASE)
+BUSY_TEXT_CHARS = 80
 SUMMARY_PAGE_MARKER = re.compile(
     r"Base\s*build|Select\s*all\b|Select\s*category|Select\s*multiple\s*categories|"
     r"All\s*categories|Load\s*a\s*guide\s*first", re.IGNORECASE)
@@ -93,6 +105,43 @@ class Blocked(Exception):
 def clean_ocr_lines(lines):
     read = [" ".join(text.split())[:SUMMARY_OCR_LINE_CHARS] for text, _ in lines]
     return [text for text in read if text]
+
+
+def top_bar_lines(data, lines, frame_height, fraction=TOP_BAR_FRACTION):
+    """Cleaned OCR lines whose top edge lies in the top `fraction` of the frame."""
+    limit = frame_height * fraction
+    kept = []
+    for text, indices in lines:
+        if indices and min(data["top"][index] for index in indices) < limit:
+            kept.append(text)
+    return clean_ocr_lines([(text, None) for text in kept])
+
+
+def busy_text(read):
+    """First status line that reads as a busy/loading indicator, else an empty string."""
+    for text in read:
+        if BUSY_PATTERN.search(text):
+            return text[:BUSY_TEXT_CHARS]
+    return ""
+
+
+def nav_log_lines(read, relevant, attempt, failed=False):
+    """Lines to print for one navigation attempt: everything on the 1st, every Nth and on failure."""
+    if failed or attempt == 1 or attempt % NAV_FULL_LOG_EVERY == 0:
+        return read[:NAV_LOG_LINES]
+    return (relevant or read)[:SUMMARY_OCR_LOG_LINES]
+
+
+def nav_click_due(now, next_click, busy, busy_cleared, last_click):
+    """Whether to click the nav item now.
+
+    Idle: click once the retry cadence has elapsed, or at once when a busy indicator just
+    cleared (the control has most likely been enabled). Busy: do not click, except for a
+    probe every NAV_BUSY_PROBE_SECONDS so a false-positive OCR read cannot block forever.
+    """
+    if busy:
+        return now - last_click >= NAV_BUSY_PROBE_SECONDS
+    return busy_cleared or now >= next_click
 
 
 def filtered_ocr_tail(read):
@@ -363,6 +412,7 @@ def drive(args, private, result):
     pyautogui.FAILSAFE = True
     pyautogui.PAUSE = 0.15
     progress = {"phase": "preflight"}
+    frame = {"height": 1}
 
     def mark(phase=None, stage=None):
         progress["phase"] = phase or progress["phase"]
@@ -384,6 +434,7 @@ def drive(args, private, result):
                                 int(shot.width * box[2]), int(shot.height * box[3])))
         if scale != 1:
             region = region.resize((region.width * scale, region.height * scale))
+        frame["height"] = region.height
         data = pytesseract.image_to_data(
             region,
             config="--psm 11", output_type=pytesseract.Output.DICT,
@@ -469,9 +520,11 @@ def drive(args, private, result):
 
     def press(point, label):
         pyautogui.moveTo(*point)
+        time.sleep(NAV_HOVER_SECONDS)
         pyautogui.mouseDown()
         time.sleep(0.15)
         pyautogui.mouseUp()
+        time.sleep(NAV_PARK_DELAY_SECONDS)
         pyautogui.moveTo(5, 5)
         matched = last_hit.get("text", "")
         events.append({"control": label, "coordinates": point, "matched": matched})
@@ -522,21 +575,27 @@ def drive(args, private, result):
         telemetry choice or changing sharing) and a modal prompt swallows them, so one click
         proves nothing: each frame dismisses the telemetry prompt and the sharing edit gate
         when shown, checks the marker, and re-locates and re-clicks the control every
-        NAV_RETRY_SECONDS. The record (clicks with coordinates and matched text, a
-        keyword-filtered OCR tail) is kept in result["<name>_navigation"].
+        NAV_RETRY_SECONDS, or as soon as a busy indicator in the top bar clears. While one
+        is showing it only waits (plus a probe click every NAV_BUSY_PROBE_SECONDS). The
+        record (clicks with coordinates and matched text, a keyword-filtered OCR tail, busy
+        text, and on failure every OCR line and the screenshot name) is kept in
+        result["<name>_navigation"].
         """
         result["stage"] = name + "_navigation"
         mark()
         pattern = pattern or r"\s*".join(re.escape(token) for token in
                                          re.findall(r"\w+|[^\w\s]", label))
         navigation = {"label": label, "attempts": 0, "reached": False,
-                      "label_not_found": 0, "clicks": [], "ocr_tail": ""}
+                      "label_not_found": 0, "clicks": [], "ocr_tail": "",
+                      "window_seconds": window, "busy_waits": 0, "busy_text": ""}
         result[name + "_navigation"] = navigation
         evidence = name + "-navigation"
         started = time.monotonic()
         limit = min(deadline, started + window)
         next_click = started
         last_pause = None
+        last_click = started
+        was_busy = False
 
         def record(point, control):
             navigation["clicks"] = (navigation["clicks"] + [{
@@ -550,9 +609,11 @@ def drive(args, private, result):
             read = clean_ocr_lines(lines)
             relevant = [text for text in read if SUMMARY_TAIL_KEYWORDS.search(text)]
             navigation["ocr_tail"] = filtered_ocr_tail(read)
+            status = busy_text(top_bar_lines(data, lines, frame["height"]))
             print("gui_rust: %s navigation attempt %d (%d lines, %d relevant): %s" % (
                 name, navigation["attempts"], len(read), len(relevant),
-                " | ".join((relevant or read)[:SUMMARY_OCR_LOG_LINES]) or "<no text>"), flush=True)
+                " | ".join(nav_log_lines(read, relevant, navigation["attempts"])) or "<no text>"),
+                flush=True)
             if any(marker.search(text) for text in read):
                 navigation["reached"] = True
                 shot.save(private / (evidence + ".png"))
@@ -572,10 +633,17 @@ def drive(args, private, result):
                     press(point, "Pause sharing to edit")
                     record(point, "Pause sharing to edit")
                     continue
-            if now >= next_click:
+            busy_cleared = was_busy and not status
+            was_busy = bool(status)
+            if status:
+                navigation["busy_text"] = status
+                navigation["busy_waits"] += 1
+                print("gui_rust: waiting: app busy (%s)" % status, flush=True)
+            if nav_click_due(now, next_click, bool(status), busy_cleared, last_click):
                 point = find_control(shot, data, lines, pattern)
                 if point is not None:
                     next_click = now + NAV_RETRY_SECONDS
+                    last_click = now
                     press(point, label)
                     record(point, label)
                     continue
@@ -583,11 +651,16 @@ def drive(args, private, result):
             if now >= limit:
                 shot.save(private / (evidence + ".png"))
                 navigation["screenshot"] = evidence + ".png"
+                navigation["ocr_lines"] = read[:NAV_LOG_LINES]
+                navigation["top_bar"] = top_bar_lines(data, lines, frame["height"])
                 save(private / (evidence + ".json"), navigation)
                 last = navigation["clicks"][-1] if navigation["clicks"] else None
-                print("gui_rust: %s after %d attempts; last click %s; OCR tail: %s" % (
-                    reason, navigation["attempts"], json.dumps(last),
-                    navigation["ocr_tail"].replace("\n", " | ") or "<none>"), flush=True)
+                print("gui_rust: %s after %d attempts; last click %s; busy %s; screenshot %s; "
+                      "OCR lines: %s" % (
+                          reason, navigation["attempts"], json.dumps(last),
+                          json.dumps(navigation["busy_text"] or None), navigation["screenshot"],
+                          " | ".join(nav_log_lines(read, relevant, navigation["attempts"], True))
+                          or "<none>"), flush=True)
                 raise Blocked(reason)
             time.sleep(0.5)
 
@@ -612,7 +685,7 @@ def drive(args, private, result):
             mark("first_screenshot")
             dismiss_telemetry_prompt()
             transition("summary", SUMMARY_NAV_LABEL, SUMMARY_PAGE_MARKER, "summary_page_not_reached",
-                       pattern=SUMMARY_NAV_PATTERN)
+                       pattern=SUMMARY_NAV_PATTERN, window=FIRST_NAV_WINDOW_SECONDS)
             if plan["click_select_all"]:
                 click("Select all")
             if plan["subset"]:

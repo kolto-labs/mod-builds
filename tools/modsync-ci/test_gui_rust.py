@@ -519,6 +519,52 @@ class SummaryNavigationConstantTests(unittest.TestCase):
         self.assertTrue(0 < top < bottom < 1)
 
 
+class NavigationDiagnosticsTests(unittest.TestCase):
+    def test_first_navigation_window_is_longer_than_the_default(self):
+        self.assertEqual(gui_rust.FIRST_NAV_WINDOW_SECONDS, 300)
+        self.assertGreater(gui_rust.FIRST_NAV_WINDOW_SECONDS, gui_rust.NAV_WINDOW_SECONDS)
+
+    def test_busy_text_reads_status_words_and_ignores_plain_labels(self):
+        for text in ("Loading guide...", "Parsing instructions", "Working", "Resolving archives",
+                     "Syncing peers", "Busy"):
+            self.assertTrue(gui_rust.busy_text([text]), text)
+        self.assertEqual(gui_rust.busy_text(["Welcome", "Summary / selection"]), "")
+        self.assertEqual(gui_rust.busy_text(["Welcome", "Parsing 12 of 40"]), "Parsing 12 of 40")
+        self.assertLessEqual(len(gui_rust.busy_text(["Loading " + "x" * 300])), gui_rust.BUSY_TEXT_CHARS)
+
+    def test_top_bar_lines_keep_only_lines_near_the_top(self):
+        data = {"top": [10, 12, 400, 700]}
+        lines = [("Loading guide", [0, 1]), ("Welcome   page", [2]), ("Footer", [3])]
+        self.assertEqual(gui_rust.top_bar_lines(data, lines, 800), ["Loading guide"])
+        self.assertEqual(gui_rust.top_bar_lines(data, lines, 800, fraction=0.6),
+                         ["Loading guide", "Welcome page"])
+
+    def test_full_ocr_is_logged_on_the_first_every_nth_and_failing_attempt(self):
+        read = ["line %d" % number for number in range(20)]
+        relevant = read[:10]
+        short = gui_rust.nav_log_lines(read, relevant, 2)
+        self.assertEqual(short, relevant[:gui_rust.SUMMARY_OCR_LOG_LINES])
+        self.assertEqual(gui_rust.nav_log_lines(read, relevant, 1), read)
+        self.assertEqual(gui_rust.nav_log_lines(read, relevant, gui_rust.NAV_FULL_LOG_EVERY), read)
+        self.assertEqual(gui_rust.nav_log_lines(read, relevant, 3, failed=True), read)
+        self.assertEqual(len(gui_rust.nav_log_lines(read * 10, [], 1)), gui_rust.NAV_LOG_LINES)
+        self.assertEqual(gui_rust.nav_log_lines(read, [], 2), read[:gui_rust.SUMMARY_OCR_LOG_LINES])
+
+    def test_click_cadence_waits_for_busy_and_does_not_spam(self):
+        due = gui_rust.nav_click_due
+        self.assertTrue(due(0, 0, False, False, 0))
+        self.assertFalse(due(5, 10, False, False, 0))
+        self.assertTrue(due(10, 10, False, False, 0))
+        self.assertTrue(due(5, 10, False, True, 0))
+        self.assertFalse(due(100, 0, True, False, 90))
+        self.assertFalse(due(100, 0, True, True, 90))
+        self.assertTrue(due(120, 0, True, False, 90))
+
+    def test_press_timing_constants_hover_before_down_and_park_after_a_delay(self):
+        self.assertGreaterEqual(gui_rust.NAV_HOVER_SECONDS, 0.3)
+        self.assertGreaterEqual(gui_rust.NAV_PARK_DELAY_SECONDS, 0.3)
+
+
 class WorkerFailureTests(unittest.TestCase):
     prepare = ExecuteTests.prepare
     run_execute = ExecuteTests.run_execute
