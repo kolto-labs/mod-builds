@@ -4,6 +4,7 @@ import io
 import json
 from pathlib import Path
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -11,6 +12,7 @@ from unittest import mock
 
 import gui_diag
 import gui_typescript
+import ports
 
 LEAK = "ghp_" + "a1B2c3D4e5" * 4
 
@@ -121,6 +123,186 @@ class WorkerFailureTests(unittest.TestCase):
         line = next(item for item in output.getvalue().splitlines() if "install failure:" in item)
         self.assertIn("error=Independent TypeScript physical installation is unavailable x", line)
         self.assertTrue(line.endswith("x trailing words"))
+
+
+GUID_A = "11111111-2222-4333-8444-555555555555"
+GUID_B = "66666666-7777-4888-9999-aaaaaaaaaaaa"
+
+
+class ChoiceOptionTests(unittest.TestCase):
+    def test_choice_pairs_are_split_on_the_first_equals_and_the_guid_is_lowercased(self):
+        self.assertEqual(gui_typescript.parse_choice(GUID_A.upper() + "=0"), (GUID_A, "0"))
+        self.assertEqual(gui_typescript.parse_choice(GUID_A + "=a=b"), (GUID_A, "a=b"))
+
+    def test_malformed_choice_pairs_are_refused(self):
+        for value in ("", "=0", GUID_A, GUID_A + "=", GUID_A + "=  "):
+            with self.assertRaises(argparse.ArgumentTypeError, msg=value):
+                gui_typescript.parse_choice(value)
+
+    def test_duplicate_guids_must_agree(self):
+        self.assertEqual(gui_typescript.collect_choices([(GUID_A, "0"), (GUID_B, "1"), (GUID_A, "0")]),
+                         {GUID_A: "0", GUID_B: "1"})
+        with self.assertRaises(argparse.ArgumentTypeError):
+            gui_typescript.collect_choices([(GUID_A, "0"), (GUID_A, "1")])
+
+    def run_main(self, extra):
+        seen = {}
+
+        def fake_execute(args, result):
+            seen["choices"] = args.choices
+            raise gui_typescript.Blocked("stop_after_parse")
+
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        argv = ["gui_typescript.py"]
+        for name in ("source", "input", "game-dir", "archives", "work-dir"):
+            argv += ["--" + name, str(root / name)]
+        argv += ["--report", str(root / "report" / "gui.json")] + extra
+        with mock.patch.object(gui_typescript, "execute", fake_execute), \
+                mock.patch.object(sys, "argv", argv), contextlib.redirect_stdout(io.StringIO()):
+            code = gui_typescript.main()
+        return code, seen
+
+    def test_repeated_choice_flags_reach_the_driver_as_a_guid_keyed_mapping(self):
+        code, seen = self.run_main(["--choice", GUID_A.upper() + "=0", "--choice", GUID_B + "=yes"])
+        self.assertEqual(code, 1)
+        self.assertEqual(seen["choices"], {GUID_A: "0", GUID_B: "yes"})
+
+    def test_without_choice_flags_the_mapping_is_empty(self):
+        self.assertEqual(self.run_main([])[1]["choices"], {})
+
+    def test_a_malformed_or_conflicting_choice_flag_exits_before_any_driver_work(self):
+        for extra in (["--choice", "nonsense"], ["--choice", GUID_A + "=0", "--choice", GUID_A + "=1"]):
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit) as caught:
+                self.run_main(extra)
+            self.assertEqual(caught.exception.code, 2)
+
+    def test_the_limitations_no_longer_claim_prompts_always_need_an_operator(self):
+        source = Path(gui_typescript.__file__).read_text(encoding="utf-8")
+        self.assertNotIn("Interactive install prompts require operator choices", source)
+
+
+@unittest.skipUnless(shutil.which("node"), "node is required to run the worker's matcher")
+class ReviewedAnswerMatcherTests(unittest.TestCase):
+    def match(self, prompt, choices):
+        script = gui_typescript.REVIEWED_CHOICE_JS + (
+            "const input = JSON.parse(process.argv[1]);"
+            "process.stdout.write(JSON.stringify(reviewedAnswer(input.prompt, input.choices)));")
+        done = subprocess.run(
+            [shutil.which("node"), "--input-type=module", "-e", script,
+             json.dumps({"prompt": prompt, "choices": choices})],
+            capture_output=True, text=True, check=True)
+        return json.loads(done.stdout)
+
+    def prompt(self, **extra):
+        value = {"id": "prompt-1", "kind": "choose-option", "title": "Pick", "instructionGuid": GUID_A.upper(),
+                 "choices": [{"id": "alpha", "label": "First Option"}, {"id": "0", "label": "Second Option"}]}
+        value.update(extra)
+        return value
+
+    def test_an_answer_matching_a_choice_id_is_posted_with_that_id(self):
+        self.assertEqual(self.match(self.prompt(), {GUID_A: "0"}), {"promptId": "prompt-1", "choiceId": "0"})
+
+    def test_an_answer_matching_a_label_ignoring_case_resolves_to_the_choice_id(self):
+        self.assertEqual(self.match(self.prompt(), {GUID_A: "first option"}),
+                         {"promptId": "prompt-1", "choiceId": "alpha"})
+
+    def test_the_instruction_guid_is_compared_lowercased(self):
+        self.assertIsNotNone(self.match(self.prompt(instructionGuid=GUID_A.upper()), {GUID_A: "alpha"}))
+
+    def test_a_prompt_without_a_reviewed_answer_is_not_answered(self):
+        self.assertIsNone(self.match(self.prompt(), {}))
+        self.assertIsNone(self.match(self.prompt(), {GUID_B: "0"}))
+        self.assertIsNone(self.match(self.prompt(instructionGuid=None), {GUID_A: "0"}))
+        self.assertIsNone(self.match({"id": "prompt-1", "choices": []}, {GUID_A: "0"}))
+
+    def test_an_answer_matching_no_choice_is_never_replaced_by_a_default(self):
+        prompt = self.prompt(choices=[{"id": "alpha", "label": "First", "isDefault": True}])
+        self.assertIsNone(self.match(prompt, {GUID_A: "missing"}))
+        self.assertIsNone(self.match(self.prompt(choices=[]), {GUID_A: "0"}))
+
+    def test_prototype_names_are_not_treated_as_answers(self):
+        self.assertIsNone(self.match(self.prompt(instructionGuid="constructor"), {GUID_A: "0"}))
+
+
+class WorkerWiringTests(unittest.TestCase):
+    def test_the_worker_embeds_the_matcher_and_posts_to_the_answer_route(self):
+        self.assertIn(gui_typescript.REVIEWED_CHOICE_JS, gui_typescript.WORKER)
+        self.assertNotIn("__REVIEWED_CHOICE__", gui_typescript.WORKER)
+        self.assertNotIn("__PROMPT_POLL_LIMIT__", gui_typescript.WORKER)
+        self.assertIn("/api/install/answer", gui_typescript.WORKER)
+        self.assertIn("deliberate_install_choice_requires_operator", gui_typescript.WORKER)
+
+    def test_choices_are_written_to_the_worker_config(self):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        for relative in ("packages/server/src/createServer.ts", "packages/web/dist/index.html",
+                         "node_modules/tsx/dist/loader.mjs", "node_modules/playwright/package.json"):
+            (root / "source" / relative).parent.mkdir(parents=True, exist_ok=True)
+            (root / "source" / relative).write_text("", encoding="utf-8")
+        for name in ("game", "archives"):
+            (root / name).mkdir()
+        (root / "input.toml").write_text('[[thisMod]]\nGuid = "x"\n', encoding="utf-8")
+        args = argparse.Namespace(
+            source=root / "source", input=root / "input.toml", game_dir=root / "game",
+            archives=root / "archives", work_dir=root / "work", timeout=60.0, choices={GUID_A: "0"})
+        written = {}
+
+        class Process:
+            returncode = 1
+            pid = 0
+
+            def __init__(self, command, **kwargs):
+                config = Path(kwargs["env"]["MODSYNC_GUI_CONFIG"])
+                written.update(json.loads(config.read_text()))
+
+            def communicate(self, data, timeout=None):
+                return None
+
+            def wait(self, timeout=None):
+                return 1
+
+        with mock.patch.object(gui_typescript.shutil, "which", return_value="/usr/bin/node"), \
+                mock.patch.object(gui_typescript.subprocess, "Popen", Process), \
+                mock.patch.object(gui_typescript.os, "killpg", side_effect=ProcessLookupError), \
+                self.assertRaises(gui_typescript.Blocked):
+            gui_typescript.execute(args, {})
+        self.assertEqual(written["choices"], {GUID_A: "0"})
+
+
+class PortsForwardsChoicesTests(unittest.TestCase):
+    def drive(self, choices):
+        root = Path(tempfile.mkdtemp())
+        self.addCleanup(shutil.rmtree, root)
+        converted = root / "converted.toml"
+        converted.write_text('[[thisMod]]\nGuid = "%s"\nName = "Stand-in"\n' % GUID_A, encoding="utf-8")
+        private, game, archives = root / "private", root / "game", root / "archives"
+        for directory in (private, game, archives):
+            directory.mkdir()
+        commands = []
+
+        def fake_run(command, source, private_dir, stage, report, env):
+            commands.append(command)
+            report["commands"].append({"stage": stage, "exit_code": 0})
+
+        report = {"commands": []}
+        options = {} if choices is None else {"choices": choices}
+        with mock.patch.object(ports, "run", fake_run), \
+                mock.patch.object(ports, "verify_typescript_gui_result", return_value={"reason": "ok"}):
+            ports.install_gui_with_quarantine(
+                ["node", "cli.js"], root, private, game, archives, converted, converted, set(), [],
+                {ports.normalized_reference(GUID_A)}, report, {}, 0, 0.5, **options)
+        return commands
+
+    def test_the_reviewed_choices_are_appended_to_the_driver_command(self):
+        choices = ["--choice", GUID_A + "=0", "--choice", GUID_B + "=yes"]
+        command = self.drive(choices)[0]
+        self.assertEqual(command[-4:], choices)
+        self.assertEqual(command[command.index("--timeout") + 1], "7000")
+
+    def test_no_choices_adds_no_choice_flags(self):
+        for choices in (None, []):
+            self.assertNotIn("--choice", self.drive(choices)[0])
 
 
 if __name__ == "__main__":

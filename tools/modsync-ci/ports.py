@@ -2139,7 +2139,8 @@ def verify_typescript_gui_result(driver_report, selected_input, gui_work, game, 
 def install_gui_with_quarantine(command, source, private, game, archives, converted, selected_input,
                                 policy_guids, deselect, selectable, report, env,
                                 max_iterations=QUARANTINE_MAX_ITERATIONS,
-                                max_fraction=QUARANTINE_MAX_FRACTION, reviewed_inputs_unchanged=None):
+                                max_fraction=QUARANTINE_MAX_FRACTION, reviewed_inputs_unchanged=None,
+                                choices=None):
     """Run the TypeScript GUI driver; when one component's install step stops it, restore, omit it and retry.
 
     The same loop as `install_with_quarantine`, with the GUI driver as the install: stages `gui`,
@@ -2157,6 +2158,10 @@ def install_gui_with_quarantine(command, source, private, game, archives, conver
     report["quarantine"]["stopped"]; nothing is skipped silently. Every quarantined component is
     listed in report["quarantined_install_failures"]: the lane is a partial install. Returns the
     verified driver report of the attempt that installed.
+
+    `choices` is the reviewed manifest's flat `["--choice", "GUID=ANSWER", ...]` list; it is appended
+    to every driver command, and the driver answers only a prompt whose instruction GUID has an
+    entry matching one of its choices (see `gui_typescript.py`); any other prompt stops it.
     """
     components = [component for component in converted_components(converted)
                   if normalized_reference(component.get("Guid")) in selectable]
@@ -2187,7 +2192,7 @@ def install_gui_with_quarantine(command, source, private, game, archives, conver
                  "--source", str(source), "--input", str(selected_input),
                  "--game-dir", str(game), "--archives", str(archives),
                  "--work-dir", str(gui_work), "--report", str(driver_report),
-                 "--timeout", "7000"],
+                 "--timeout", "7000", *(choices or [])],
                 source, private, stage, report, env)
         except Blocked as failure:
             if str(failure) != stage + "_failed":
@@ -3007,7 +3012,7 @@ def execute(args, report):
                 policy_guids, deselect, {normalized_reference(each) for each in all_installable},
                 report, env, getattr(args, "max_quarantine", QUARANTINE_MAX_ITERATIONS),
                 getattr(args, "max_quarantine_fraction", QUARANTINE_MAX_FRACTION),
-                reviewed_inputs_unchanged)
+                reviewed_inputs_unchanged, choices)
             if report.get(INSTALL_QUARANTINE_KEY):
                 omitted = {item["component_guid"] for item in quarantined_entries(report)}
                 report.setdefault("installable_before_quarantine_count", len(all_installable))

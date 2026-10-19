@@ -3,7 +3,10 @@
 
 Requires an existing built packages/web/dist and source-local dependencies.
 Does not build, install dependencies, change selections, approve authoring,
-answer install prompts, retry, restore, or substitute a simulation. Evidence
+retry, restore, or substitute a simulation. An install prompt is answered only
+when a repeatable `--choice INSTRUCTION_GUID=ANSWER` supplied by the caller (the
+reviewed manifest) matches the prompt's instruction GUID and one of its choices
+by id or case-insensitive label; any other prompt stops the install. Evidence
 is private. The supplied game and archive directories are actual workspaces.
 """
 
@@ -27,6 +30,36 @@ class Blocked(Exception):
 
 
 PHYSICAL_INSTALL_ENV = "MODSYNC_CI_PHYSICAL_INSTALL"
+PROMPT_POLL_LIMIT = 100
+
+
+def parse_choice(value):
+    guid, separator, answer = value.partition("=")
+    guid = guid.strip().lower()
+    if not separator or not guid or not answer.strip():
+        raise argparse.ArgumentTypeError("--choice expects INSTRUCTION_GUID=ANSWER")
+    return guid, answer
+
+
+def collect_choices(pairs):
+    choices = {}
+    for guid, answer in pairs:
+        if choices.setdefault(guid, answer) != answer:
+            raise argparse.ArgumentTypeError("--choice given twice with different answers for " + guid)
+    return choices
+
+
+REVIEWED_CHOICE_JS = r'''
+const reviewedAnswer = (prompt, choices) => {
+  const guid = typeof prompt?.instructionGuid === 'string' ? prompt.instructionGuid.toLowerCase() : '';
+  if (!guid || !choices || !Object.hasOwn(choices, guid)) return null;
+  const answer = choices[guid];
+  if (typeof answer !== 'string') return null;
+  const match = (Array.isArray(prompt.choices) ? prompt.choices : [])
+    .find(entry => entry.id === answer || String(entry.label).toLowerCase() === answer.toLowerCase());
+  return match ? {promptId: prompt.id, choiceId: match.id} : null;
+};
+'''
 
 
 def digest(path, algorithm="sha256"):
@@ -43,7 +76,7 @@ def save(path, value):
     temporary.replace(path)
 
 
-WORKER = r'''
+WORKER_TEMPLATE = r'''
 import {createRequire} from 'node:module';
 import {pathToFileURL} from 'node:url';
 import {join} from 'node:path';
@@ -53,6 +86,8 @@ const config = JSON.parse(await readFile(process.env.MODSYNC_GUI_CONFIG, 'utf8')
 const require = createRequire(join(config.source, 'package.json'));
 const {chromium} = require('playwright');
 const {createModSyncServer} = await import(pathToFileURL(join(config.source, 'packages/server/src/createServer.ts')).href);
+__REVIEWED_CHOICE__
+const choices = config.choices ?? {};
 const evidence = async (name, value) => writeFile(join(config.private, name), JSON.stringify(value, null, 2));
 let server, browser, page;
 let stage = 'launch';
@@ -109,6 +144,12 @@ try {
     if (!response.ok) throw new Error(`Observation HTTP ${response.status}`);
     return response.json();
   }, route);
+  const post = async (route, body) => page.evaluate(async ([route, body]) => {
+    const token = new URL(location.href).searchParams.get('token');
+    const response = await fetch(route, {method: 'POST', headers: {authorization: `Bearer ${token}`, 'content-type': 'application/json'}, body: JSON.stringify(body)});
+    if (!response.ok) throw new Error(`Answer HTTP ${response.status}`);
+    return response.json();
+  }, [route, body]);
   const click = async name => {
     stage = String(name);
     await mark();
@@ -272,6 +313,10 @@ try {
     await captureInstallFailure(status, reason);
     fail(reason);
   };
+  const PROMPT_POLL_LIMIT = __PROMPT_POLL_LIMIT__;
+  const answered = [];
+  let lastAnswered = null;
+  let answerWaits = 0;
   say(`installation started: ${expected.length} mod(s) selected`);
   for (;;) {
     const status = await read('/api/install/status');
@@ -285,7 +330,27 @@ try {
       say(`still installing: ${position(status.currentMod ?? seenMod)} running=${status.running} t+${elapsed()}s`);
       lastBeat = Date.now();
     }
-    if (status.pendingPrompt) await failInstall(status, 'deliberate_install_choice_requires_operator');
+    if (status.pendingPrompt) {
+      const answer = reviewedAnswer(status.pendingPrompt, choices);
+      if (!answer) await failInstall(status, 'deliberate_install_choice_requires_operator');
+      if (answer.promptId === lastAnswered) {
+        if (++answerWaits > PROMPT_POLL_LIMIT) await failInstall(status, 'install_prompt_answer_not_consumed');
+      } else {
+        try {
+          await post('/api/install/answer', answer);
+        } catch (error) {
+          say(`prompt answer rejected: ${scrub(error.message)}`);
+          await failInstall(status, 'install_prompt_answer_rejected');
+        }
+        lastAnswered = answer.promptId;
+        answerWaits = 0;
+        answered.push({prompt_id: answer.promptId, choice_id: answer.choiceId, instruction_guid: status.pendingPrompt.instructionGuid ?? null, at: new Date().toISOString()});
+        await evidence('prompt-answers.json', answered);
+        say(`answered reviewed prompt ${answered.length}: instruction=${scrub(status.pendingPrompt.instructionGuid, 80)} choice=${scrub(answer.choiceId, 80)}`);
+      }
+      await page.waitForTimeout(300);
+      continue;
+    }
     if (status.summary?.error || status.summary?.recoveryPending) await failInstall(status, 'backend_install_gate_or_failure');
     if (!status.running && status.summary) {
       const summary = status.summary;
@@ -309,6 +374,10 @@ try {
   if (server) await server.close();
 }
 '''
+
+
+WORKER = (WORKER_TEMPLATE.replace("__REVIEWED_CHOICE__", REVIEWED_CHOICE_JS)
+          .replace("__PROMPT_POLL_LIMIT__", str(PROMPT_POLL_LIMIT)))
 
 
 def verify(args, private, result):
@@ -415,6 +484,7 @@ def execute(args, result):
         environment.pop(name, None)
     config = {name: str(getattr(args, name)) for name in ("source", "input", "game_dir", "archives")}
     config["private"] = str(private)
+    config["choices"] = dict(getattr(args, "choices", None) or {})
     save(private / "config.json", config)
     environment["MODSYNC_GUI_CONFIG"] = str(private / "config.json")
     command = [node, "--import", str(args.source / "node_modules/tsx/dist/loader.mjs"),
@@ -482,14 +552,21 @@ def main():
     for name in ("source", "input", "game-dir", "archives", "work-dir", "report"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--timeout", type=float, default=3600, help="Total UI time budget in seconds")
+    parser.add_argument("--choice", dest="choice_pairs", action="append", default=[], type=parse_choice,
+                        metavar="GUID=ANSWER",
+                        help="Reviewed answer for the install prompt of one instruction GUID; repeatable")
     args = parser.parse_args()
+    try:
+        args.choices = collect_choices(args.choice_pairs)
+    except argparse.ArgumentTypeError as error:
+        parser.error(str(error))
     os.umask(0o077)
     result = {"schema_version": 1, "mode": "gui", "implementation": "typescript",
               "runtime": "playwright-web", "status": "blocked", "stage": "preflight",
               "ui_completed": False,
               "scope": "Supplied TOML selections and options, base phase only",
               "limitations": ["No authoring approval or backend gate bypass",
-                              "Interactive install prompts require operator choices",
+                              "Install prompts are answered only from reviewed --choice entries; any other prompt stops the install",
                               "No dependency installation or source builds",
                               "No automatic recovery or retry",
                               "Checkpoint hashes cover tracked outputs, not full guide parity"]}

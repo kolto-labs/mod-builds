@@ -826,7 +826,14 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
     The skipped and excluded components are never reported as covered.
 - `gui_typescript.py` drives the built web UI in headless Chromium via Playwright.
   Success needs visible completion, no failed or skipped mods, and physical
-  checkpoint receipts. Manifest choices are not forwarded to this driver.
+  checkpoint receipts. `ports.py` forwards the reviewed manifest's choices as repeatable
+  `--choice GUID=ANSWER` flags, the same ones the CLI lane gets. When the web server holds a
+  prompt, the driver looks up the answer by the lowercased `instructionGuid`, matches it to one
+  of the prompt's choices by id or case-insensitive label (as `packages/cli` `install` does),
+  posts it to `/api/install/answer` and keeps polling. A prompt with no reviewed answer, or
+  whose answer matches no choice, still stops the install with
+  `deliberate_install_choice_requires_operator`; nothing is ever picked by default. Answers
+  given are listed in the private `prompt-answers.json`.
 
 ## Diagnosing a coverage failure
 
