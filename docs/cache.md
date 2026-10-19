@@ -65,6 +65,38 @@ and `unpack` fails if the restored tree does not match the recorded inventory. T
 one mod download that is mostly video is also never cached (see
 [Never cached by policy](#never-cached-by-policy)).
 
+## Restore time budget, concurrency and progress
+
+`cache.py restore` must not turn a slow or missing source into a slow lane. Caches are
+accelerators, so everything below only affects optional work: an archive with no
+usable copy anywhere still fails the lane, and `.bik` is still never cached.
+
+- **Negative cache (per run).** An artifact-store pack that the index shows expired or
+  missing is skipped for every blob in it: one warning names the pack, the other blobs go
+  straight to the next source. A pack whose fetches fail twice in a row (a hit resets the
+  count) is treated the same way. A P2P miss for a hash is not retried for the same hash,
+  and a website host that fails three revalidations in a row (timeouts, connection errors,
+  5xx/408/429; a 404 does not count) is not asked again: its remaining archives use the
+  cached copy (`stale-local`, one warning for the host).
+- **Concurrency.** Archives are acquired on `--workers` threads (default 4, 1..16; `1`
+  is fully serial). Copying into `--destination`, name-collision handling and the manifest
+  writes stay in guide order on the main thread, so results do not depend on which
+  archive finishes first. `refresh` stays serial.
+- **Tight limits.** Restore revalidates a valid local copy with a 15 s socket timeout and
+  one retry (a failure just means `stale-local`). rclone runs with `--retries 1
+  --low-level-retries 2 --contimeout 15s --timeout 30s`; its overall call timeout is
+  `--backend-timeout` cut to the remaining budget (never below 120 s).
+- **Time budget.** `--restore-budget-seconds` (default 1200, `0` disables) bounds the
+  optional work. After it, an archive with a valid local copy is not revalidated: it is
+  used as `stale-local` and one `::warning::` says so. An archive with no local copy is
+  still fetched through the [source order](#source-order-per-archive), each call bounded
+  by its own timeout.
+- **Progress.** One flushed stderr line per archive that was not a quick local hit:
+  `cache: restore 12/197 797139bf stale-local 60.2s (elapsed 411s)`, a `still working on`
+  line with the in-flight archives every 60 s while the loop waits, a line for a slow copy
+  into the destination, and a final `finished` summary with the source counts. Lines carry
+  only the first 8 characters of the archive id, never URLs, tokens or pack contents.
+
 ## Backend and names
 
 The optional archive bucket is reached through `rclone`. Each job that uses it

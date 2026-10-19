@@ -2,11 +2,13 @@
 """Archive cache shared by installer adapters; Python 3.10+, standard library only."""
 
 import argparse
+import concurrent.futures
 import copy
 from email.message import EmailMessage
 from email.policy import default as email_policy
 import hashlib
 import importlib.util
+import inspect
 from http.client import HTTPException
 from http.cookiejar import CookieJar
 import html
@@ -14,12 +16,14 @@ from html.parser import HTMLParser
 import json
 import os
 from pathlib import Path
+import queue
 import re
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
 from urllib.error import HTTPError, URLError
@@ -60,12 +64,27 @@ ARTSTORE_REFRESH_DAYS = 21
 ARTSTORE_STATE = {}
 STAGE_MAX_BYTES = 3 * 1024 ** 3
 STAGE_TOTAL_BYTES = 9 * 1024 ** 3
+RESTORE_BUDGET_SECONDS = 1200
+RESTORE_WORKERS = 4
+MAX_WORKERS = 16
+REVALIDATE_TIMEOUT_SECONDS = 15
+RECOVERY_FLOOR_SECONDS = 120
+HEARTBEAT_SECONDS = 60
+SLOW_SECONDS = 5
+HOST_FAIL_LIMIT = 3
+PACK_FAIL_LIMIT = 2
+RCLONE_LIMITS = ("--retries", "1", "--low-level-retries", "2", "--contimeout", "15s", "--timeout", "30s")
+RUN_STATE = {"p2p_missed": set(), "host_failures": {}, "warned": set()}
+STATE_LOCK = threading.RLock()
+ENV_LOCK = threading.RLock()
 
 
 def scrubbed_env(keep=()):
     """os.environ minus every secret; names or prefixes in keep (rclone's S3_ENV) stay. Child processes get this."""
     keep = tuple(keep)
-    return {name: value for name, value in os.environ.items()
+    with ENV_LOCK:
+        environment = dict(os.environ)
+    return {name: value for name, value in environment.items()
             if name.startswith(keep) or not (name in SECRET_ENV or name.startswith(S3_ENV))}
 
 
@@ -1476,14 +1495,82 @@ def notice(message):
     print("::notice::" + message, file=sys.stderr)
 
 
+def warn_once(key, message):
+    """warn(message) the first time key is seen in this run (GitHub shows only a few annotations per step)."""
+    with STATE_LOCK:
+        if key in RUN_STATE["warned"]:
+            return
+        RUN_STATE["warned"].add(key)
+    warn(message)
+
+
+def budget_left(args):
+    """Seconds left of the restore time budget; None when there is no budget."""
+    deadline = getattr(args, "deadline", None)
+    return None if deadline is None else max(0.0, deadline - time.monotonic())
+
+
+def budget_spent(args):
+    left = budget_left(args)
+    return left is not None and left <= 0
+
+
+def bounded(args, seconds, floor=5.0):
+    """seconds, cut to what is left of the restore budget but never below floor."""
+    left = budget_left(args)
+    return seconds if left is None else max(floor, min(seconds, left))
+
+
+def say(message):
+    """One flushed progress line on stderr (stdout carries the JSON report)."""
+    print("cache: " + message, file=sys.stderr, flush=True)
+
+
+class Progress:
+    """Per-archive progress with elapsed seconds; quick local hits stay silent, everything slow or remote is named."""
+
+    def __init__(self, label, total, clock=time.monotonic):
+        self.label, self.total, self.clock = label, total, clock
+        self.started, self.done, self.running = clock(), 0, {}
+        self.lock = threading.Lock()
+
+    def begin(self, item):
+        with self.lock:
+            self.running[item["id"]] = self.clock()
+
+    def finish(self, item, outcome):
+        now = self.clock()
+        with self.lock:
+            took = now - self.running.pop(item["id"], now)
+            self.done += 1
+            number = self.done
+        if outcome != "local" or took >= SLOW_SECONDS:
+            say("%s %d/%d %s %s %.1fs (elapsed %.0fs)" % (
+                self.label, number, self.total, item["id"][:8], outcome, took, now - self.started))
+
+    def heartbeat(self):
+        now = self.clock()
+        with self.lock:
+            waiting = sorted(self.running.items(), key=lambda pair: pair[1])
+            done = self.done
+        say("%s %d/%d done, still working on %s (elapsed %.0fs)" % (
+            self.label, done, self.total,
+            ", ".join("%s %.0fs" % (key[:8], now - began) for key, began in waiting[:8]) or "nothing", now - self.started))
+
+    def summary(self, sources):
+        say("%s finished %d/%d archives in %.0fs: %s" % (
+            self.label, self.done, self.total, self.clock() - self.started,
+            ", ".join("%s=%d" % pair for pair in sorted(sources.items())) or "no sources"))
+
+
 def remote_copy(args, source, destination):
     """Copy one remote file. False when it is absent; an unreachable remote is warned about once, then skipped."""
     if not args.remote:
         return False
-    command = ["rclone", "copyto", source, str(destination), "--retries", "1",
-               "--contimeout", "20s", "--timeout", "60s"]
+    command = ["rclone", "copyto", source, str(destination), *RCLONE_LIMITS]
     try:
-        subprocess.run(command, check=True, timeout=args.backend_timeout, stdin=subprocess.DEVNULL,
+        subprocess.run(command, check=True, timeout=bounded(args, args.backend_timeout, RECOVERY_FLOOR_SECONDS),
+                       stdin=subprocess.DEVNULL,
                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=scrubbed_env(S3_ENV))
         return Path(destination).is_file()
     except subprocess.CalledProcessError as error:
@@ -1524,20 +1611,33 @@ def try_p2p(item, dest):
     helper = Path(__file__).with_name("p2p_fetch.py")
     if not helper.is_file() or not isinstance(item.get("p2p"), dict):
         return False
-    live, safe = dict(os.environ), scrubbed_env()
+    safe = scrubbed_env()
+    entry = {"sha256": item.get("sha256"), "p2p": item["p2p"]}
     try:
-        os.environ.clear()
-        os.environ.update(safe)
         spec = importlib.util.spec_from_file_location("p2p_fetch", helper)
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
-        return bool(module.fetch({"sha256": item.get("sha256"), "p2p": item["p2p"]}, Path(dest)))
+        try:
+            takes_runner = "run" in inspect.signature(module.fetch).parameters
+        except (TypeError, ValueError):
+            takes_runner = False
+        if takes_runner:
+            def run(command, **options):
+                return subprocess.run(command, env=safe, **options)
+
+            return bool(module.fetch(entry, Path(dest), run=run))
+        with ENV_LOCK:
+            live = dict(os.environ)
+            try:
+                os.environ.clear()
+                os.environ.update(safe)
+                return bool(module.fetch(entry, Path(dest)))
+            finally:
+                os.environ.clear()
+                os.environ.update(live)
     except Exception:
         warn("p2p helper failed; continuing without it")
         return False
-    finally:
-        os.environ.clear()
-        os.environ.update(live)
 
 
 def artstore_token():
@@ -1546,23 +1646,24 @@ def artstore_token():
 
 def artstore_module():
     """The sibling artstore.py, loaded once; None (with one message) when it is absent or broken."""
-    if "module" not in ARTSTORE_STATE:
-        helper = Path(__file__).with_name("artstore.py")
-        module = None
-        if not helper.is_file():
-            notice("artifact store unavailable; continuing without it")
-        else:
-            try:
-                spec = importlib.util.spec_from_file_location("artstore", helper)
-                module = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(module)
-                if not callable(getattr(module, "fetch", None)):
-                    raise AttributeError("fetch")
-            except Exception:
-                warn("artifact store helper failed; continuing without it")
-                module = None
-        ARTSTORE_STATE["module"] = module
-    return ARTSTORE_STATE["module"]
+    with STATE_LOCK:
+        if "module" not in ARTSTORE_STATE:
+            helper = Path(__file__).with_name("artstore.py")
+            module = None
+            if not helper.is_file():
+                notice("artifact store unavailable; continuing without it")
+            else:
+                try:
+                    spec = importlib.util.spec_from_file_location("artstore", helper)
+                    module = importlib.util.module_from_spec(spec)
+                    spec.loader.exec_module(module)
+                    if not callable(getattr(module, "fetch", None)):
+                        raise AttributeError("fetch")
+                except Exception:
+                    warn("artifact store helper failed; continuing without it")
+                    module = None
+            ARTSTORE_STATE["module"] = module
+        return ARTSTORE_STATE["module"]
 
 
 def artstore_session():
@@ -1570,20 +1671,21 @@ def artstore_session():
 
     None (remembered, with one message) when the store has no token or repository, or its index cannot be read.
     """
-    if "session" not in ARTSTORE_STATE:
-        session = None
-        module = artstore_module()
-        if module is not None:
-            try:
-                client = module.client_mod.from_environment()
-                if client is None:
-                    notice("artifact store unavailable (no token or repository); continuing without it")
-                else:
-                    session = {"client": client, "index": module.load_index(client)}
-            except Exception:
-                warn("artifact store index unavailable; continuing without it")
-        ARTSTORE_STATE["session"] = session
-    return ARTSTORE_STATE["session"]
+    with STATE_LOCK:
+        if "session" not in ARTSTORE_STATE:
+            session = None
+            module = artstore_module()
+            if module is not None:
+                try:
+                    client = module.client_mod.from_environment()
+                    if client is None:
+                        notice("artifact store unavailable (no token or repository); continuing without it")
+                    else:
+                        session = {"client": client, "index": module.load_index(client)}
+                except Exception:
+                    warn("artifact store index unavailable; continuing without it")
+            ARTSTORE_STATE["session"] = session
+        return ARTSTORE_STATE["session"]
 
 
 def is_bik(stored):
@@ -1591,10 +1693,54 @@ def is_bik(stored):
                for name in (stored.get("archive_name"), stored.get("listed_name")))
 
 
+def artstore_packs(index, sha256, now):
+    """(packs holding sha256, those the index already shows expired or missing); ((), ()) when the index cannot say."""
+    try:
+        names = sorted({part["pack"] for part in index["blobs"][sha256]["parts"]})
+        gone = []
+        for name in names:
+            entry = index["packs"].get(name)
+            expires = None if entry is None else entry.get("expires_at")
+            if entry is None or entry.get("artifact_id") is None or (expires is not None and expires <= now):
+                gone.append(name)
+        return names, gone
+    except (KeyError, TypeError, AttributeError):
+        return (), ()
+
+
+def artstore_dead(names):
+    with STATE_LOCK:
+        return any(name in ARTSTORE_STATE.setdefault("dead_packs", {}) for name in names)
+
+
+def artstore_mark_dead(name, reason):
+    with STATE_LOCK:
+        dead = ARTSTORE_STATE.setdefault("dead_packs", {})
+        if name in dead:
+            return
+        dead[name] = reason
+    warn("artifact store pack %s is %s; its other blobs fall through to the next source" % (name, reason))
+
+
+def artstore_outcome(names, hit):
+    """Negative cache: a pack that fails PACK_FAIL_LIMIT fetches in a row is dead for the rest of the run."""
+    dying = []
+    with STATE_LOCK:
+        counts = ARTSTORE_STATE.setdefault("pack_failures", {})
+        for name in names:
+            counts[name] = 0 if hit else counts.get(name, 0) + 1
+            if counts[name] >= PACK_FAIL_LIMIT:
+                dying.append((name, counts[name]))
+    for name, count in dying:
+        artstore_mark_dead(name, "unreadable (%d failed fetches)" % count)
+
+
 def try_artstore(stored, dest, args):
     """Artifact-store hook: fill dest with the blob whose SHA-256 is stored["sha256"]; False on any miss.
 
     Skipped unless --artstore is on, and never used for .bik. The caller re-verifies whatever lands in dest.
+    A pack the index shows expired or missing, or that failed repeatedly, is remembered for the run: the other
+    blobs in it are not tried and fall through to the next source at once.
     """
     if not getattr(args, "artstore", False) or is_bik(stored):
         return False
@@ -1606,13 +1752,20 @@ def try_artstore(stored, dest, args):
     if session is None:
         args.artstore = False
         return False
+    names, gone = artstore_packs(session["index"], stored["sha256"], time.time())
+    for name in gone:
+        artstore_mark_dead(name, "expired or missing")
+    if artstore_dead(names):
+        return False
     try:
         if module.fetch(stored["sha256"], Path(dest), client=session["client"], index=session["index"]):
+            artstore_outcome(names, True)
             return True
     except Exception:
         warn("artifact store failed; continuing without it")
         args.artstore = False
     Path(dest).unlink(missing_ok=True)
+    artstore_outcome(names, False)
     return False
 
 
@@ -1712,12 +1865,21 @@ def recover_object(item, stored, root, args, pins):
     if stored["size"] <= args.max_bytes and try_artstore(stored, path, args) and verified_object(
             item, stored, root, args):
         return "artstore"
-    if args.remote and stored["size"] <= args.max_bytes and remote_copy(
-            args, args.remote + "/objects/" + path.name, path) and verified_object(item, stored, root, args):
+    remote = args.remote
+    if remote and stored["size"] <= args.max_bytes and remote_copy(
+            args, remote + "/objects/" + path.name, path) and verified_object(item, stored, root, args):
         return "remote"
     block = item.get("p2p") or pins.get(item["id"], {}).get("p2p")
+    with STATE_LOCK:
+        if stored["sha256"] in RUN_STATE["p2p_missed"]:
+            return ""
     peer = {**item, "sha256": stored["sha256"], "size": stored["size"], "p2p": block}
-    return "p2p" if try_p2p(peer, path) and verified_object(item, stored, root, args) else ""
+    if try_p2p(peer, path) and verified_object(item, stored, root, args):
+        return "p2p"
+    if block:
+        with STATE_LOCK:
+            RUN_STATE["p2p_missed"].add(stored["sha256"])
+    return ""
 
 
 def recover_objects(item, old, root, args, pins):
@@ -1764,6 +1926,40 @@ def download(item, old, root, args):
     return result
 
 
+def upstream_host(item):
+    return (urlsplit(item.get("url") or "").hostname or "").lower()
+
+
+def host_down(host):
+    """True once HOST_FAIL_LIMIT revalidations in a row could not reach this host: stop asking it this run."""
+    with STATE_LOCK:
+        return bool(host) and RUN_STATE["host_failures"].get(host, 0) >= HOST_FAIL_LIMIT
+
+
+def note_host(host, reachable):
+    with STATE_LOCK:
+        failures = RUN_STATE["host_failures"]
+        failures[host] = 0 if reachable else failures.get(host, 0) + 1
+
+
+def network_failure(error):
+    """A failure that says the host is down or slow (timeouts, connection errors, 5xx/408/429), not a bad file."""
+    message = str(error)
+    return (isinstance(error, (HTTPException, TimeoutError, URLError))
+            or message == "network request failed" or message.startswith(("HTTP 5", "HTTP 408", "HTTP 429")))
+
+
+def revalidation_args(args):
+    """Restore only asks whether a valid local copy is still current: one retry and a short socket timeout."""
+    if getattr(args, "command", None) != "restore":
+        return args
+    limited = copy.copy(args)
+    limited.retries = min(args.retries, 1)
+    limited.timeout = min(args.timeout, REVALIDATE_TIMEOUT_SECONDS)
+    limited.download_timeout = bounded(args, args.download_timeout, 60)
+    return limited
+
+
 def acquire(item, old, root, args, pins):
     """Return (entry, source): a verified local copy of one archive, downloading only what changed.
 
@@ -1772,7 +1968,9 @@ def acquire(item, old, root, args, pins):
     object comes from the artifact store, the optional remote, then P2P (all only for a hash the manifest
     knows; source "artstore" or "recovered"), then the website. When the website cannot be reached (restore and refresh alike, unless --force), the
     last valid local copy is returned unchanged with source "stale-local": its manifest entry keeps
-    its old checked_at and validators, so the next run asks the website again.
+    its old checked_at and validators, so the next run asks the website again. Restore bounds the optional work:
+    once the restore time budget (--restore-budget-seconds) is spent, or a host failed HOST_FAIL_LIMIT checks in a
+    row, a valid local copy is used as "stale-local" without asking the website. A missing copy is still fetched.
     """
     if not (local_valid(root, old) and objects_match_selection(item, old)):
         source = recover_objects(item, old, root, args, pins)
@@ -1782,14 +1980,97 @@ def acquire(item, old, root, args, pins):
     if is_pinned(item, old, pins) or (
             not args.force and not has_validators(old) and upstream_current(old, args.max_age_days)):
         return old, "local"
+    host = upstream_host(item)
+    if not args.force:
+        if budget_spent(args):
+            warn_once("budget", "restore time budget spent; archives not yet checked use their last cached copy")
+            return old, "stale-local"
+        if host_down(host):
+            warn_once("host:" + host, "upstream host unreachable earlier in this run; "
+                      "its remaining archives use their last cached copy")
+            return old, "stale-local"
     try:
-        result = download(item, old, root, args)
-    except (ValueError, OSError, HTTPException, subprocess.SubprocessError, zipfile.BadZipFile):
+        result = download(item, old, root, revalidation_args(args))
+    except (ValueError, OSError, HTTPException, subprocess.SubprocessError, zipfile.BadZipFile) as error:
         if args.force:
             raise
+        note_host(host, not network_failure(error))
         warn("upstream could not be checked for " + item["id"][:8] + "; using the last cached copy")
         return old, "stale-local"
+    note_host(host, True)
     return result, "revalidated" if result.get("evidence") == "conditional-304" else "website"
+
+
+class Runner:
+    """A bounded pool of daemon threads, so a crashed run exits at once instead of draining its queue."""
+
+    def __init__(self, workers):
+        self.jobs, self.closed, self.count = queue.SimpleQueue(), threading.Event(), workers
+        for number in range(workers):
+            threading.Thread(target=self.work, name="acquire-%d" % number, daemon=True).start()
+
+    def work(self):
+        while True:
+            job = self.jobs.get()
+            if job is None:
+                return
+            future, function, arguments = job
+            if self.closed.is_set() or not future.set_running_or_notify_cancel():
+                future.cancel()
+                continue
+            try:
+                future.set_result(function(*arguments))
+            except BaseException as error:
+                future.set_exception(error)
+
+    def submit(self, function, *arguments):
+        future = concurrent.futures.Future()
+        self.jobs.put((future, function, arguments))
+        return future
+
+    def close(self):
+        self.closed.set()
+        for _ in range(self.count):
+            self.jobs.put(None)
+
+
+class Acquisitions:
+    """acquire() for the archives of one run, started ahead of the in-order loop on a bounded runner.
+
+    result(item, old) returns what acquire returned, or raises what it raised, in the loop's thread. An item that was
+    not submitted (refresh, or --workers 1) is acquired inline when asked for, so its order is the loop's order.
+    """
+
+    def __init__(self, root, args, pins, progress, workers=1):
+        self.root, self.args, self.pins, self.progress = root, args, pins, progress
+        self.futures = {}
+        self.runner = Runner(workers) if workers > 1 else None
+
+    def run(self, item, old):
+        self.progress.begin(item)
+        try:
+            outcome = acquire(item, old, self.root, self.args, self.pins)
+        except BaseException:
+            self.progress.finish(item, "failed")
+            raise
+        self.progress.finish(item, outcome[1])
+        return outcome
+
+    def submit(self, item, old):
+        if self.runner is not None:
+            self.futures[item["id"]] = self.runner.submit(self.run, item, old)
+
+    def result(self, item, old):
+        future = self.futures.get(item["id"])
+        if future is None:
+            return self.run(item, old)
+        while not concurrent.futures.wait([future], timeout=HEARTBEAT_SECONDS).done:
+            self.progress.heartbeat()
+        return future.result()
+
+    def close(self):
+        if self.runner is not None:
+            self.runner.close()
 
 
 def kept_objects(manifest, limit):
@@ -1871,6 +2152,11 @@ def main(argv=None):
     parser.add_argument("--download-timeout", type=float, default=1800)
     parser.add_argument("--integrity-timeout", type=float, default=300)
     parser.add_argument("--backend-timeout", type=float, default=1800)
+    parser.add_argument("--restore-budget-seconds", type=float, default=RESTORE_BUDGET_SECONDS,
+                        help="restore only: total time for optional work; after it, archives with a valid local "
+                             "copy skip the upstream check and use it (stale-local, with a warning). 0 disables")
+    parser.add_argument("--workers", type=int, default=RESTORE_WORKERS,
+                        help="restore only: archives acquired concurrently (1..%d)" % MAX_WORKERS)
     parser.add_argument("--retries", type=int, default=2)
     parser.add_argument("--max-bytes", type=int, default=MAX_LINK_BYTES)
     parser.add_argument("--allow-uncached-by-policy", action="append", default=[], metavar="SECTION[::STEP]",
@@ -1905,6 +2191,8 @@ def main(argv=None):
         parser.error("timeouts and max-bytes must be positive")
     if args.command == "restore" and args.destination is None:
         parser.error("restore requires --destination")
+    if not 1 <= args.workers <= MAX_WORKERS or args.restore_budget_seconds < 0:
+        parser.error("workers must be 1..%d; restore-budget-seconds must not be negative" % MAX_WORKERS)
     if args.command == "import-existing":
         if args.resource_index is None or args.archive_dir is None:
             parser.error("import-existing requires --resource-index and --archive-dir")
@@ -1982,6 +2270,16 @@ def main(argv=None):
         stage_dir = (args.stage_dir or root.parent / (root.name + ".stage-only")).resolve()
         stage_on = keep is not None and bool(args.emit_stage_manifest)
         stage = {"hold": set(), "left": args.stage_total_bytes}
+        RUN_STATE.update(p2p_missed=set(), host_failures={}, warned=set())
+        restoring = args.command == "restore"
+        args.deadline = (time.monotonic() + args.restore_budget_seconds
+                         if restoring and args.restore_budget_seconds else None)
+        tracker = Progress(args.command, len(items))
+        acquisitions = Acquisitions(root, args, pins, tracker, args.workers if restoring else 1)
+        for item in items if restoring else ():
+            if not uncached_reason(item):
+                acquisitions.submit(item, manifest["entries"].get(item["id"]) or (
+                    pin_as_entry(pins[item["id"]]) if item["id"] in pins else {}))
         for item in items:
             old = manifest["entries"].get(item["id"]) or (
                 pin_as_entry(pins[item["id"]]) if item["id"] in pins else {})
@@ -2012,7 +2310,7 @@ def main(argv=None):
                         report["entries"].append(entry)
                         continue
                 before = manifest["entries"].get(item["id"])
-                old, source = acquire(item, old, root, args, pins)
+                old, source = acquisitions.result(item, old)
                 entry["source"] = source
                 pinned = is_pinned(item, old, pins)
                 if old != before:
@@ -2026,6 +2324,7 @@ def main(argv=None):
                         reserve_stage(old, kept_objects(manifest, limit), args, stage)
                 else:
                     taken, created, restored = set(), [], []
+                    copy_started = time.monotonic()
                     try:
                         for each in entry_objects(old):
                             restored.append({"file": restore_object(item, each, root, args, restored_names,
@@ -2035,6 +2334,8 @@ def main(argv=None):
                         for path in created:
                             path.unlink(missing_ok=True)
                         raise
+                    if time.monotonic() - copy_started >= SLOW_SECONDS:
+                        say("restore copied %s in %.1fs" % (item["id"][:8], time.monotonic() - copy_started))
                     entry.update(status="restored", metadata_unknown=old.get("metadata_unknown", not bool(
                         old.get("etag") or old.get("last_modified"))))
                     if pinned:
@@ -2061,8 +2362,10 @@ def main(argv=None):
             prune(root, manifest, limit, stage["hold"], stage_dir)
         if args.emit_stage_manifest:
             atomic_json(args.emit_stage_manifest, stage_candidates(root, manifest, stage_dir))
+        acquisitions.close()
         sources = [each["source"] for each in report["entries"] if "source" in each]
         report["sources"] = {name: sources.count(name) for name in sorted(set(sources))}
+        tracker.summary(report["sources"])
     if args.command != "import-existing":
         stale = sum(1 for each in report["entries"] if each.get("status") == "stale-unknown")
         if stale and args.command == "refresh":
