@@ -16,9 +16,13 @@ deselected base component. Deselected components are reported, never covered.
 The "Base build: N of M mods selected" count the GUI shows is the application's
 (`selection::counts` after `game::enforce_selectable` and the dependency rules), so a
 subset run asks the same binary (`modsync selection --json`) before launching and
-refuses any difference from the plan. The OCR of that line is retried for 15 s and
-the lines read, a screenshot and the attempts are recorded in `selection_summary`
-before a mismatch is raised.
+refuses any difference from the plan. The desktop starts in wizard mode (Welcome page), so the
+driver dismisses the telemetry prompt, then clicks the "Summary / selection" nav button and
+verifies the page by OCR (the "Base build" line or the page's controls) before reading it,
+re-locating and re-clicking every 10 s (the buttons are disabled while the app is busy) and
+failing with `summary_page_not_reached` if it never appears. The OCR of the Base build line
+is then retried and the lines read, a screenshot and the attempts are recorded in
+`selection_summary` before a mismatch is raised.
 """
 
 import argparse
@@ -42,13 +46,30 @@ import gui_diag
 
 WORKER_LOGS = (("worker", "driver.log", gui_diag.TAIL_LINES),)
 SUMMARY_WINDOW_SECONDS = 60
-SUMMARY_CROP = (0.2, 0.08, 0.98, 0.92)
+SUMMARY_CROP = (0.0, 0.05, 1.0, 0.95)
 SUMMARY_OCR_LOG_LINES = 4
 SUMMARY_OCR_TAIL_LINES = 12
 SUMMARY_OCR_LINE_CHARS = 120
-SUMMARY_TAIL_KEYWORDS = re.compile(r"base\s*build|selected|\bmods?\b|sharing", re.IGNORECASE)
-EDIT_GATE_WINDOW_SECONDS = 30
+SUMMARY_TAIL_KEYWORDS = re.compile(
+    r"base\s*build|selected|\bmods?\b|sharing|summary|telemetry|select\s*all|wizard|"
+    r"getting\s*started|validation|pause", re.IGNORECASE)
 EDIT_GATE_PATTERN = re.compile(r"Pause\s*sharing\s*before\s*editing", re.IGNORECASE)
+SUMMARY_NAV_LABEL = "Summary / selection"
+SUMMARY_NAV_PATTERN = r"Summary\s*\S{0,2}\s*sel\w*"
+SUMMARY_NAV_WINDOW_SECONDS = 90
+SUMMARY_NAV_RETRY_SECONDS = 10
+SUMMARY_NAV_SETTLE_SECONDS = 0.7
+SUMMARY_PAGE_MARKER = re.compile(
+    r"Base\s*build|Select\s*all\b|Select\s*category|Select\s*multiple\s*categories|"
+    r"All\s*categories|Load\s*a\s*guide\s*first", re.IGNORECASE)
+PAUSE_SHARING_PATTERN = r"Pause\s*sharing\s*to\s*edit"
+PAUSE_SHARING_RETRY_SECONDS = 5
+TELEMETRY_PROMPT = re.compile(
+    r"Telemetry\s*preference|Allow\s*configured|Keep\s*tele\w*\s*off", re.IGNORECASE)
+TELEMETRY_KEEP_PATTERN = r"Keep\s*tele\w*(?:\s*off)?|\btele\w*\s*off\b"
+TELEMETRY_PROMPT_WINDOW_SECONDS = 20
+TELEMETRY_RETRY_SECONDS = 3
+SUMMARY_NAV_SCREENSHOT = "summary-navigation.png"
 SUMMARY_SCREENSHOT = "selection-summary.png"
 SUMMARY_PATTERN = re.compile(r"Base\s*build\s*:?\s*(\d+)\s*of\s*(\d+)\s*mods?\s*selected", re.IGNORECASE)
 SUMMARY_FRAGMENT = re.compile(r"Base\s*build.{0,70}", re.IGNORECASE)
@@ -57,6 +78,16 @@ QUERY_TIMEOUT_SECONDS = 120
 
 class Blocked(Exception):
     pass
+
+
+def clean_ocr_lines(lines):
+    read = [" ".join(text.split())[:SUMMARY_OCR_LINE_CHARS] for text, _ in lines]
+    return [text for text in read if text]
+
+
+def filtered_ocr_tail(read):
+    kept = [text for text in read if SUMMARY_TAIL_KEYWORDS.search(text)]
+    return "\n".join(kept[-SUMMARY_OCR_TAIL_LINES:])
 
 
 def digest(path):
@@ -226,13 +257,13 @@ def wait_for_selection_summary(observe, plan, result, private, window=SUMMARY_WI
     while True:
         shot, _, lines = observe()
         summary["attempts"] += 1
-        read = [" ".join(text.split())[:SUMMARY_OCR_LINE_CHARS] for text, _ in lines]
-        read = [text for text in read if text]
-        print("gui_rust: selection summary attempt %d: %s" % (
-            summary["attempts"], " | ".join(read[:SUMMARY_OCR_LOG_LINES]) or "<no text>"),
+        read = clean_ocr_lines(lines)
+        relevant = [text for text in read if SUMMARY_TAIL_KEYWORDS.search(text)]
+        print("gui_rust: selection summary attempt %d (%d lines, %d relevant): %s" % (
+            summary["attempts"], len(read), len(relevant),
+            " | ".join((relevant or read)[:SUMMARY_OCR_LOG_LINES]) or "<no text>"),
             flush=True)
-        kept = [text for text in read if SUMMARY_TAIL_KEYWORDS.search(text)]
-        summary["ocr_tail"] = "\n".join(kept[-SUMMARY_OCR_TAIL_LINES:])
+        summary["ocr_tail"] = filtered_ocr_tail(read)
         for text, _ in lines:
             for fragment in SUMMARY_FRAGMENT.finditer(text):
                 shown = " ".join(fragment.group(0).split())
@@ -380,66 +411,163 @@ def drive(args, private, result):
             return observe(scale=1, box=SUMMARY_CROP)
         return observe(scale=1)
 
-    def locate(label, optional=False, window=None):
+    last_hit = {}
+
+    def find_control(shot, data, lines, pattern):
+        matches = []
+        for text, indices in lines:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if not match:
+                continue
+            cursor = 0
+            matching = []
+            for index in indices:
+                end = cursor + len(data["text"][index])
+                if cursor < match.end() and end > match.start():
+                    matching.append(index)
+                cursor = end + 1
+            if not matching:
+                continue
+            left = min(data["left"][index] for index in matching)
+            top = min(data["top"][index] for index in matching)
+            right = max(data["left"][index] + data["width"][index] for index in matching)
+            bottom = max(data["top"][index] + data["height"][index] for index in matching)
+            width, height = pyautogui.size()
+            matched = " ".join(text[match.start():match.end()].split())[:SUMMARY_OCR_LINE_CHARS]
+            matches.append((len(text), (left + right) / 4 * width / shot.width,
+                            (top + bottom) / 4 * height / shot.height, matched))
+        if not matches:
+            return None
+        _, horizontal, vertical, matched = min(matches)
+        last_hit["text"] = matched
+        return horizontal, vertical
+
+    def locate(label, optional=False, window=None, pattern=None):
         limit = min(deadline, time.monotonic() + (window or (4 if optional else args.timeout)))
-        pattern = r"\s*".join(re.escape(token) for token in
-                                re.findall(r"\w+|[^\w\s]", label))
+        pattern = pattern or r"\s*".join(re.escape(token) for token in
+                                         re.findall(r"\w+|[^\w\s]", label))
         while time.monotonic() < limit:
             shot, data, lines = observe()
-            matches = []
-            for text, indices in lines:
-                match = re.search(pattern, text, re.IGNORECASE)
-                if not match:
-                    continue
-                cursor = 0
-                matching = []
-                for index in indices:
-                    end = cursor + len(data["text"][index])
-                    if cursor < match.end() and end > match.start():
-                        matching.append(index)
-                    cursor = end + 1
-                left = min(data["left"][index] for index in matching)
-                top = min(data["top"][index] for index in matching)
-                right = max(data["left"][index] + data["width"][index] for index in matching)
-                bottom = max(data["top"][index] + data["height"][index] for index in matching)
-                width, height = pyautogui.size()
-                matches.append((len(text), (left + right) / 4 * width / shot.width,
-                                (top + bottom) / 4 * height / shot.height))
-            if matches:
-                _, horizontal, vertical = min(matches)
+            point = find_control(shot, data, lines, pattern)
+            if point is not None:
                 shot.save(private / f"{len(events):02d}-observed.png")
-                return horizontal, vertical
+                return point
             time.sleep(0.5)
         if optional:
             return None
         raise Blocked("visible_control_missing")
 
-    def click(label, optional=False, window=None):
-        result["stage"] = label
-        mark()
-        point = locate(label, optional, window)
-        if point is None:
-            return
+    def press(point, label):
         pyautogui.moveTo(*point)
         pyautogui.mouseDown()
         time.sleep(0.15)
         pyautogui.mouseUp()
         pyautogui.moveTo(5, 5)
-        events.append({"control": label, "coordinates": point})
+        matched = last_hit.get("text", "")
+        events.append({"control": label, "coordinates": point, "matched": matched})
         save(private / "clicks.json", events)
-        time.sleep(0.7)
+        print("gui_rust: click %r at (%d, %d) matched %r" % (label, point[0], point[1], matched),
+              flush=True)
+        time.sleep(SUMMARY_NAV_SETTLE_SECONDS)
 
-    def open_edit_gate():
-        click("Pause sharing to edit", optional=True, window=EDIT_GATE_WINDOW_SECONDS)
-        result["stage"] = "edit_gate"
+    def click(label, optional=False, window=None, pattern=None):
+        result["stage"] = label
         mark()
-        limit = min(deadline, time.monotonic() + EDIT_GATE_WINDOW_SECONDS)
-        while True:
-            _, _, lines = observe()
-            if not any(EDIT_GATE_PATTERN.search(text) for text, _ in lines):
+        point = locate(label, optional, window, pattern)
+        if point is None:
+            return
+        press(point, label)
+
+    def telemetry_point(shot, data, lines):
+        if not any(TELEMETRY_PROMPT.search(text) for text, _ in lines):
+            return None
+        return find_control(shot, data, lines, TELEMETRY_KEEP_PATTERN)
+
+    def dismiss_telemetry_prompt():
+        result["stage"] = "Keep telemetry off"
+        mark()
+        started = time.monotonic()
+        limit = min(deadline, started + TELEMETRY_PROMPT_WINDOW_SECONDS)
+        last_press = None
+        seen = False
+        while time.monotonic() < limit:
+            shot, data, lines = observe()
+            visible = any(TELEMETRY_PROMPT.search(text) for text, _ in lines)
+            if seen and not visible:
                 return
-            if time.monotonic() >= limit:
-                raise Blocked("sharing_edit_gate_still_closed")
+            seen = seen or visible
+            now = time.monotonic()
+            if visible and (last_press is None or now - last_press >= TELEMETRY_RETRY_SECONDS):
+                point = telemetry_point(shot, data, lines)
+                if point is not None:
+                    last_press = now
+                    press(point, "Keep telemetry off")
+                    continue
+            time.sleep(0.5)
+
+    def reach_summary_page():
+        result["stage"] = "summary_navigation"
+        mark()
+        navigation = {"label": SUMMARY_NAV_LABEL, "attempts": 0, "reached": False,
+                      "nav_label_not_found": 0, "clicks": [], "ocr_tail": ""}
+        result["summary_navigation"] = navigation
+        started = time.monotonic()
+        limit = min(deadline, started + SUMMARY_NAV_WINDOW_SECONDS)
+        next_click = started
+        last_pause = None
+
+        def record(point, label):
+            navigation["clicks"] = (navigation["clicks"] + [{
+                "control": label, "x": int(point[0]), "y": int(point[1]),
+                "after_seconds": round(time.monotonic() - started, 1),
+                "matched": last_hit.get("text", "")}])[-12:]
+
+        while True:
+            shot, data, lines = observe()
+            navigation["attempts"] += 1
+            read = clean_ocr_lines(lines)
+            relevant = [text for text in read if SUMMARY_TAIL_KEYWORDS.search(text)]
+            navigation["ocr_tail"] = filtered_ocr_tail(read)
+            print("gui_rust: summary navigation attempt %d (%d lines, %d relevant): %s" % (
+                navigation["attempts"], len(read), len(relevant),
+                " | ".join((relevant or read)[:SUMMARY_OCR_LOG_LINES]) or "<no text>"), flush=True)
+            if any(SUMMARY_PAGE_MARKER.search(text) for text in read):
+                navigation["reached"] = True
+                shot.save(private / SUMMARY_NAV_SCREENSHOT)
+                save(private / "summary-navigation.json", navigation)
+                return
+            now = time.monotonic()
+            point = telemetry_point(shot, data, lines)
+            if point is not None:
+                press(point, "Keep telemetry off")
+                record(point, "Keep telemetry off")
+                continue
+            if (any(EDIT_GATE_PATTERN.search(text) for text in read)
+                    and (last_pause is None or now - last_pause >= PAUSE_SHARING_RETRY_SECONDS)):
+                point = find_control(shot, data, lines, PAUSE_SHARING_PATTERN)
+                if point is not None:
+                    last_pause = now
+                    press(point, "Pause sharing to edit")
+                    record(point, "Pause sharing to edit")
+                    continue
+            if now >= next_click:
+                point = find_control(shot, data, lines, SUMMARY_NAV_PATTERN)
+                if point is not None:
+                    next_click = now + SUMMARY_NAV_RETRY_SECONDS
+                    press(point, SUMMARY_NAV_LABEL)
+                    record(point, SUMMARY_NAV_LABEL)
+                    continue
+                navigation["nav_label_not_found"] += 1
+            if now >= limit:
+                shot.save(private / SUMMARY_NAV_SCREENSHOT)
+                navigation["screenshot"] = SUMMARY_NAV_SCREENSHOT
+                save(private / "summary-navigation.json", navigation)
+                last = navigation["clicks"][-1] if navigation["clicks"] else None
+                print("gui_rust: summary page not reached after %d attempts; last click %s; "
+                      "OCR tail: %s" % (navigation["attempts"], json.dumps(last),
+                                        navigation["ocr_tail"].replace("\n", " | ") or "<none>"),
+                      flush=True)
+                raise Blocked("summary_page_not_reached")
             time.sleep(0.5)
 
     command = [str(args.binary), "gui", "--allow-multiple-instances",
@@ -461,9 +589,8 @@ def drive(args, private, result):
             process = subprocess.Popen(command, cwd=private, env=environment,
                                        stdout=log, stderr=subprocess.STDOUT)
             mark("first_screenshot")
-            click("Keep telemetry off", optional=True)
-            click("Summary / selection")
-            open_edit_gate()
+            dismiss_telemetry_prompt()
+            reach_summary_page()
             if plan["click_select_all"]:
                 click("Select all")
             if plan["subset"]:
@@ -629,6 +756,8 @@ def execute(args, result):
                 paths={private: "$EVIDENCE", args.work_dir: "$WORK_DIR"})
             if "selection_summary" in result:
                 result["worker_diagnostics"]["selection_summary"] = result["selection_summary"]
+            if "summary_navigation" in result:
+                result["worker_diagnostics"]["summary_navigation"] = result["summary_navigation"]
             if not (private / "result.json").is_file():
                 result["stage"] = (result["worker_diagnostics"]["stage"]
                                    or result["worker_diagnostics"]["phase"])

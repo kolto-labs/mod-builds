@@ -693,14 +693,22 @@ GUI mode does the same build, conversion and validation, then hands off to a dri
     --json` on the private copy with `--game-dir` (the Aspyr-exclusive and dependent
     rules of `game::enforce_selectable`) and blocks with
     `application_selection_differs_from_plan` (GUIDs in `selection_oracle`) if it
-    selects a different set. The GUI's `Base build: N of M mods selected` line must then
-    show that count; OCR (alternating a central-area 1x crop and a full-frame 1x read, every 3rd attempt
-    full-frame 2x; 10+ samples) is retried for 60 s, after the
-    `Pause sharing to edit` click (up to 30 s) and the disappearance of the `Pause sharing
-    before editing` gate text (else `sharing_edit_gate_still_closed`); each attempt is printed
-    to `driver.log`, and the lines read, the attempts, the last OCR text (`ocr_tail`) and a
-    screenshot path are recorded in `selection_summary` (also in `worker_diagnostics`)
-    before `selection_summary_does_not_match_expected_subset` is raised.
+    selects a different set. The desktop starts in wizard mode (Welcome page), and the
+    `Summary / selection` nav button (`src/ui/main_window.rs`) is disabled while the app is busy
+    (loading, saving the telemetry choice, sharing transitions), so a click can be silently
+    ignored. The driver therefore dismisses the `Telemetry preference` prompt (`Keep telemetry
+    off`, up to 20 s, retried, and again whenever it reappears), clicks `Summary / selection`,
+    and verifies the page by OCR (`Base build`, `Select all`, category controls) before polling,
+    re-locating and re-clicking every 10 s for up to 90 s. The page's edit gate
+    (`Pause sharing before editing`) is handled in the same loop by clicking `Pause sharing to
+    edit`. Otherwise it fails with `summary_page_not_reached`; `summary_navigation` (also in
+    `worker_diagnostics`) records the attempts, each click's coordinates and matched OCR text,
+    and a keyword-filtered `ocr_tail`. The GUI's `Base build: N of M mods selected` line must
+    then show the count; OCR (alternating a full-width body crop and a full-frame 1x read, every
+    3rd attempt full-frame 2x; 10+ samples) is retried for 60 s; each attempt is printed
+    (flushed, relevant lines first) to `driver.log`, and the lines read, the attempts, the last
+    OCR text (`ocr_tail`) and a screenshot path are recorded in `selection_summary` (also in
+    `worker_diagnostics`) before `selection_summary_does_not_match_expected_subset` is raised.
   - Components that remain selected must not depend on a deselected one
     (`selected_component_depends_on_deselected_component`).
   - Widescreen-only components are excluded, never installed: the report lists them as

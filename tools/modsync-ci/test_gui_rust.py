@@ -483,6 +483,29 @@ class SummaryWaitTests(unittest.TestCase):
         self.assertEqual(summary["observed"], [])
 
 
+class SummaryNavigationConstantTests(unittest.TestCase):
+    def test_nav_label_tolerates_ocr_noise_in_the_slash(self):
+        for text in ("Summary / selection", "Summary | selection", "Summary I selection", "Summary/selection"):
+            self.assertRegex(text, gui_rust.SUMMARY_NAV_PATTERN)
+
+    def test_page_marker_needs_the_summary_page_not_the_welcome_page(self):
+        self.assertTrue(gui_rust.SUMMARY_PAGE_MARKER.search("Base build: 30 of 145 mods selected"))
+        self.assertFalse(gui_rust.SUMMARY_PAGE_MARKER.search("Installing multiple KOTOR mods is tedious"))
+        self.assertFalse(gui_rust.SUMMARY_PAGE_MARKER.search("Getting started Summary / selection"))
+
+    def test_telemetry_prompt_never_matches_sharing_text_or_the_allow_button_alone(self):
+        self.assertFalse(gui_rust.TELEMETRY_PROMPT.search("Peer: Paused; KeepSharing off"))
+        self.assertTrue(gui_rust.TELEMETRY_PROMPT.search("Telemetry preference"))
+        self.assertRegex("Keep telemetry off", gui_rust.TELEMETRY_KEEP_PATTERN)
+        self.assertNotRegex("Allow configured telemetry", gui_rust.TELEMETRY_KEEP_PATTERN)
+        self.assertNotRegex("Keep sharing verified completed archives", gui_rust.TELEMETRY_KEEP_PATTERN)
+
+    def test_summary_crop_keeps_the_left_edge_where_the_page_body_starts(self):
+        left, top, right, bottom = gui_rust.SUMMARY_CROP
+        self.assertEqual((left, right), (0.0, 1.0))
+        self.assertTrue(0 < top < bottom < 1)
+
+
 class WorkerFailureTests(unittest.TestCase):
     prepare = ExecuteTests.prepare
     run_execute = ExecuteTests.run_execute
