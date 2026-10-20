@@ -324,6 +324,7 @@ Names only.
 | --- | --- | --- |
 | `STEAM_USERNAME`, `STEAM_PASSWORD` | secret | Steam account that owns both games |
 | `STEAM_CONFIG_VDF` | secret, optional | Saved SteamCMD login, so CI needs no Steam Guard approval |
+| `STEAM_RECOVERY_CODE` | secret, optional | Steam Guard recovery code(s), tried after the password sign-in and before `STEAM_GUARD_CODES` |
 | `STEAM_GUARD_CODES` | secret, optional | Single-use Steam backup codes, tried after the other sign-ins fail |
 | `CACHE_ENCRYPTION_KEY` | secret | Seals and unseals the game cache, the `game-<game>-sealed` backup artifact and the artifact-store blobs (not the archive bucket) |
 | `GAME_SEED_URL_K1`, `GAME_SEED_KEY_K1`, `GAME_SEED_SHA256_K1` (and `_K2`) | secret, optional | Encrypted game seed tried before SteamCMD; the SHA-256 is optional ([steam.md](steam.md#game-seed)) |

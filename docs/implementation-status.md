@@ -14,7 +14,7 @@ Everything runs from one workflow, `.github/workflows/ci.yml`; see [ci.md](ci.md
   push to a pull request cancels its older run; other runs are not cancelled.
 - **`game` (k1, k2; one at a time):** look up the encrypted game cache, or
   download with SteamCMD (saved login if `STEAM_CONFIG_VDF` is set, then password,
-  then `STEAM_GUARD_CODES`) and save it. Fails only if the game is still missing.
+  then `STEAM_RECOVERY_CODE`, then `STEAM_GUARD_CODES`; stops at Steam's rate limit) and save it. Fails only if the game is still missing.
   `.bik` movies are never cached. See [steam.md](steam.md).
 - **`mods`:** restores the Actions cache, optionally refreshes the Cloudflare R2
   bucket (write credentials; skipped without them), then runs `cache.py refresh`,
