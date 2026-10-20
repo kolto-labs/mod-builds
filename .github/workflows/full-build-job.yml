@@ -1,0 +1,76 @@
+name: Full build lane (reusable)
+on:
+  workflow_call:
+    inputs:
+      game: {type: string, required: true}
+      mode: {type: string, required: true}
+      platform: {type: string, required: true}
+      implementation: {type: string, required: true}
+      runner-mode: {type: string, required: true}
+    secrets:
+      FULL_BUILD_CONFIG: {required: true}
+      PRIVATE_CI_TOKEN: {required: true}
+      PRIVATE_CI_RECIPIENT: {required: true}
+      CACHE_ACCESS_KEY_ID: {required: false}
+      CACHE_SECRET_ACCESS_KEY: {required: false}
+permissions:
+  contents: read
+jobs:
+  execute:
+    runs-on: ${{ inputs.runner-mode == 'self-hosted' && fromJSON('["self-hosted"]') || fromJSON(format('["{0}"]', inputs.platform == 'windows' && 'windows-latest' || inputs.platform == 'macos' && 'macos-latest' || 'ubuntu-latest')) }}
+    timeout-minutes: 360
+    steps:
+      - name: Checkout public controller
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with: {persist-credentials: false}
+      - name: Validate private lane contract
+        shell: python
+        env:
+          CONFIG: ${{ secrets.FULL_BUILD_CONFIG }}
+          GAME: ${{ inputs.game }}
+          MODE: ${{ inputs.mode }}
+          PLATFORM: ${{ inputs.platform }}
+          IMPLEMENTATION: ${{ inputs.implementation }}
+          RUNNER_MODE: ${{ inputs.runner-mode }}
+        run: |
+          import json, os, sys
+          if os.environ['MODE'] not in ('manual','cli','gui') or os.environ['GAME'] not in ('k1','k2'):
+              sys.exit('Invalid full-build lane.')
+          if os.environ['PLATFORM'] not in ('windows','linux','macos') or not os.environ['IMPLEMENTATION']:
+              sys.exit('Invalid platform or implementation.')
+          if os.environ['RUNNER_MODE'] == 'hosted':
+              sys.exit('Hosted full-build execution is disabled until a trusted private source adapter is configured.')
+          try:
+              config = json.loads(os.environ['CONFIG'])
+          except Exception as exc:
+              sys.exit(f'Private build configuration is unavailable: {exc}')
+          if not isinstance(config, dict) or config.get('game') != os.environ['GAME']:
+              sys.exit('Private build configuration does not match the selected game.')
+          print('Private full-build contract accepted; game inputs remain on the trusted runner.')
+      - name: Install Python runtime
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with: {python-version: '3.12'}
+      - name: Prepare full.md lane receipt
+        shell: python
+        env:
+          CONFIG: ${{ secrets.FULL_BUILD_CONFIG }}
+          GAME: ${{ inputs.game }}
+          MODE: ${{ inputs.mode }}
+          OUTPUT: ${{ runner.temp }}/modsync-full-build
+        run: |
+          import json, os, pathlib, subprocess, sys
+          root = pathlib.Path(os.environ['OUTPUT']); root.mkdir(mode=0o700, parents=True, exist_ok=True)
+          config = json.loads(os.environ['CONFIG'])
+          path = root / 'config.json'; path.write_text(json.dumps(config), encoding='utf-8'); path.chmod(0o600)
+          command = [sys.executable, 'tools/private-ci/src/full_build.py', 'prepare', '--config', str(path), '--game', os.environ['GAME'], '--mode', os.environ['MODE'], '--output', str(root)]
+          completed = subprocess.run(command, text=True)
+          if completed.returncode:
+              sys.exit(completed.returncode)
+      - name: Upload encrypted receipt only
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: full-build-receipt-${{ inputs.game }}-${{ inputs.mode }}-${{ inputs.platform }}-${{ inputs.implementation }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/modsync-full-build/*.age
+          if-no-files-found: ignore
+          retention-days: 7

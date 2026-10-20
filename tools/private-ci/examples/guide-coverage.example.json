@@ -1,0 +1,72 @@
+{
+  "schema_version": 1,
+  "statement": "Public source inventory coverage only. No download URL was resolved and no payload was acquired. Every candidate remains an installation blocker until explicitly mapped to a verified immutable cache generation.",
+  "sources": [
+    {
+      "game": "k1",
+      "source": {
+        "path": "content/k1/full.md",
+        "url": "https://raw.githubusercontent.com/kolto-labs/mod-builds/21b2f0499d28ecd4ee2092701dee5792ba5da4b9/content/k1/full.md",
+        "revision": "21b2f0499d28ecd4ee2092701dee5792ba5da4b9",
+        "sha256": "8f4e7b164954b203d872cb7e92e06d153abe84195f683ae36d428b5b99cd75a2",
+        "byte_length": 156453,
+        "line_count": 3460
+      },
+      "section_count": 219,
+      "named_mod_sections": 197,
+      "resources_by_provider": {
+        "internal": 5,
+        "info": 15,
+        "deadlystream": 173,
+        "nexus": 23,
+        "mega": 13
+      },
+      "resource_count": 229,
+      "download_candidate_count": 217,
+      "resolved_count": 0,
+      "complete": false,
+      "includes_general_setup": true,
+      "aspyr_variant_sections": 0,
+      "optional_variant_sections": 14,
+      "coverage_scope": "all ordered source sections and all published URL occurrences, including platform notes and optional variants"
+    },
+    {
+      "game": "k2",
+      "source": {
+        "path": "content/k2/full.md",
+        "url": "https://raw.githubusercontent.com/kolto-labs/mod-builds/21b2f0499d28ecd4ee2092701dee5792ba5da4b9/content/k2/full.md",
+        "revision": "21b2f0499d28ecd4ee2092701dee5792ba5da4b9",
+        "sha256": "f442bdf574031623ed577609730d887069b9bc8e38e8e2f38ecc43a7e7487d5f",
+        "byte_length": 137837,
+        "line_count": 2841
+      },
+      "section_count": 176,
+      "named_mod_sections": 154,
+      "resources_by_provider": {
+        "internal": 2,
+        "info": 13,
+        "nexus": 17,
+        "forum": 1,
+        "deadlystream": 136,
+        "direct": 1,
+        "mega": 6
+      },
+      "resource_count": 176,
+      "download_candidate_count": 168,
+      "resolved_count": 0,
+      "complete": false,
+      "includes_general_setup": true,
+      "aspyr_variant_sections": 4,
+      "optional_variant_sections": 9,
+      "coverage_scope": "all ordered source sections and all published URL occurrences, including platform notes and optional variants"
+    }
+  ],
+  "combined": {
+    "resource_count": 385,
+    "download_candidate_count": 367,
+    "resolved_count": 0,
+    "complete": false,
+    "one_shared_immutable_generation_required": true,
+    "deduplication": "SHA256 exact published URL with all guide owners preserved"
+  }
+}
