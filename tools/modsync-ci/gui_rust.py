@@ -103,6 +103,13 @@ CONFIRMATION_NOISE_LINES = 3
 CHANGED_FRAME_LOG_LINES = 150
 INSTALLATION_STARTED_MARKER = re.compile(
     r"Installing\b(?!\s*multiple)|What.?s\s*Happening|Stop\s*Install|Installation\s*complete", re.IGNORECASE)
+INSTALLATION_COMPLETE_PATTERN = r"Installation\s*complete(?!d)"
+INSTALLATION_FAILURE_MARKER = re.compile(
+    r"Install\s*stopped|completed\s*with\s*errors|reported\s*errors|\[Error\]", re.IGNORECASE)
+INSTALLATION_COMPONENT_STEP_PATTERN = re.compile(
+    r"(?:\[Error\]\s*)?(?:Error\s*:\s*)?(?P<component>.+?)\s*/\s*step\s+"
+    r"(?P<step>\d+)\s*\((?P<action>[^)]*)\)", re.IGNORECASE)
+PATCHER_ERROR_PATTERN = re.compile(r"\[Error\]|Could\s+not\s+find\s+the\s+file", re.IGNORECASE)
 NEXT_PATTERN = r"\bNext\b"
 PAUSE_SHARING_PATTERN = r"Pause\s*sharing\s*to\s*edit"
 PAUSE_SHARING_RETRY_SECONDS = 5
@@ -125,6 +132,37 @@ BANNER_OCR_SCALES = (1, 2)
 
 class Blocked(Exception):
     pass
+
+
+def installation_failure_details(lines):
+    relevant = []
+    failed_component = None
+    failed_step = None
+    patcher_error_line = None
+    for line in lines:
+        line = " ".join(str(line).split())
+        if not line:
+            continue
+        component_step = INSTALLATION_COMPONENT_STEP_PATTERN.search(line)
+        if component_step:
+            failed_component = component_step.group("component").strip()
+            failed_step = component_step.group("step")
+            relevant.append(line)
+        if INSTALLATION_FAILURE_MARKER.search(line):
+            relevant.append(line)
+        if patcher_error_line is None and PATCHER_ERROR_PATTERN.search(line):
+            patcher_error_line = line
+            relevant.append(line)
+    return {
+        "failure_ocr_lines": list(dict.fromkeys(relevant)),
+        "failed_component": failed_component,
+        "failed_step": failed_step,
+        "patcher_error_line": patcher_error_line,
+    }
+
+
+def record_installation_failure(result, lines):
+    result.update(installation_failure_details(lines))
 
 
 def describe_error(error):
@@ -627,6 +665,9 @@ def drive(args, private, result):
         (private / "latest-ocr.txt").write_text(text, encoding="utf-8")
         if progress["phase"] == "first_screenshot":
             mark("install")
+        if INSTALLATION_FAILURE_MARKER.search(text):
+            record_installation_failure(result, text.splitlines())
+            raise Blocked("installation_stopped")
         if re.search(
             r"validation (?:failed|stopped|did not complete)|installation (?:failed|stopped|review blocked)|"
             r"review remains open|requires? review|unreviewed|inputs changed|"
@@ -933,7 +974,8 @@ def drive(args, private, result):
                        fragments=(INSTALL_START_FRAGMENTS, INSTALL_START_ANCHOR))
             result["stage"] = "installation"
             mark()
-            locate("Installation complete", scales=BANNER_OCR_SCALES)
+            locate("Installation complete", pattern=INSTALLATION_COMPLETE_PATTERN,
+                   scales=BANNER_OCR_SCALES)
             result["ui_completed"] = True
             mark(stage="receipt")
             verify_receipt(args, result, check_time, plan["expected_components"])

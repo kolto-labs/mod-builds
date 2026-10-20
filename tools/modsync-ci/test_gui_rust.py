@@ -491,6 +491,25 @@ class SummaryWaitTests(unittest.TestCase):
 
 
 class SummaryNavigationConstantTests(unittest.TestCase):
+    def test_installation_complete_pattern_excludes_completed_with_errors(self):
+        self.assertRegex("Installation complete", gui_rust.INSTALLATION_COMPLETE_PATTERN)
+        self.assertNotRegex("Installation completed with errors", gui_rust.INSTALLATION_COMPLETE_PATTERN)
+
+    def test_installation_failure_details_capture_markers_and_component_step(self):
+        details = gui_rust.installation_failure_details([
+            "Component Alpha / step 4 (Copy)",
+            "[Error] Could not find the file source.dat",
+            "Installation completed with errors",
+        ])
+        self.assertEqual(details["failed_component"], "Component Alpha")
+        self.assertEqual(details["failed_step"], "4")
+        self.assertEqual(details["patcher_error_line"], "[Error] Could not find the file source.dat")
+        self.assertEqual(details["failure_ocr_lines"], [
+            "Component Alpha / step 4 (Copy)",
+            "[Error] Could not find the file source.dat",
+            "Installation completed with errors",
+        ])
+
     def test_nav_label_tolerates_ocr_noise_in_the_slash(self):
         for text in ("Summary / selection", "Summary | selection", "Summary I selection", "Summary/selection"):
             self.assertRegex(text, gui_rust.SUMMARY_NAV_PATTERN)
