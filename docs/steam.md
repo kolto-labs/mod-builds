@@ -253,10 +253,15 @@ the full guide covers its Aspyr-specific steps.
 
 ## Backup-code fallback
 
-If the saved config (`STEAM_CONFIG_VDF`) and the password sign-in both fail, the `game` job tries each code in the optional `STEAM_GUARD_CODES` secret as `+login <user> <password> <code>`. It stops as soon as `chitin.key` appears. Each code can only be used once, so a code is spent whether or not the rest of the run succeeds.
+If the saved config (`STEAM_CONFIG_VDF`) and the password sign-in both fail, the `game` job tries each code in the optional `STEAM_GUARD_CODES` secret as `+login <user> <password> <code>`. It stops as soon as `chitin.key` appears.
 
 Get the codes from Steam → Account details → Manage Steam Guard → Get backup codes. Set the secret from your own terminal so the value never shows up in a log:
 
-    gh secret set STEAM_GUARD_CODES -R kolto-labs/mod-builds   # paste the codes separated by spaces, then Ctrl-D
+```sh
+gh secret set STEAM_GUARD_CODES -R kolto-labs/mod-builds    # paste the codes separated by spaces, then Ctrl-D
 
-When the codes run out, generate a new set and update the secret.
+```
+
+When you need to refresh them, generate a new set and update the secret.
+
+---
