@@ -252,7 +252,7 @@ def refresh(args: argparse.Namespace) -> int:
     finally:
         if staged is not None and not retain:
             staged.unlink(missing_ok=True)
-    print(f"Updated {args.config_secret} for {repo}; private configuration replaced atomically")
+    print(f"Updated private configuration secret for {repo}; private configuration replaced atomically")
     return 0
 
 

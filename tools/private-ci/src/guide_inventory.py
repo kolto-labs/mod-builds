@@ -29,7 +29,7 @@ def classify_url(url: str) -> dict[str, Any]:
     host, path = (parts.hostname or "").lower(), parts.path.lower()
     if parts.scheme not in ("http", "https"):
         return {"provider": "internal", "kind": "internal_reference", "download_candidate": False}
-    if host.endswith("nexusmods.com") and (host == "nexusmods.com" or host.endswith(".nexusmods.com")):
+    if host == "nexusmods.com" or host.endswith(".nexusmods.com"):
         return {"provider": "nexus", "kind": "payload_candidate" if ARCHIVE.search(url) else "mod_page", "download_candidate": bool(ARCHIVE.search(url) or "/mods/" in path)}
     if host == "deadlystream.com" or host.endswith(".deadlystream.com"):
         file_page = "/files/file/" in path
