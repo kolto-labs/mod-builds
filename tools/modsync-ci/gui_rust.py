@@ -134,6 +134,18 @@ class Blocked(Exception):
     pass
 
 
+def strip_ocr_path_prefix(value):
+    text = " ".join(str(value).split())
+    component = text
+    for separator in re.finditer(r":\s+", text):
+        prefix = text[:separator.start()]
+        if re.search(r"/|\\\\|\.\s*modsync|(?:^|\s)[A-Za-z]\s*:", prefix, re.IGNORECASE):
+            candidate = text[separator.end():].strip()
+            if candidate:
+                component = candidate
+    return component
+
+
 def installation_failure_details(lines):
     relevant = []
     failed_component = None
@@ -145,7 +157,7 @@ def installation_failure_details(lines):
             continue
         component_step = INSTALLATION_COMPONENT_STEP_PATTERN.search(line)
         if component_step:
-            failed_component = component_step.group("component").strip()
+            failed_component = strip_ocr_path_prefix(component_step.group("component"))
             failed_step = component_step.group("step")
             relevant.append(line)
         if INSTALLATION_FAILURE_MARKER.search(line):

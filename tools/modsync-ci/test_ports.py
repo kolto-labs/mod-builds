@@ -5318,6 +5318,27 @@ class RustGuiInstallQuarantineTests(unittest.TestCase):
         parsed = self.attribute(self.stopped(failed_component="Alpha", failed_step="1"))
         self.assertEqual((parsed["component"], parsed["step"], parsed["action"]), ("Alpha", 1, "Move"))
 
+    def test_an_ocr_spaced_path_prefix_matches_the_known_component(self):
+        parsed = self.attribute(self.stopped(
+            failed_component="/home/ runner /work/_temp/.modsync-40b572ea12a82752: Alpha",
+            failed_step="1"))
+        self.assertEqual((parsed["component"], parsed["step"]), ("Alpha", 1))
+
+    def test_component_matching_ignores_punctuation_and_accepts_a_unique_contained_name(self):
+        components = [{"Guid": "40000000-0000-0000-0000-000000000001", "Name": "Example Mod Plus"}]
+        self.assertEqual(ports.find_failing_component(components, "example-mod-plus"),
+                         (("40000000-0000-0000-0000-000000000001", components[0]), None))
+        self.assertEqual(ports.find_failing_component(components, "Example Mod"),
+                         (("40000000-0000-0000-0000-000000000001", components[0]), None))
+
+    def test_component_matching_keeps_the_hard_failure_for_ambiguous_or_unknown_names(self):
+        components = [{"Guid": "40000000-0000-0000-0000-000000000001", "Name": "Example Mod One"},
+                      {"Guid": "40000000-0000-0000-0000-000000000002", "Name": "Example Mod Two"}]
+        self.assertEqual(ports.find_failing_component(components, "Example Mod"),
+                         (None, "component_ambiguous"))
+        self.assertEqual(ports.find_failing_component(components, "Other Thing"),
+                         (None, "component_unknown"))
+
     def test_the_action_in_the_step_field_wins(self):
         parsed = self.attribute(self.stopped(failed_component="Alpha", failed_step="2 (Patcher)"))
         self.assertEqual((parsed["step"], parsed["action"]), (2, "Patcher"))

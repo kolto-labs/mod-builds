@@ -1353,17 +1353,42 @@ def converted_components(converted):
     return [component for component in components if isinstance(component, dict)]
 
 
+def strip_ocr_path_prefix(value):
+    text = " ".join(str(value).split())
+    component = text
+    for separator in re.finditer(r":\s+", text):
+        prefix = text[:separator.start()]
+        if re.search(r"/|\\\\|\.\s*modsync|(?:^|\s)[A-Za-z]\s*:", prefix, re.IGNORECASE):
+            candidate = text[separator.end():].strip()
+            if candidate:
+                component = candidate
+    return component
+
+
+def normalized_component_name(value):
+    return re.sub(r"[\W_]+", "", strip_ocr_path_prefix(value).casefold())
+
+
 def find_failing_component(components, name):
     """The one converted component a validate error names, or (None, why it cannot be attributed)."""
+    if not name:
+        return None, "component_unknown"
     matches = {}
     for component in components:
         if name in (component.get("Name"), component.get("Heading")):
             matches[normalized_reference(component.get("Guid"))] = component
     if not matches:
-        folded = name.casefold()
+        folded = normalized_component_name(name)
         for component in components:
-            if folded in (str(component.get("Name", "")).casefold(),
-                          str(component.get("Heading", "")).casefold()):
+            names = (component.get("Name"), component.get("Heading"))
+            if any(folded == normalized_component_name(value) for value in names if value):
+                matches[normalized_reference(component.get("Guid"))] = component
+    if not matches:
+        folded = normalized_component_name(name)
+        for component in components:
+            names = (component.get("Name"), component.get("Heading"))
+            if any(folded in normalized_component_name(value) or
+                   normalized_component_name(value) in folded for value in names if value):
                 matches[normalized_reference(component.get("Guid"))] = component
     if not matches:
         return None, "component_unknown"
@@ -2126,7 +2151,7 @@ def load_rust_gui_driver_failure(path):
 
 def rust_gui_failure_fields(failure, components):
     """Return a Rust GUI failure in the shape consumed by quarantine_failure, or None."""
-    named = (failure.get("failed_component") or "").strip() or None
+    named = strip_ocr_path_prefix(failure.get("failed_component") or "").strip() or None
     step_field = failure.get("failed_step") or ""
     number = RUST_GUI_NUMBER.search(step_field)
     step = int(number.group()) if number else None

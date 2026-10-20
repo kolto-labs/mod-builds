@@ -510,6 +510,13 @@ class SummaryNavigationConstantTests(unittest.TestCase):
             "Installation completed with errors",
         ])
 
+    def test_installation_failure_details_removes_an_ocr_spaced_path_prefix(self):
+        details = gui_rust.installation_failure_details([
+            "/home/ runner /work/_temp/.modsync-40b572ea12a82752: Example Mod / step 2 (Patcher)",
+        ])
+        self.assertEqual(details["failed_component"], "Example Mod")
+        self.assertEqual(details["failed_step"], "2")
+
     def test_nav_label_tolerates_ocr_noise_in_the_slash(self):
         for text in ("Summary / selection", "Summary | selection", "Summary I selection", "Summary/selection"):
             self.assertRegex(text, gui_rust.SUMMARY_NAV_PATTERN)
