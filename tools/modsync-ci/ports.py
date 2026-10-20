@@ -2045,6 +2045,11 @@ def load_gui_driver_failure(path):
 
 
 GUI_ACTION_NAME = re.compile(r"[A-Za-z]+")
+GUI_INSTALLATION_STOPPED = "installation_stopped"
+RUST_GUI_STEP = re.compile(r"\s/ step (?P<step>\d+)(?:\s*\((?P<action>[^)]*)\))?")
+RUST_GUI_NUMBER = re.compile(r"\d+")
+RUST_GUI_PARENTHESIZED = re.compile(r"\(([^)]*)\)")
+RUST_GUI_FIELD_LIMIT = 200
 
 
 def gui_failure_log(install_failure):
@@ -2088,6 +2093,163 @@ def attribute_gui_install_failure(install_failure, components):
         if mod_guid and item.get("component_guid") and normalized_reference(mod_guid) != item["component_guid"]:
             return [], "instruction_component_mismatch"
     return resolved, None
+
+
+def flatten_strings(value, depth=0):
+    """Every string in a nested driver report, in order, within the diagnostics depth bound."""
+    if isinstance(value, str):
+        return [value]
+    if depth >= DIAGNOSTICS_MAX_DEPTH:
+        return []
+    if isinstance(value, list):
+        return [text for item in value for text in flatten_strings(item, depth + 1)]
+    if isinstance(value, dict):
+        return [text for item in value.values() for text in flatten_strings(item, depth + 1)]
+    return []
+
+
+def load_rust_gui_driver_failure(path):
+    """Read the bounded Rust GUI failure fields and redacted evidence text."""
+    try:
+        if path.is_symlink() or not path.is_file():
+            return None, None
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None, None
+    if not isinstance(data, dict):
+        return None, None
+    return gui_diag.bounded_text(data.get("reason"), 120), {
+        "failed_component": gui_diag.bounded_text(data.get("failed_component"), RUST_GUI_FIELD_LIMIT),
+        "failed_step": gui_diag.bounded_text(data.get("failed_step"), RUST_GUI_FIELD_LIMIT),
+        "text": "\n".join(flatten_strings(sanitize_diagnostics(data)))}
+
+
+def rust_gui_failure_fields(failure, components):
+    """Return a Rust GUI failure in the shape consumed by quarantine_failure, or None."""
+    named = (failure.get("failed_component") or "").strip() or None
+    step_field = failure.get("failed_step") or ""
+    number = RUST_GUI_NUMBER.search(step_field)
+    step = int(number.group()) if number else None
+    parenthesized = RUST_GUI_PARENTHESIZED.search(step_field)
+    action = parenthesized.group(1).strip() if parenthesized else ""
+    names = sorted({str(each.get("Name", each.get("Heading"))) for each in components},
+                   key=len, reverse=True)
+    error_line = None
+    for line in reversed(ANSI_ESCAPE.sub("", failure.get("text") or "").splitlines()):
+        match = RUST_GUI_STEP.search(line)
+        if match is None:
+            continue
+        prefix = line[:match.start()].casefold()
+        owner = named or next((name for name in names if prefix.endswith(name.casefold())), None)
+        if owner is None or not prefix.endswith(owner.casefold()):
+            continue
+        if step is not None and int(match.group("step")) != step:
+            continue
+        named, step = owner, int(match.group("step"))
+        action = action or (match.group("action") or "").strip()
+        error_line = clean_line(" ".join(line.split()))
+        break
+    if named is None or step is None:
+        return None
+    if not action:
+        match, _ = find_failing_component(components, named)
+        records = (match[1].get("Instructions") or []) if match is not None else []
+        if 0 < step <= len(records) and isinstance(records[step - 1], dict):
+            action = str(records[step - 1].get("Action") or "")
+    error_line = error_line or clean_line(f"{named} / step {step}")
+    return {"component": named, "step": step, "action": action,
+            "message": error_line, "error_line": error_line}
+
+
+def install_rust_gui_with_quarantine(command, source, private, game, archives, converted, policy_guids,
+                                     deselect, report, env, max_iterations=QUARANTINE_MAX_ITERATIONS,
+                                     max_fraction=QUARANTINE_MAX_FRACTION):
+    """Run the Rust GUI driver with the shared bounded install quarantine policy."""
+    components = converted_components(converted)
+    policy = report.get("quarantine") or start_quarantine(
+        components, deselect, report, max_iterations, max_fraction)
+    report.setdefault(INSTALL_QUARANTINE_KEY, [])
+    directories = ["--input", str(converted), "--game-dir", str(game), "--source-dir", str(archives)]
+    baseline = None
+    if policy["max_iterations"] > 0:
+        started = time.monotonic()
+        progress("baseline_copy: started")
+        baseline = take_baseline(game, private, report)
+        finish_stage(report, "baseline_copy", started, (policy.get("baseline") or {}).get("status"))
+    attempt = 0
+    while True:
+        stage = gui_stage_name(attempt)
+        policy["install_attempts"] = attempt + 1
+        skipped = policy_guids | {item["component_guid"] for item in quarantined_entries(report)}
+        driver_report = private / gui_report_name(stage)
+        gui_work = private / ("gui-work" if attempt == 0 else f"gui-work-{stage}")
+        try:
+            run([sys.executable, str(Path(__file__).resolve().with_name("gui_rust.py")),
+                 "--binary", command[0], "--input", str(converted),
+                 "--game-dir", str(game), "--archives", str(archives),
+                 "--work-dir", str(gui_work), "--report", str(driver_report),
+                 "--timeout", "7000", "--exclude-widescreen"]
+                + [flag for guid_ in sorted(skipped) for flag in ("--deselect", guid_)],
+                source, private, stage, report, env)
+        except Blocked as failure:
+            if str(failure) != stage + "_failed":
+                raise
+            recorded = report.setdefault("failure", {
+                "stage": stage, "exit_code": None, "component": None, "step": None,
+                "action": None, "error_line": None})
+            reason, driver_failure = load_rust_gui_driver_failure(driver_report)
+            if reason:
+                recorded["driver_reason"] = reason
+            if driver_failure is None or reason != GUI_INSTALLATION_STOPPED:
+                raise
+            parsed = rust_gui_failure_fields(driver_failure, components)
+            if parsed:
+                recorded.update({key: parsed[key] for key in ("component", "step", "action", "error_line")})
+            else:
+                recorded["error_line"] = clean_line(driver_failure["text"]) or None
+
+            def stop(reason, parsed=parsed, stage=stage, failure=failure):
+                quarantine_stop(report, "install", stage, reason, parsed, failure)
+
+            lowered = ANSI_ESCAPE.sub("", driver_failure["text"]).lower()
+            if policy["max_iterations"] <= 0:
+                stop("quarantine_disabled")
+            if "panicked at" in lowered or "stack backtrace" in lowered:
+                stop("panic_detected")
+            if "rollback failed" in lowered:
+                stop("rollback_failed")
+            if not parsed:
+                stop("error_not_attributable")
+            if parsed["action"].casefold() not in INSTALL_QUARANTINE_ACTIONS:
+                stop("action_not_quarantinable")
+            if not game_is_populated(game):
+                stop("game_missing")
+            if baseline is None:
+                stop("baseline_copy_failed")
+
+            def restore(parsed=parsed, stage=stage, failure=failure):
+                number = attempt + 1
+                try:
+                    recover_engine_state(command, directories, game, source, private,
+                                         f"engine_restore_{number}", report, env, (archives,))
+                    started = time.monotonic()
+                    progress(f"baseline_restore_{number}: started")
+                    restore_game(game, baseline[0], baseline[1])
+                    finish_stage(report, f"baseline_restore_{number}", started, "verified")
+                except (OSError, subprocess.SubprocessError, shutil.Error):
+                    quarantine_stop(report, "install", stage, "restore_failed", parsed, failure)
+
+            quarantine_failure("install", parsed, stage, components, deselect, game, report, failure,
+                               before_commit=restore)
+            print(f"::warning::ports: {stage}: installation stopped at '{parsed['component']}', step "
+                  f"{parsed['step']} ({parsed['action']}); the game was restored and the component "
+                  f"is set aside, so the retried install is PARTIAL", file=sys.stderr)
+            attempt += 1
+            continue
+        report.pop("failure", None)
+        if baseline is not None:
+            shutil.rmtree(baseline[0], ignore_errors=True)
+        return driver_report
 
 
 def verify_typescript_gui_result(driver_report, selected_input, gui_work, game, reviewed_inputs_unchanged):
@@ -3044,20 +3206,15 @@ def execute(args, report):
         command, directories, deselect, converted, game, source, private, report, env,
         getattr(args, "max_quarantine", QUARANTINE_MAX_ITERATIONS),
         getattr(args, "max_quarantine_fraction", QUARANTINE_MAX_FRACTION))
-    quarantined_guids = {item["component_guid"] for item in quarantined_entries(report)}
-    gui_skipped = policy_guids | quarantined_guids
     if args.mode == "gui":
         if (digest(guide) != report["guide_sha256"]
                 or digest(converted) != report["converted_sha256"]):
             raise Blocked("reviewed_inputs_changed")
-        driver_report = private / "gui-report.json"
-        run([sys.executable, str(Path(__file__).resolve().with_name("gui_rust.py")),
-             "--binary", command[0], "--input", str(converted),
-             "--game-dir", str(game), "--archives", str(archives),
-             "--work-dir", str(private / "gui-work"),
-             "--report", str(driver_report), "--timeout", "7000", "--exclude-widescreen"]
-            + [flag for guid_ in sorted(gui_skipped) for flag in ("--deselect", guid_)],
-            source, private, "gui", report, env)
+        driver_report = install_rust_gui_with_quarantine(
+            command, source, private, game, archives, converted, policy_guids, deselect, report, env,
+            getattr(args, "max_quarantine", QUARANTINE_MAX_ITERATIONS),
+            getattr(args, "max_quarantine_fraction", QUARANTINE_MAX_FRACTION))
+        gui_skipped = policy_guids | {item["component_guid"] for item in quarantined_entries(report)}
         if not driver_report.is_file() or driver_report.is_symlink():
             raise Blocked("gui_completion_report_missing")
         result = json.loads(driver_report.read_text(encoding="utf-8"))

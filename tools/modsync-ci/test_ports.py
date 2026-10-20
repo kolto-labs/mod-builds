@@ -5284,5 +5284,157 @@ class GuiInstallQuarantineTests(unittest.TestCase):
         self.assertEqual(report["quarantine"]["stopped"]["reason"], "game_missing")
 
 
+class RustGuiInstallQuarantineTests(unittest.TestCase):
+    ALPHA = "10000000-0000-0000-0000-000000000011"
+    BETA = "10000000-0000-0000-0000-000000000021"
+
+    def setUp(self):
+        directory = tempfile.TemporaryDirectory()
+        self.addCleanup(directory.cleanup)
+        self.root = Path(directory.name)
+        self.game = self.root / "game"
+        self.game.mkdir()
+        (self.game / "chitin.key").write_text("x", encoding="utf-8")
+        self.archives = self.root / "archives"
+        self.archives.mkdir()
+        self.private = self.root / "private"
+        self.private.mkdir()
+        self.converted = self.private / "converted.toml"
+        self.converted.write_text(document(
+            component("Alpha", self.ALPHA), component("Beta Mod", self.BETA)), encoding="utf-8")
+        self.components = ports.converted_components(self.converted)
+
+    def stopped(self, **fields):
+        return {"status": "blocked", "reason": ports.GUI_INSTALLATION_STOPPED, **fields}
+
+    def attribute(self, document_):
+        path = self.private / "probe.json"
+        path.write_text(json.dumps(document_), encoding="utf-8")
+        reason, failure = ports.load_rust_gui_driver_failure(path)
+        self.assertEqual(reason, ports.GUI_INSTALLATION_STOPPED)
+        return ports.rust_gui_failure_fields(failure, self.components)
+
+    def test_the_driver_fields_attribute_the_failure_and_the_action_comes_from_the_instruction(self):
+        parsed = self.attribute(self.stopped(failed_component="Alpha", failed_step="1"))
+        self.assertEqual((parsed["component"], parsed["step"], parsed["action"]), ("Alpha", 1, "Move"))
+
+    def test_the_action_in_the_step_field_wins(self):
+        parsed = self.attribute(self.stopped(failed_component="Alpha", failed_step="2 (Patcher)"))
+        self.assertEqual((parsed["step"], parsed["action"]), (2, "Patcher"))
+
+    def test_null_fields_fall_back_to_the_evidence_text(self):
+        parsed = self.attribute(self.stopped(
+            failed_component=None, failed_step=None,
+            worker_diagnostics={"ocr_lines": ["Installing", "Beta Mod / step 2 (Patcher): missing file"]}))
+        self.assertEqual((parsed["component"], parsed["step"], parsed["action"]),
+                         ("Beta Mod", 2, "Patcher"))
+        self.assertIn("missing file", parsed["error_line"])
+
+    def test_a_missing_step_is_completed_from_the_evidence_text(self):
+        parsed = self.attribute(self.stopped(
+            failed_component="Beta Mod", failed_step=None,
+            worker_diagnostics={"ocr_lines": ["Beta Mod / step 3 (Extract)"]}))
+        self.assertEqual((parsed["step"], parsed["action"]), (3, "Extract"))
+
+    def test_no_component_or_step_anywhere_is_not_attributable(self):
+        self.assertIsNone(self.attribute(self.stopped(failed_component=None, failed_step=None)))
+        self.assertIsNone(self.attribute(self.stopped(
+            failed_component=None, failed_step=None,
+            worker_diagnostics={"ocr_lines": ["Unknown / step 2 (Patcher)"]})))
+        self.assertIsNone(self.attribute(self.stopped(failed_component="Alpha", failed_step=None)))
+
+    def test_a_missing_or_unreadable_report_yields_nothing(self):
+        self.assertEqual(ports.load_rust_gui_driver_failure(self.private / "absent.json"), (None, None))
+        broken = self.private / "broken.json"
+        broken.write_text("{", encoding="utf-8")
+        self.assertEqual(ports.load_rust_gui_driver_failure(broken), (None, None))
+
+    def run_loop(self, reports, **options):
+        pending = list(reports)
+        stages = []
+        deselected = {}
+
+        def fake_run(command, source, private, stage, report, env):
+            stages.append(stage)
+            deselected[stage] = [command[index + 1] for index, flag in enumerate(command)
+                                 if flag == "--deselect"]
+            if pending:
+                Path(command[command.index("--report") + 1]).write_text(
+                    json.dumps(pending.pop(0)), encoding="utf-8")
+                (self.game / "partial.bin").write_text("partial", encoding="utf-8")
+                report["commands"].append({"stage": stage, "exit_code": 1})
+                raise ports.Blocked(stage + "_failed")
+            report["commands"].append({"stage": stage, "exit_code": 0})
+
+        report = {"commands": []}
+        flags = []
+        error = None
+        with mock.patch.object(ports, "run", fake_run), \
+                mock.patch.object(ports, "recover_engine_state") as recover:
+            try:
+                ports.install_rust_gui_with_quarantine(
+                    ["modsync"], self.root, self.private, self.game, self.archives, self.converted,
+                    set(), flags, report, {}, options.get("max_iterations", 15),
+                    options.get("max_fraction", 0.5))
+            except ports.Blocked as blocked:
+                error = str(blocked)
+        return stages, deselected, report, error, recover
+
+    def test_a_stopped_installation_is_set_aside_and_retried_on_a_restored_game(self):
+        stages, deselected, report, error, recover = self.run_loop(
+            [self.stopped(failed_component="Alpha", failed_step="1")])
+        self.assertIsNone(error)
+        self.assertEqual(stages, ["gui", "gui_retry_1"])
+        self.assertEqual(deselected["gui"], [])
+        self.assertEqual(deselected["gui_retry_1"], [self.ALPHA])
+        self.assertEqual([(item["component_guid"], item["stage"])
+                          for item in report[ports.INSTALL_QUARANTINE_KEY]], [(self.ALPHA, "gui")])
+        self.assertFalse((self.game / "partial.bin").exists())
+        self.assertTrue((self.game / "chitin.key").is_file())
+        recover.assert_called_once()
+        self.assertEqual(report["quarantine"]["install_attempts"], 2)
+        self.assertNotIn("failure", report)
+
+    def test_an_unattributable_stop_stays_a_hard_failure_without_a_retry(self):
+        stages, _, report, error, recover = self.run_loop(
+            [self.stopped(failed_component=None, failed_step=None)])
+        self.assertEqual((error, stages), ("install_failed", ["gui"]))
+        recover.assert_not_called()
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "error_not_attributable")
+        self.assertFalse(report[ports.INSTALL_QUARANTINE_KEY])
+
+    def test_another_driver_reason_is_not_quarantined(self):
+        stages, _, report, error, recover = self.run_loop(
+            [{"status": "blocked", "reason": "validation_page_not_reached",
+              "failed_component": "Alpha", "failed_step": "1"}])
+        self.assertEqual((error, stages), ("gui_failed", ["gui"]))
+        recover.assert_not_called()
+        self.assertEqual(report["failure"]["driver_reason"], "validation_page_not_reached")
+        self.assertFalse(report[ports.INSTALL_QUARANTINE_KEY])
+
+    def test_the_quarantine_budget_bounds_the_retries(self):
+        stages, _, report, error, _ = self.run_loop(
+            [self.stopped(failed_component="Alpha", failed_step="1")], max_iterations=0)
+        self.assertEqual((error, stages), ("install_failed", ["gui"]))
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "quarantine_disabled")
+
+    def test_a_second_stop_after_the_cap_fails_the_lane(self):
+        stages, _, report, error, _ = self.run_loop(
+            [self.stopped(failed_component="Alpha", failed_step="1"),
+             self.stopped(failed_component="Beta Mod", failed_step="1")], max_iterations=1)
+        self.assertEqual((error, stages), ("install_quarantine_cap_exceeded", ["gui", "gui_retry_1"]))
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "iteration_cap_exceeded")
+        self.assertEqual([item["component_guid"] for item in report[ports.INSTALL_QUARANTINE_KEY]],
+                         [self.ALPHA])
+
+    def test_a_missing_game_directory_stays_a_hard_failure(self):
+        for child in self.game.iterdir():
+            child.unlink()
+        stages, _, report, error, _ = self.run_loop(
+            [self.stopped(failed_component="Alpha", failed_step="1")])
+        self.assertEqual((error, stages), ("install_failed", ["gui"]))
+        self.assertEqual(report["quarantine"]["stopped"]["reason"], "game_missing")
+
+
 if __name__ == "__main__":
     unittest.main()
