@@ -7,9 +7,8 @@ If you are looking to install mods, <ins>**PLEASE FOLLOW THE INSTRUCTIONS ON THE
 ## Private installer verification
 
 This fork includes six CLI/native GUI workflows for verifying the public guides
-with private installer implementations. See [setup and privacy boundaries](tools/private-ci/README.md)
-and the [US license research](tools/private-ci/docs/LICENSE_RESEARCH.md) before
-using purchased game files. Game originals are never public workflow artifacts.
+with private installer implementations. See [setup and privacy boundaries](tools/private-ci/README.md).
+Game originals are never public workflow artifacts.
 
 ## Branch Strategy
 

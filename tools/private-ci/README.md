@@ -28,17 +28,14 @@ ciphertext size remain public. Encryption does not hide those facts. Repository
 administrators and anyone allowed to modify secret-bearing workflows must be
 trusted. This is not a sandbox for malicious private code. Debug/PR execution is
 rejected before the private workload. Use reviewed immutable revisions and protect
-the public branch and workflow changes. The [Actions terms](https://docs.github.com/en/site-policy/github-terms/github-terms-for-additional-products-and-features#actions)
-limit hosted jobs to work associated with the software project in the repository;
-private tools are not categorically prohibited, but relabeling unrelated workloads
-is not a reliable way to establish that association.
+the public branch and workflow changes.
 
 The evidence directory is fixed to `artifacts/evidence`. It accepts bounded
 JSON/log/text/Markdown/TOML/HTML, installer UI PNGs, and validated `trace.zip` files.
 Game trees, Steam directories, original binaries/resources, checkpoints, and
 unsupported file types are rejected, even if encryption would conceal them.
-File filters cannot determine the copyright status of arbitrary renamed content;
-reviewed recipes must produce receipts, never asset dumps or game screenshots.
+File filters cannot classify arbitrary renamed content; reviewed recipes must
+produce receipts, never asset dumps or game screenshots.
 
 ## Configure this fork
 
@@ -117,7 +114,7 @@ gh run download RUN_ID --repo OWNER/PUBLIC --dir /your/private/evidence
 ## Adopt it for another associated project
 
 Fork the public companion/tooling, authenticate locally using `gh`, and create a
-configuration for your own licensed project. Generate six pinned callers with:
+configuration for your own project. Generate six pinned callers with:
 
 ```sh
 python tools/private-ci/gh-private-ci init --library kolto-labs/mod-builds --ref PUBLIC_TOOLING_40_CHARACTER_SHA --tool-path tools/private-ci --private-repo OWNER/PRIVATE --private-ref PRIVATE_40_CHARACTER_SHA --config /your/private/commands.json --directory /your/public/companion
@@ -131,19 +128,13 @@ passed to `gh secret set` through stdin; tokens are not command-line arguments.
 That setup uses `PRIVATE_CI_CONFIG`, unlike this fork's two implementation configs.
 Do not overwrite existing workflows without reviewing them; `--force` is explicit.
 
-## Actual purchased games
+## Actual game runs
 
-Purchased access, modding support, and permission for automated cloud copies are
-different questions. See [the US license research](docs/LICENSE_RESEARCH.md) and
-[case-law analysis](docs/US_CASE_LAW.md). Neither research nor encryption grants
-permission to reproduce or distribute copyrighted assets.
-
-The preferred actual-game path is an isolated owner-controlled runner with a
-legitimately installed baseline, tested without publishing or transferring game
-bytes. Exact edition terms still matter. File-only verification and game execution
-must be distinct recipes; none of these generic workflows launches a game itself.
-Original mod archives and their licenses remain separate required inputs before a
-complete original mod-build installation can be claimed.
+The preferred actual-game path is an isolated owner-controlled runner with an
+installed baseline, tested without publishing or transferring game bytes.
+File-only verification and game execution must be distinct recipes; none of these
+generic workflows launches a game itself. Original mod archives remain separate
+required inputs before a complete original mod-build installation can be claimed.
 
 `src/steam_acquire.py` is a prepared acquisition adapter, **not enabled by the six
 generated workflows**. It supports normal authenticated SteamCMD acquisition of
@@ -154,11 +145,9 @@ Credentials must be injected only into the acquisition process using
 Never paste them in chat or command arguments. Unproved Steam script escaping is
 rejected, including quotes/backslashes/control characters in credentials.
 
-Enable a storefront acquisition recipe only where your edition/platform terms
-permit that automation and hosting. A current Guard code may expire; concurrent
-Steam logins can invalidate sessions. No account was authenticated, game downloaded,
-game executed, or licensed game asset uploaded during preparation of this adapter.
-GOG offline installers can simplify access, but DRM-free is not a broader CI license.
+A current Guard code may expire; concurrent Steam logins can invalidate sessions.
+No account was authenticated, game downloaded, game executed, or game asset
+uploaded during preparation of this adapter.
 
 ## Validation
 
