@@ -126,6 +126,7 @@ jobs:
           STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
           STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
           STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+          STEAM_RECOVERY_CODE: ${{ secrets.STEAM_RECOVERY_CODE }}  # optional: Steam Guard recovery code(s), tried before STEAM_GUARD_CODES
           STEAM_GUARD_CODES: ${{ secrets.STEAM_GUARD_CODES }}  # optional: whitespace-separated Steam Guard backup codes
           CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
         run: |
@@ -138,23 +139,48 @@ jobs:
           options=(+@ShutdownOnFailedCommand 1 +@sSteamCmdForcePlatformType windows
             +force_install_dir "$RUNNER_TEMP/game")
           install=(+app_update "$APP_ID" validate +quit)
+          log="$RUNNER_TEMP/steamcmd-attempt.log"
+          : > "$log"
+          trap 'rm -f "$log"' EXIT
+          # One SteamCMD sign-in attempt. Steam's output goes to the job log and to $log (the last attempt only).
+          attempt() {
+            local label=$1 status=0
+            shift
+            "$@" 2>&1 | tee "$log" || status=${PIPESTATUS[0]}
+            [[ $status -eq 0 ]] || echo "::warning::steamcmd ($label) exited with status $status"
+          }
+          # Once Steam answers "Rate Limit Exceeded", every further sign-in only extends the lockout and the codes
+          # it has not checked yet are still unused, so stop and keep them for the next run.
+          rate_limited() { grep -q 'Rate Limit Exceeded' "$log"; }
           if [[ -n "$STEAM_CONFIG_VDF" ]]; then
             umask 077
             mkdir -p "$HOME/Steam/config"
             printf '%s' "$STEAM_CONFIG_VDF" | base64 -d > "$HOME/Steam/config/config.vdf"
-            "$steamcmd" "${options[@]}" +@NoPromptForPassword 1 +login "$STEAM_USERNAME" "${install[@]}" </dev/null || echo "::warning::steamcmd (saved login) exited with status $?"
+            attempt "saved login" "$steamcmd" "${options[@]}" +@NoPromptForPassword 1 +login "$STEAM_USERNAME" "${install[@]}" </dev/null
           fi
-          if [[ ! -f "$RUNNER_TEMP/game/chitin.key" ]]; then
-            printf '%s\n' "$STEAM_PASSWORD" | "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "${install[@]}" || echo "::warning::steamcmd (password login) exited with status $?"
+          if [[ ! -f "$RUNNER_TEMP/game/chitin.key" ]] && ! rate_limited; then
+            printf '%s\n' "$STEAM_PASSWORD" | attempt "password login" "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "${install[@]}"
           fi
-          # Fallback: Steam Guard backup codes (each is single-use; spent codes are rejected quickly).
-          for code in $STEAM_GUARD_CODES; do
+          # Fallback: the recovery code(s), then the Steam Guard backup codes, each as the code of a password login.
+          # Split on whitespace without glob expansion. Backup codes are single-use; spent ones are rejected quickly.
+          set -f
+          codes=($STEAM_RECOVERY_CODE $STEAM_GUARD_CODES)
+          set +f
+          n=0
+          for code in "${codes[@]}"; do
+            n=$((n + 1))
             [[ -f "$RUNNER_TEMP/game/chitin.key" ]] && break
-            echo "Trying a Steam Guard backup code."
-            "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "$STEAM_PASSWORD" "$code" "${install[@]}" </dev/null || echo "::warning::steamcmd (backup code) exited with status $?"
+            rate_limited && break
+            echo "Trying Steam Guard code $n of ${#codes[@]} (STEAM_RECOVERY_CODE first, then STEAM_GUARD_CODES)."
+            attempt "Steam Guard code $n of ${#codes[@]}" "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "$STEAM_PASSWORD" "$code" "${install[@]}" </dev/null
           done
-          test -f "$RUNNER_TEMP/game/chitin.key" \
-            || { echo "::error::$GAME has no game cache, no game-$GAME-sealed backup artifact, no game seed (GAME_SEED_URL_${GAME^^}) and SteamCMD could not download it; see docs/steam.md"; exit 1; }
+          if [[ ! -f "$RUNNER_TEMP/game/chitin.key" ]]; then
+            if rate_limited; then
+              echo "::warning::Steam answered Rate Limit Exceeded, so the remaining sign-ins were not tried; wait before re-running this workflow (see docs/steam.md)"
+            fi
+            echo "::error::$GAME has no game cache, no game-$GAME-sealed backup artifact, no game seed (GAME_SEED_URL_${GAME^^}) and SteamCMD could not download it; see docs/steam.md"
+            exit 1
+          fi
 
       - name: Seal game
         if: steps.cache.outputs.cache-matched-key == '' && steps.artifact.outputs.restored != 'true'

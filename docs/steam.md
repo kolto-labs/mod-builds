@@ -29,8 +29,9 @@ Steam account. Fork and Dependabot pull requests get no secrets and skip it.
       `STEAM_USERNAME` and `STEAM_PASSWORD`. Steam sends an approval request to
       the Steam mobile app; if it is not approved in time, that attempt fails (K2
       approvals have timed out this way).
-   3. If that also failed, try each code in `STEAM_GUARD_CODES` in turn (see
-      [Backup-code fallback](#backup-code-fallback)).
+   3. If that also failed, try each code in `STEAM_RECOVERY_CODE`, then each code
+      in `STEAM_GUARD_CODES`, in turn (see [Backup-code fallback](#backup-code-fallback)).
+      The step stops trying as soon as Steam answers `Rate Limit Exceeded`.
 5. `game_cache.py inventory --require-modules` (the `Seal game` step) prints the restored tree (see
    [Game inventory](#game-inventory)) and fails the job when `modules/` holds no
    `.rim` file. A real Steam KOTOR install always ships `modules/*.rim`, so
@@ -45,7 +46,8 @@ The job fails if the game is still missing after these steps (no cache, no live
 artifact, no seed, SteamCMD gave nothing) or has no module `.rim` files. Nothing partial is saved. Each SteamCMD attempt that exits nonzero
 logs a `::warning::` with its status; the attempt loop still stops at the first
 one that leaves `chitin.key`, so a partial download that has `chitin.key` is
-caught by the `.rim` check, not retried.
+caught by the `.rim` check, not retried. Steam's own error text (for example
+`Two-factor code mismatch` or `Rate Limit Exceeded`) stays in the step log above each warning.
 
 The check looks for `modules` case-insensitively. The K2 lane's runner log names
 `.../game/Modules/003ebo.mod` (see [ports.md](ports.md)), and the Linux runner is
@@ -209,8 +211,9 @@ Names only; set them as repository Actions secrets and never print or commit the
 | Name | Used for |
 | --- | --- |
 | `STEAM_USERNAME` | Steam account that owns both games |
-| `STEAM_PASSWORD` | Password for that account; used when `STEAM_CONFIG_VDF` is unset or its login fails, and with each backup code |
+| `STEAM_PASSWORD` | Password for that account; used when `STEAM_CONFIG_VDF` is unset or its login fails, and with each recovery or backup code |
 | `STEAM_CONFIG_VDF` | Optional. Base64 of an authenticated SteamCMD `config.vdf` |
+| `STEAM_RECOVERY_CODE` | Optional. One or more whitespace-separated Steam Guard recovery codes, tried before `STEAM_GUARD_CODES` |
 | `STEAM_GUARD_CODES` | Optional. Whitespace-separated Steam Guard backup codes; each works once |
 | `CACHE_ENCRYPTION_KEY` | Encrypts and decrypts the game cache and the backup artifact |
 
@@ -253,15 +256,21 @@ the full guide covers its Aspyr-specific steps.
 
 ## Backup-code fallback
 
-If the saved config (`STEAM_CONFIG_VDF`) and the password sign-in both fail, the `game` job tries each code in the optional `STEAM_GUARD_CODES` secret as `+login <user> <password> <code>`. It stops as soon as `chitin.key` appears.
+If the saved config (`STEAM_CONFIG_VDF`) and the password sign-in both fail, the `game` job tries each code in the optional `STEAM_RECOVERY_CODE` secret, then each code in the optional `STEAM_GUARD_CODES` secret, as `+login <user> <password> <code>`. Both secrets are split on whitespace, so either can hold several codes. It stops as soon as `chitin.key` appears.
 
-Get the codes from Steam → Account details → Manage Steam Guard → Get backup codes. Set the secret from your own terminal so the value never shows up in a log:
+Get the backup codes from Steam → Account details → Manage Steam Guard → Get backup codes. Set the secret from your own terminal so the value never shows up in a log:
 
 ```sh
 gh secret set STEAM_GUARD_CODES -R kolto-labs/mod-builds    # paste the codes separated by spaces, then Ctrl-D
 
 ```
 
+`STEAM_RECOVERY_CODE` is set the same way. Steam issues its recovery code (the `R`-prefixed one shown when Steam Guard was enabled) for removing an authenticator, not as a sign-in code, so SteamCMD may answer `Two-factor code mismatch`; it costs one sign-in attempt either way. Check the step log for `Two-factor code mismatch` lines before relying on a secret.
+
 When you need to refresh them, generate a new set and update the secret.
+
+### Rate limit
+
+Every rejected sign-in counts against Steam's login rate limit, and Steam answers `ERROR (Rate Limit Exceeded)` once it is reached. From then on every attempt is refused, whatever the code, so more attempts only extend the lockout. The `game` job therefore stops at the first `Rate Limit Exceeded` (a `::warning::` says so), leaves the remaining codes unused, and fails. Wait before re-running the workflow. The reliable way to avoid all of this is [`STEAM_CONFIG_VDF`](#steam_config_vdf-sign-in-once-locally), which needs no code and no approval.
 
 ---
