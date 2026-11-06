@@ -1,0 +1,19 @@
+name: Runner capacity smoke
+
+on:
+  push:
+    branches: [codex/runner-capacity-smoke]
+
+permissions: {}
+
+jobs:
+  capacity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Report available workspace storage
+        shell: python
+        run: |
+          import os, shutil
+          usage = shutil.disk_usage(os.environ['RUNNER_TEMP'])
+          print(f'Runner temporary storage: total={usage.total} free={usage.free} bytes')
