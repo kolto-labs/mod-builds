@@ -1,0 +1,40 @@
+name: Private execution
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  run:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - name: Reject debug execution
+        env:
+          RUNNER_DEBUG_CONTEXT: ${{ runner.debug }}
+          STEP_DEBUG_SECRET: ${{ secrets.ACTIONS_STEP_DEBUG }}
+          RUNNER_DEBUG_SECRET: ${{ secrets.ACTIONS_RUNNER_DEBUG }}
+          STEP_DEBUG_VARIABLE: ${{ vars.ACTIONS_STEP_DEBUG }}
+          RUNNER_DEBUG_VARIABLE: ${{ vars.ACTIONS_RUNNER_DEBUG }}
+        shell: python
+        run: |
+          import os, sys
+          for key in ('RUNNER_DEBUG_CONTEXT', 'STEP_DEBUG_SECRET', 'RUNNER_DEBUG_SECRET',
+                      'STEP_DEBUG_VARIABLE', 'RUNNER_DEBUG_VARIABLE', 'RUNNER_DEBUG'):
+              if os.environ.get(key, '').strip().lower() not in ('', '0', 'false'):
+                  sys.exit('Debug execution is disabled.')
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          persist-credentials: false
+      - name: Require reviewed isolation
+        run: |
+          echo 'Private execution is disabled pending isolation review.'
+          exit 1
+      - name: Run configured private entry point
+        env:
+          SOURCE_REPOSITORY: ${{ secrets.SOURCE_REPOSITORY }}
+          SOURCE_REVISION: ${{ secrets.SOURCE_REVISION }}
+          SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          SOURCE_ENTRYPOINT: ${{ secrets.SOURCE_ENTRYPOINT }}
+          EVIDENCE_RECIPIENT: ${{ secrets.EVIDENCE_RECIPIENT }}
+        run: python3 tools/private-runner/launcher.py
