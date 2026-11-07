@@ -1,0 +1,52 @@
+name: Private execution smoke
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/dev' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Reject debug execution
+        env:
+          RUNNER_DEBUG_CONTEXT: ${{ runner.debug }}
+          STEP_DEBUG_SECRET: ${{ secrets.ACTIONS_STEP_DEBUG }}
+          RUNNER_DEBUG_SECRET: ${{ secrets.ACTIONS_RUNNER_DEBUG }}
+          STEP_DEBUG_VARIABLE: ${{ vars.ACTIONS_STEP_DEBUG }}
+          RUNNER_DEBUG_VARIABLE: ${{ vars.ACTIONS_RUNNER_DEBUG }}
+        shell: python
+        run: |
+          import os, sys
+          for key in ('RUNNER_DEBUG_CONTEXT', 'STEP_DEBUG_SECRET', 'RUNNER_DEBUG_SECRET',
+                      'STEP_DEBUG_VARIABLE', 'RUNNER_DEBUG_VARIABLE', 'RUNNER_DEBUG'):
+              if os.environ.get(key, '').strip().lower() not in ('', '0', 'false'):
+                  sys.exit('Debug execution is disabled.')
+      - name: Check out reviewed launcher
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 8946fd85c1c3a80959809aa73e93347a62da02a6
+          persist-credentials: false
+      - name: Execute reviewed private smoke
+        env:
+          SOURCE_REPOSITORY: ${{ secrets.SOURCE_REPOSITORY }}
+          SOURCE_REVISION: ${{ secrets.SOURCE_REVISION }}
+          SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          SOURCE_ENTRYPOINT: ${{ secrets.SOURCE_ENTRYPOINT }}
+        shell: python
+        run: |
+          import hashlib, os, subprocess, sys
+          # Keep private configuration out of the public workflow and logs.
+          # This fingerprint admits only the reviewed immutable smoke target.
+          configured = '\n'.join(os.environ.get(key, '') for key in
+              ('SOURCE_REPOSITORY', 'SOURCE_REVISION', 'SOURCE_ENTRYPOINT'))
+          expected = '6c379600f9666e7f193f4f6611053db9e897bed73403df8037b7866c07fdeeb2'
+          if hashlib.sha256(configured.encode('utf-8')).hexdigest() != expected:
+              sys.exit('Reviewed smoke configuration is unavailable.')
+          if not os.environ.get('SOURCE_TOKEN'):
+              sys.exit('Source access is unavailable.')
+          # No evidence recipient, game credentials, or artifact upload.
+          result = subprocess.run([sys.executable, 'tools/private-runner/launcher.py'],
+                                  check=False)
+          sys.exit(result.returncode)
