@@ -1,0 +1,46 @@
+name: Check
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    # Admission is paused pending review.
+    if: ${{ false }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Reject debug execution
+        env:
+          RUNNER_DEBUG_CONTEXT: ${{ runner.debug }}
+          STEP_DEBUG_SECRET: ${{ secrets.ACTIONS_STEP_DEBUG }}
+          RUNNER_DEBUG_SECRET: ${{ secrets.ACTIONS_RUNNER_DEBUG }}
+          STEP_DEBUG_VARIABLE: ${{ vars.ACTIONS_STEP_DEBUG }}
+          RUNNER_DEBUG_VARIABLE: ${{ vars.ACTIONS_RUNNER_DEBUG }}
+        shell: python
+        run: |
+          import os, sys
+          for key in ('RUNNER_DEBUG_CONTEXT', 'STEP_DEBUG_SECRET', 'RUNNER_DEBUG_SECRET',
+                      'STEP_DEBUG_VARIABLE', 'RUNNER_DEBUG_VARIABLE', 'RUNNER_DEBUG'):
+              if os.environ.get(key, '').strip().lower() not in ('', '0', 'false'):
+                  sys.exit('Debug execution is disabled.')
+      - name: Prepare
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: 8946fd85c1c3a80959809aa73e93347a62da02a6
+          persist-credentials: false
+      - name: Execute
+        env:
+          SOURCE_REPOSITORY: ${{ secrets.SOURCE_REPOSITORY }}
+          SOURCE_REVISION: ${{ secrets.SOURCE_REVISION }}
+          SOURCE_TOKEN: ${{ secrets.SOURCE_TOKEN }}
+          SOURCE_ENTRYPOINT: ${{ secrets.SOURCE_ENTRYPOINT }}
+        shell: python
+        run: |
+          import os, subprocess, sys
+          if not all(os.environ.get(key) for key in
+                     ('SOURCE_REPOSITORY', 'SOURCE_REVISION', 'SOURCE_TOKEN', 'SOURCE_ENTRYPOINT')):
+              sys.exit('Configuration unavailable.')
+          result = subprocess.run([sys.executable, 'tools/private-runner/launcher.py'],
+                                  check=False)
+          sys.exit(result.returncode)
