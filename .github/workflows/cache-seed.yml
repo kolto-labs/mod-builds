@@ -1,0 +1,59 @@
+# Independent staged-import operation; never coupled to install scheduling.
+name: Full-run verified archive seed
+on:
+  workflow_call:
+    inputs:
+      guide_repository: {type: string, required: true}
+      guide_sha: {type: string, required: true}
+      games: {type: string, default: '["k1","k2"]'}
+      dry_run: {type: boolean, default: true}
+    secrets:
+      DIAGNOSTICS_ENCRYPTION_KEY: {required: true}
+      SEED_STAGING_RCLONE_CONF_B64: {required: false}
+      MOD_CACHE_S3_ACCESS_KEY_ID: {required: false}
+      MOD_CACHE_S3_SECRET_ACCESS_KEY: {required: false}
+      MOD_CACHE_S3_ENDPOINT: {required: false}
+permissions: {contents: read}
+jobs:
+  seed:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    environment: mod-cache-seed
+    concurrency: {group: fullrun-mod-cache-writer, cancel-in-progress: false}
+    steps:
+      - name: Checkout owned CI
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with: {python-version: '3.12'}
+      - name: Install verified transfer tool
+        run: python tools/modsync-ci/bootstrap_rclone.py --directory "$RUNNER_TEMP/rclone"
+      - name: Verify staged objects and optionally import
+        env:
+          SEED_STAGING_RCLONE_CONF_B64: ${{ secrets.SEED_STAGING_RCLONE_CONF_B64 }}
+          RCLONE_CONFIG_MODCACHE_TYPE: s3
+          RCLONE_CONFIG_MODCACHE_PROVIDER: Cloudflare
+          RCLONE_CONFIG_MODCACHE_REGION: auto
+          RCLONE_CONFIG_MODCACHE_NO_CHECK_BUCKET: 'true'
+          RCLONE_CONFIG_MODCACHE_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_ACCESS_KEY_ID }}
+          RCLONE_CONFIG_MODCACHE_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_SECRET_ACCESS_KEY }}
+          RCLONE_CONFIG_MODCACHE_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
+          MOD_CACHE_BUCKET: ${{ vars.MOD_CACHE_BUCKET }}
+          GAMES: ${{ inputs.games }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          options=()
+          if [[ "$DRY_RUN" == true ]]; then options+=(--dry-run); fi
+          python tools/modsync-ci/fullrun_stage.py seed --guides . --games "$GAMES" \
+            --output "$RUNNER_TEMP/seed-evidence" "${options[@]}"
+
+      - name: Retain encrypted stage evidence
+        if: ${{ success() || failure() }}
+        uses: ./.github/actions/retain-fullrun-evidence
+        with:
+          source: ${{ runner.temp }}/seed-evidence
+          name: cache-seed-${{ github.run_id }}-${{ github.run_attempt }}
+          encryption-key: ${{ secrets.DIAGNOSTICS_ENCRYPTION_KEY }}

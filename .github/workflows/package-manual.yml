@@ -1,0 +1,157 @@
+name: Engine package artifacts (manual, unverified)
+# Target-owned admission and receipts; product packaging runs from engine-input.
+# No cross-repository workflow calls, release trigger or publication permissions.
+on:
+  workflow_dispatch:
+    inputs:
+      head_sha:
+        description: Exact reviewed kolto-labs/ModSync.rs source commit (40 lowercase hex digits)
+        default: 3af718420206e8c1dcb94a58e1d3d449741258c3
+        required: true
+        type: string
+      version:
+        description: Package version (three decimal components)
+        required: true
+        type: string
+      windows_icon:
+        description: Tracked native ICO path; see packaging/assets/PROVENANCE.md
+        default: packaging/assets/modsync.ico
+        type: string
+      macos_icon:
+        description: Tracked native ICNS path; see packaging/assets/PROVENANCE.md
+        default: packaging/assets/modsync.icns
+        type: string
+
+permissions:
+  contents: read
+concurrency:
+  group: package-artifacts-${{ inputs.head_sha }}-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  package:
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        include:
+          - { runner: ubuntu-24.04, target: x86_64-unknown-linux-gnu, os: linux }
+          - { runner: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, os: linux }
+          - { runner: windows-2025, target: i686-pc-windows-msvc, os: windows }
+          - { runner: windows-2025, target: x86_64-pc-windows-msvc, os: windows }
+          - { runner: windows-11-arm, target: aarch64-pc-windows-msvc, os: windows }
+          - { runner: macos-15-intel, target: x86_64-apple-darwin, os: macos }
+          - { runner: macos-15, target: aarch64-apple-darwin, os: macos }
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 90
+    env:
+      SOURCE_SHA: ${{ inputs.head_sha }}
+      PACKAGE_VERSION: ${{ inputs.version }}
+      BUILD_TARGET: ${{ matrix.target }}
+      TARGET_OS: ${{ matrix.os }}
+      WINDOWS_ICON: ${{ inputs.windows_icon }}
+      MACOS_ICON: ${{ inputs.macos_icon }}
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Check out this CI revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6, node24
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate package inputs
+        shell: bash
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+      - name: Check out the product engine
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6, node24
+        with:
+          repository: kolto-labs/ModSync.rs
+          ref: ${{ inputs.head_sha }}
+          path: engine-input
+          persist-credentials: false
+      - name: Initialize retained lane identity
+        shell: python
+        run: |
+          import json, os, pathlib
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / ('modsync-package-' + os.environ['BUILD_TARGET'])
+          out.mkdir(exist_ok=False)
+          (out / 'lane.json').write_text(json.dumps({'schemaVersion': 1, 'sourceRepository': 'kolto-labs/ModSync.rs', 'sourceCommit': os.environ['SOURCE_SHA'], 'orchestrationRepository': os.environ['GITHUB_REPOSITORY'], 'orchestrationCommit': os.environ['GITHUB_SHA'], 'target': os.environ['BUILD_TARGET'], 'runnerOs': os.environ['RUNNER_OS'], 'runnerArchitecture': os.environ['RUNNER_ARCH'], 'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'], 'publication': False, 'nativeAcceptance': 'unverified', 'status': 'preparation-not-completed'}, indent=2) + '\n', encoding='utf-8')
+      - name: Verify exact input and install selected toolchain
+        shell: bash
+        run: |
+          [[ "$SOURCE_SHA" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$PACKAGE_VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]
+          test "$(git -C engine-input rev-parse HEAD)" = "$SOURCE_SHA"
+          rustup toolchain install 1.95.0 --profile minimal --target "$BUILD_TARGET"
+      - name: Linux build dependencies
+        if: matrix.os == 'linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev libwayland-dev libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev libxcursor-dev libgl1-mesa-dev
+      - name: Prepare locked dependency cache
+        shell: bash
+        working-directory: engine-input
+        run: cargo +1.95.0 fetch --locked --target "$BUILD_TARGET"
+      - name: Produce build receipt and assemble package
+        shell: python
+        working-directory: engine-input
+        run: |
+          import glob, json, os, pathlib, subprocess, sys
+          root = pathlib.Path.cwd()
+          out = pathlib.Path(os.environ['RUNNER_TEMP']) / ('modsync-package-' + os.environ['BUILD_TARGET'])
+          out.mkdir(exist_ok=True)
+          receipt = {'schemaVersion': 1, 'sourceRepository': 'kolto-labs/ModSync.rs', 'sourceCommit': os.environ['SOURCE_SHA'], 'orchestrationRepository': os.environ['GITHUB_REPOSITORY'], 'orchestrationCommit': os.environ['GITHUB_SHA'], 'target': os.environ['BUILD_TARGET'], 'runnerOs': os.environ['RUNNER_OS'], 'runnerArchitecture': os.environ['RUNNER_ARCH'], 'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'], 'publication': False, 'nativeAcceptance': 'unverified', 'status': 'preparing'}
+          try:
+              build = out / 'produced'
+              command = [sys.executable, 'packaging/produce_build.py', '--commit', os.environ['SOURCE_SHA'], '--target', os.environ['BUILD_TARGET'], '--toolchain', '1.95.0', '--output-dir', str(build)]
+              target_os = os.environ['TARGET_OS']
+              icon = None
+              icon_text = os.environ['WINDOWS_ICON'] if target_os == 'windows' else os.environ['MACOS_ICON'] if target_os == 'macos' else ''
+              if icon_text:
+                  icon = (root / icon_text).resolve()
+                  if not icon.is_relative_to(root) or not icon.is_file() or (root / icon_text).is_symlink():
+                      raise ValueError('Icon must be a tracked regular file inside checkout')
+                  subprocess.run(['git', 'ls-files', '--error-unmatch', '--', icon.relative_to(root).as_posix()], check=True)
+              if target_os == 'windows':
+                  if icon is None:
+                      raise ValueError('Windows lane blocked: reviewed ICO resource is missing')
+                  tools = sorted(glob.glob(os.environ['ProgramFiles(x86)'] + '/Windows Kits/10/bin/*/x64/rc.exe'))
+                  if not tools:
+                      raise ValueError('Windows resource compiler is missing')
+                  resource = out / 'resources.obj'
+                  subprocess.run([sys.executable, 'packaging/windows_resources.py', '--compiler', tools[-1], '--kind', 'msvc', '--target', os.environ['BUILD_TARGET'], '--icon', str(icon), '--version', os.environ['PACKAGE_VERSION'] + '.0', '--output', str(resource)], check=True)
+                  command += ['--windows-resource-object', str(resource), '--windows-resource-receipt', str(resource) + '.json']
+              receipt['producingCommand'] = command
+              subprocess.run(command, check=True)
+              receipt['status'] = 'built'
+              package = [sys.executable, 'packaging/build_package.py', '--target', os.environ['BUILD_TARGET'], '--commit', os.environ['SOURCE_SHA'], '--version', os.environ['PACKAGE_VERSION'], '--binary', str(build / ('modsync.exe' if target_os == 'windows' else 'modsync')), '--build-receipt', str(build / 'build-receipt.json'), '--output-dir', str(out / 'packages')]
+              if target_os in ('windows', 'macos'):
+                  if icon is None:
+                      raise ValueError('Package blocked: reviewed native icon is missing')
+                  package += ['--platform-icon', str(icon)]
+              if target_os == 'windows':
+                  package += ['--gui-launcher', str(build / 'modsync-gui.exe'), '--windows-resource-receipt', str(build / 'resources.obj.json')]
+              receipt['packageCommand'] = package
+              subprocess.run(package, check=True)
+              receipt['status'] = 'packaged-unverified'
+          except BaseException as error:
+              receipt['errorType'] = type(error).__name__
+              receipt['status'] += '-failed'
+              raise
+          finally:
+              (out / 'lane.json').write_text(json.dumps(receipt, indent=2, sort_keys=True) + '\n', encoding='utf-8')
+      - name: Retain source-bound receipts and artifacts, including failed lanes
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6, node24
+        with:
+          name: mod-builds-modsync-${{ inputs.head_sha }}-${{ matrix.target }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            ${{ runner.temp }}/modsync-package-${{ matrix.target }}/lane.json
+            ${{ runner.temp }}/modsync-package-${{ matrix.target }}/produced/*.json
+            ${{ runner.temp }}/modsync-package-${{ matrix.target }}/produced/modsync*
+            ${{ runner.temp }}/modsync-package-${{ matrix.target }}/produced/resources.obj
+            ${{ runner.temp }}/modsync-package-${{ matrix.target }}/packages/*
+          retention-days: 14
+          if-no-files-found: warn
+

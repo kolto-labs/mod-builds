@@ -1,0 +1,210 @@
+# Complete repository-owned workflow graph. Push/PR run credential-free contracts.
+# Licensed acquisition/install runs require explicit workflow_dispatch; no foreign workflow calls.
+# Eligible independent jobs continue after failure; result reconciles all required producer/lane states.
+name: Guide full-run CI
+on:
+  push:
+    paths:
+      - '.github/fullrun.json'
+      - '.github/actionlint.yaml'
+      - '.github/workflows/fullrun*.yml'
+      - '.github/workflows/cache-*.yml'
+      - 'tools/modsync-ci/**'
+      - 'content/**'
+      - 'scripts/**'
+      - '.github/actions/retain-fullrun-evidence/**'
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      operation:
+        description: Run one stage independently or compose the complete single-lane install pipeline
+        type: choice
+        options: [full, check, games, archives, install, seed, p2p]
+        default: full
+      counterpart_sha:
+        description: Exact ModSync.rs engine commit; empty uses the reviewed .github/fullrun.json pin
+        type: string
+        default: ''
+      game:
+        type: choice
+        description: Requested game coverage
+        options: [both, k1, k2]
+        default: both
+      mode:
+        type: choice
+        description: Requested Rust application route
+        options: [both, cli, gui]
+        default: both
+      write_cache:
+        description: Allow producer cache saves and encrypted game-backup publication
+        type: boolean
+        default: true
+      seed_dry_run:
+        description: Seed operation verifies staged objects without publishing by default
+        type: boolean
+        default: true
+permissions: {contents: read, actions: read}
+concurrency:
+  group: fullrun-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+jobs:
+  plan:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      owner_repository: ${{ steps.request.outputs.owner_repository }}
+      owner_sha: ${{ steps.request.outputs.owner_sha }}
+      engine_repository: ${{ steps.request.outputs.engine_repository }}
+      engine_sha: ${{ steps.request.outputs.engine_sha }}
+      guide_repository: ${{ steps.request.outputs.guide_repository }}
+      guide_sha: ${{ steps.request.outputs.guide_sha }}
+      operation: ${{ steps.request.outputs.operation }}
+      games: ${{ steps.request.outputs.games }}
+      modes: ${{ steps.request.outputs.modes }}
+      cache_writer: ${{ steps.request.outputs.cache_writer }}
+      plan_id: ${{ steps.request.outputs.plan_id }}
+    steps:
+      - name: Checkout owned CI
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Freeze repository-specific source and guide identities
+        id: request
+        env:
+          REQUEST_OPERATION: ${{ github.event_name == 'workflow_dispatch' && inputs.operation || 'check' }}
+          REQUEST_COUNTERPART_SHA: ${{ inputs.counterpart_sha }}
+          REQUEST_GAME: ${{ inputs.game || 'both' }}
+          REQUEST_MODE: ${{ inputs.mode || 'both' }}
+          REQUEST_WRITE_CACHE: ${{ github.event_name == 'workflow_dispatch' && inputs.write_cache || false }}
+          CACHE_ENCRYPTION_KEY: ${{ github.event_name == 'workflow_dispatch' && secrets.CACHE_ENCRYPTION_KEY || '' }}
+          DIAGNOSTICS_ENCRYPTION_KEY: ${{ github.event_name == 'workflow_dispatch' && secrets.DIAGNOSTICS_ENCRYPTION_KEY || '' }}
+        run: python tools/modsync-ci/fullrun_contract.py plan --output "$RUNNER_TEMP/fullrun-plan.json"
+      - name: Retain public plan
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fullrun-plan-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fullrun-plan.json
+          retention-days: 14
+          if-no-files-found: error
+  toolkit:
+    uses: ./.github/workflows/fullrun-toolkit.yml
+    permissions: {contents: read}
+  games:
+    needs: plan
+    if: ${{ needs.plan.outputs.operation == 'full' || needs.plan.outputs.operation == 'games' }}
+    uses: ./.github/workflows/cache-game.yml
+    with:
+      games: ${{ needs.plan.outputs.games }}
+      cache_writer: ${{ fromJSON(needs.plan.outputs.cache_writer) }}
+      allow_steam: ${{ vars.FULLRUN_ALLOW_STEAM == 'true' }}
+      artifact_repository: ${{ vars.FULLRUN_ARTIFACT_REPOSITORY || github.repository }}
+    secrets:
+      ARTSTORE_READ_TOKEN: ${{ secrets.ARTSTORE_READ_TOKEN }}
+      CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+      GAME_SEED_URL_K1: ${{ secrets.GAME_SEED_URL_K1 }}
+      GAME_SEED_KEY_K1: ${{ secrets.GAME_SEED_KEY_K1 }}
+      GAME_SEED_SHA256_K1: ${{ secrets.GAME_SEED_SHA256_K1 }}
+      GAME_SEED_URL_K2: ${{ secrets.GAME_SEED_URL_K2 }}
+      GAME_SEED_KEY_K2: ${{ secrets.GAME_SEED_KEY_K2 }}
+      GAME_SEED_SHA256_K2: ${{ secrets.GAME_SEED_SHA256_K2 }}
+      STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+      STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+      STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+      STEAM_RECOVERY_CODE: ${{ secrets.STEAM_RECOVERY_CODE }}
+      STEAM_GUARD_CODES: ${{ secrets.STEAM_GUARD_CODES }}
+  archives:
+    needs: plan
+    if: ${{ needs.plan.outputs.operation == 'full' || needs.plan.outputs.operation == 'archives' }}
+    uses: ./.github/workflows/cache-archives.yml
+    with:
+      guide_repository: ${{ needs.plan.outputs.guide_repository }}
+      guide_sha: ${{ needs.plan.outputs.guide_sha }}
+      games: ${{ needs.plan.outputs.games }}
+      cache_writer: ${{ fromJSON(needs.plan.outputs.cache_writer) }}
+      artifact_repository: ${{ vars.FULLRUN_ARTIFACT_REPOSITORY || github.repository }}
+    secrets:
+      DIAGNOSTICS_ENCRYPTION_KEY: ${{ secrets.DIAGNOSTICS_ENCRYPTION_KEY }}
+      ARTSTORE_READ_TOKEN: ${{ secrets.ARTSTORE_READ_TOKEN }}
+      CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+      MOD_CACHE_S3_READ_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_READ_ACCESS_KEY_ID }}
+      MOD_CACHE_S3_READ_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_READ_SECRET_ACCESS_KEY }}
+      MOD_CACHE_S3_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
+  install:
+    needs: [plan, games, archives]
+    if: ${{ !cancelled() && needs.plan.result == 'success' && (needs.plan.outputs.operation == 'full' || needs.plan.outputs.operation == 'install') }}
+    strategy:
+      fail-fast: false
+      matrix:
+        game: ${{ fromJSON(needs.plan.outputs.games) }}
+        mode: ${{ fromJSON(needs.plan.outputs.modes) }}
+    uses: ./.github/workflows/fullrun-lane.yml
+    with:
+      engine_repository: ${{ needs.plan.outputs.engine_repository }}
+      engine_sha: ${{ needs.plan.outputs.engine_sha }}
+      guide_repository: ${{ needs.plan.outputs.guide_repository }}
+      guide_sha: ${{ needs.plan.outputs.guide_sha }}
+      game: ${{ matrix.game }}
+      mode: ${{ matrix.mode }}
+      plan_id: ${{ needs.plan.outputs.plan_id }}
+      archive_cache_key: ${{ needs.archives.outputs.archive_cache_key }}
+      artifact_repository: ${{ vars.FULLRUN_ARTIFACT_REPOSITORY || github.repository }}
+    secrets:
+      MODSYNC_SOURCE_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+      ARTSTORE_READ_TOKEN: ${{ secrets.ARTSTORE_READ_TOKEN }}
+      CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+      DIAGNOSTICS_ENCRYPTION_KEY: ${{ secrets.DIAGNOSTICS_ENCRYPTION_KEY }}
+      MOD_CACHE_S3_READ_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_READ_ACCESS_KEY_ID }}
+      MOD_CACHE_S3_READ_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_READ_SECRET_ACCESS_KEY }}
+      MOD_CACHE_S3_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
+  seed:
+    needs: plan
+    if: ${{ needs.plan.outputs.operation == 'seed' }}
+    uses: ./.github/workflows/cache-seed.yml
+    with:
+      guide_repository: ${{ needs.plan.outputs.guide_repository }}
+      guide_sha: ${{ needs.plan.outputs.guide_sha }}
+      games: ${{ needs.plan.outputs.games }}
+      dry_run: ${{ inputs.seed_dry_run }}
+    secrets:
+      DIAGNOSTICS_ENCRYPTION_KEY: ${{ secrets.DIAGNOSTICS_ENCRYPTION_KEY }}
+      SEED_STAGING_RCLONE_CONF_B64: ${{ secrets.SEED_STAGING_RCLONE_CONF_B64 }}
+      MOD_CACHE_S3_ACCESS_KEY_ID: ${{ secrets.MOD_CACHE_S3_ACCESS_KEY_ID }}
+      MOD_CACHE_S3_SECRET_ACCESS_KEY: ${{ secrets.MOD_CACHE_S3_SECRET_ACCESS_KEY }}
+      MOD_CACHE_S3_ENDPOINT: ${{ secrets.MOD_CACHE_S3_ENDPOINT }}
+  p2p:
+    needs: plan
+    if: ${{ needs.plan.outputs.operation == 'full' || needs.plan.outputs.operation == 'p2p' }}
+    uses: ./.github/workflows/fullrun-p2p.yml
+    with:
+      engine_repository: ${{ needs.plan.outputs.engine_repository }}
+      engine_sha: ${{ needs.plan.outputs.engine_sha }}
+    secrets:
+      MODSYNC_SOURCE_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+  result:
+    name: Requested full-run coverage
+    needs: [plan, toolkit, games, archives, install, seed, p2p]
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout owned CI
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Fail on every required missing, incomplete, cancelled or failed result
+        env:
+          NEEDS_JSON: ${{ toJSON(needs) }}
+          OPERATION: ${{ needs.plan.outputs.operation || 'check' }}
+        run: python tools/modsync-ci/fullrun_contract.py aggregate --operation "$OPERATION" --output "$RUNNER_TEMP/fullrun-result.json"
+      - name: Retain public requested-scope verdict
+        if: ${{ success() || failure() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: fullrun-result-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/fullrun-result.json
+          retention-days: 14
+          if-no-files-found: error

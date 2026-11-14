@@ -1,0 +1,253 @@
+# Repository-owned variant of the inherited game-cache producer.
+# Local helper verifies complete sealed bytes before every publication; only
+# encrypted seals/parts enter Actions storage. Legacy artifacts are read-only.
+name: Game cache (reusable)
+on:
+  workflow_call:
+    inputs:
+      cache_writer:
+        type: boolean
+        default: false
+      game_seed_probe:
+        type: boolean
+        default: false
+      allow_steam:
+        description: Explicitly allow writer-only Steam acquisition after verified recovery and seed fail
+        type: boolean
+        default: false
+      use_steam_guard_codes:
+        type: boolean
+        default: false
+      games:
+        type: string
+        default: '["k1","k2"]'
+      artifact_repository:
+        description: Optional legacy read namespace; new backups always publish in this repository
+        type: string
+        default: ''
+    secrets:
+      ARTSTORE_READ_TOKEN: {required: false}
+      CACHE_ENCRYPTION_KEY: {required: false}
+      GAME_SEED_URL_K1: {required: false}
+      GAME_SEED_KEY_K1: {required: false}
+      GAME_SEED_SHA256_K1: {required: false}
+      GAME_SEED_URL_K2: {required: false}
+      GAME_SEED_KEY_K2: {required: false}
+      GAME_SEED_SHA256_K2: {required: false}
+      STEAM_USERNAME: {required: false}
+      STEAM_PASSWORD: {required: false}
+      STEAM_CONFIG_VDF: {required: false}
+      STEAM_RECOVERY_CODE: {required: false}
+      STEAM_GUARD_CODES: {required: false}
+permissions:
+  contents: read
+# Covers the complete K1/K2 producer invocation across all caller runs in this
+# repository, not merely matrix siblings. Never cancel an active acquisition.
+concurrency:
+  group: modsync-game-acquisition-${{ github.repository }}
+  cancel-in-progress: false
+jobs:
+  game:
+    name: game (${{ matrix.game }})
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      actions: read
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        game: ${{ fromJSON(inputs.games) }}
+    env:
+      GAME: ${{ matrix.game }}
+      APP_ID: ${{ matrix.game == 'k1' && '32370' || '208580' }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Reserve space on the disposable hosted runner
+        run: |
+          sudo rm -rf -- /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          df -h "$RUNNER_TEMP"
+      - name: Look up encrypted game cache
+        id: cache
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830
+        continue-on-error: true
+        with:
+          path: ${{ runner.temp }}/sealed/*.seal
+          key: game-${{ matrix.game }}-v1
+          restore-keys: steam-sealed-v3-excludingmovies-${{ matrix.game }}-Linux-
+
+      - name: Recover and verify baseline bytes from cache or backups
+        id: baseline
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          ARTSTORE_READ_TOKEN: ${{ secrets.ARTSTORE_READ_TOKEN }}
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+          LEGACY_REPOSITORY: ${{ inputs.artifact_repository }}
+        run: |
+          python tools/modsync-ci/fullrun_baseline.py --game "$GAME" \
+            --seal-dir "$RUNNER_TEMP/sealed" --game-dir "$RUNNER_TEMP/game" \
+            --legacy-repository "$LEGACY_REPOSITORY"
+
+      - name: Restore game from seed
+        id: seed
+        if: ${{ inputs.cache_writer && steps.baseline.outputs.available != 'true' }}
+        timeout-minutes: 30
+        env:
+          GAME_SEED_URL_K1: ${{ secrets.GAME_SEED_URL_K1 }}
+          GAME_SEED_KEY_K1: ${{ secrets.GAME_SEED_KEY_K1 }}
+          GAME_SEED_SHA256_K1: ${{ secrets.GAME_SEED_SHA256_K1 }}
+          GAME_SEED_URL_K2: ${{ secrets.GAME_SEED_URL_K2 }}
+          GAME_SEED_KEY_K2: ${{ secrets.GAME_SEED_KEY_K2 }}
+          GAME_SEED_SHA256_K2: ${{ secrets.GAME_SEED_SHA256_K2 }}
+        run: |
+          python - <<'PY_SEED'
+          import os, re, sys
+          suffix = os.environ['GAME'].upper()
+          if os.environ.get('GAME_SEED_URL_' + suffix) and not re.fullmatch(r'[0-9a-f]{64}', os.environ.get('GAME_SEED_SHA256_' + suffix, '')):
+              sys.exit('A pinned SHA-256 is required for an external game seed.')
+          PY_SEED
+          python tools/modsync-ci/game_seed.py restore --game "$GAME" --game-dir "$RUNNER_TEMP/game"
+
+      - name: Require a restored baseline or seed for the probe
+        if: ${{ inputs.game_seed_probe && steps.baseline.outputs.available != 'true' && steps.seed.outputs.restored != 'true' }}
+        run: |
+          echo "::error::$GAME seed was unavailable or could not be restored. No Steam login was attempted."
+          exit 1
+
+      - name: Download game with SteamCMD
+        id: steam
+        if: ${{ inputs.cache_writer && inputs.allow_steam && !inputs.game_seed_probe && steps.baseline.outputs.available != 'true' && steps.seed.outputs.restored != 'true' }}
+        timeout-minutes: 45
+        env:
+          STEAM_USERNAME: ${{ secrets.STEAM_USERNAME }}
+          STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+          STEAM_CONFIG_VDF: ${{ secrets.STEAM_CONFIG_VDF }}
+          STEAM_RECOVERY_CODE: ${{ github.event_name == 'workflow_dispatch' && inputs.use_steam_guard_codes && secrets.STEAM_RECOVERY_CODE || '' }}  # opt-in: Steam Guard recovery code(s), tried before STEAM_GUARD_CODES
+          STEAM_GUARD_CODES: ${{ github.event_name == 'workflow_dispatch' && inputs.use_steam_guard_codes && secrets.STEAM_GUARD_CODES || '' }}  # opt-in: whitespace-separated Steam Guard backup codes
+        run: |
+          set -euo pipefail
+          sudo apt-get install -y -qq lib32gcc-s1 >/dev/null
+          mkdir -p "$RUNNER_TEMP/steamcmd"
+          curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz | tar -xz -C "$RUNNER_TEMP/steamcmd"
+          steamcmd="$RUNNER_TEMP/steamcmd/steamcmd.sh"
+          "$steamcmd" +quit </dev/null >/dev/null
+          options=(+@ShutdownOnFailedCommand 1 +@sSteamCmdForcePlatformType windows
+            +force_install_dir "$RUNNER_TEMP/game")
+          install=(+app_update "$APP_ID" validate +quit)
+          log="$RUNNER_TEMP/steamcmd-attempt.log"
+          : > "$log"
+          trap 'rm -f "$log" "$log.status"' EXIT
+          # One SteamCMD sign-in attempt. Steam's output goes to the job log and to $log (the last attempt only),
+          # its exit status to $log.status (a file, because the password attempt runs in a pipeline subshell).
+          attempt() {
+            local label=$1 status=0
+            shift
+            "$@" 2>&1 | tee "$log" || status=${PIPESTATUS[0]}
+            echo "$status" > "$log.status"
+            [[ $status -eq 0 ]] || echo "::warning::steamcmd ($label) exited with status $status"
+          }
+          # chitin.key alone is not a finished download: a failed or cut-off app_update can leave a partial
+          # install behind, which would then be sealed and cached. Only a clean exit with Steam's own success line counts.
+          installed() {
+            [[ "$(cat "$log.status" 2>/dev/null)" == 0 && -f "$RUNNER_TEMP/game/chitin.key" ]] \
+              && grep -q "Success! App '$APP_ID' fully installed" "$log"
+          }
+          # Once Steam answers "Rate Limit Exceeded", every further sign-in only extends the lockout and the codes
+          # it has not checked yet are still unused, so stop and keep them for the next run.
+          rate_limited() { grep -q 'Rate Limit Exceeded' "$log"; }
+          if [[ -n "$STEAM_CONFIG_VDF" ]]; then
+            umask 077
+            mkdir -p "$HOME/Steam/config"
+            printf '%s' "$STEAM_CONFIG_VDF" | base64 -d > "$HOME/Steam/config/config.vdf"
+            attempt "saved login" "$steamcmd" "${options[@]}" +@NoPromptForPassword 1 +login "$STEAM_USERNAME" "${install[@]}" </dev/null
+          fi
+          if ! installed && ! rate_limited; then
+            printf '%s\n' "$STEAM_PASSWORD" | attempt "password login" "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "${install[@]}"
+          fi
+          # Fallback: the recovery code(s), then the Steam Guard backup codes, each as the code of a password login.
+          # Split on whitespace without glob expansion. Backup codes are single-use; spent ones are rejected quickly.
+          set -f
+          mapfile -t codes < <(printf '%s\n' "$STEAM_RECOVERY_CODE" "$STEAM_GUARD_CODES" | tr '[:space:]' '\n' | sed '/^$/d')
+          set +f
+          n=0
+          for code in "${codes[@]}"; do
+            n=$((n + 1))
+            installed && break
+            rate_limited && break
+            echo "Trying Steam Guard code $n of ${#codes[@]} (STEAM_RECOVERY_CODE first, then STEAM_GUARD_CODES)."
+            attempt "Steam Guard code $n of ${#codes[@]}" "$steamcmd" "${options[@]}" +login "$STEAM_USERNAME" "$STEAM_PASSWORD" "$code" "${install[@]}" </dev/null
+          done
+          if ! installed; then
+            if rate_limited; then
+              echo "::warning::Steam answered Rate Limit Exceeded, so the remaining sign-ins were not tried; wait before re-running this workflow (see docs/steam.md)"
+            fi
+            echo "::error::$GAME has no game cache, no game-$GAME-sealed backup artifact, no game seed (GAME_SEED_URL_${GAME^^}) and SteamCMD could not download it; see docs/steam.md"
+            exit 1
+          fi
+
+      - name: Seal newly acquired game
+        id: seal
+        if: ${{ inputs.cache_writer && steps.baseline.outputs.available != 'true' && (steps.seed.outputs.restored == 'true' || steps.steam.outcome == 'success') }}
+        env:
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+        run: |
+          python tools/modsync-ci/game_cache.py inventory --game "$GAME" --game-dir "$RUNNER_TEMP/game" \
+            --label acquired-baseline --require-modules
+          python tools/modsync-ci/game_cache.py pack --game "$GAME" \
+            --game-dir "$RUNNER_TEMP/game" --seal "$RUNNER_TEMP/sealed/baseline.seal"
+
+      - name: Release the producer's unsealed working copy
+        run: rm -rf -- "$RUNNER_TEMP/game"
+      - name: Verify prepared seal before any publication
+        id: verified
+        env:
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+        run: |
+          python tools/modsync-ci/fullrun_baseline.py --game "$GAME" \
+            --seal-dir "$RUNNER_TEMP/sealed" --game-dir "$RUNNER_TEMP/producer-verified-game" \
+            --local-only --required
+
+      - name: Save verified encrypted game cache
+        if: ${{ inputs.cache_writer && steps.verified.outputs.available == 'true' && steps.cache.outputs.cache-hit != 'true' }}
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830
+        continue-on-error: true
+        with:
+          # Keep the restore/save path identical: Actions includes it in the
+          # cache version, including for the inherited legacy restore prefix.
+          path: ${{ runner.temp }}/sealed/*.seal
+          key: game-${{ matrix.game }}-v1
+
+      - name: Stage verified encrypted game backup in the current repository
+        id: stage
+        if: ${{ inputs.cache_writer && steps.verified.outputs.available == 'true' && steps.baseline.outputs.backup_required == 'true' }}
+        env:
+          CACHE_ENCRYPTION_KEY: ${{ secrets.CACHE_ENCRYPTION_KEY }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/publish-seal"
+          cp -- "$RUNNER_TEMP/sealed/baseline.seal" "$RUNNER_TEMP/publish-seal/baseline.seal"
+          python tools/modsync-ci/game_backup.py stage --game "$GAME" \
+            --seal-dir "$RUNNER_TEMP/publish-seal" --out-dir "$RUNNER_TEMP/game-backup"
+          test -f "$RUNNER_TEMP/game-backup/manifest.json"
+
+      - name: Upload encrypted game backup to this run's repository
+        id: backup_upload
+        if: ${{ steps.stage.outputs.staged == 'true' }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: game-${{ matrix.game }}-sealed
+          path: ${{ runner.temp }}/game-backup
+          retention-days: 90
+          compression-level: 0
+          if-no-files-found: error
+
+      - name: Require publication of a needed current-repository backup
+        if: ${{ !cancelled() && inputs.cache_writer && steps.verified.outputs.available == 'true' && steps.baseline.outputs.backup_required == 'true' && (steps.stage.outputs.staged != 'true' || steps.backup_upload.outcome != 'success') }}
+        run: |
+          echo "::error::The verified $GAME baseline needed a current-repository backup, but staging/upload failed."
+          exit 1

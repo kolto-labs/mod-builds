@@ -1,0 +1,57 @@
+name: Full-run P2P loopback diagnostic
+# Loopback transfer and wrong-hash rejection; does not prove remote seeder reachability.
+on:
+  workflow_call:
+    inputs:
+      engine_repository: {type: string, required: true}
+      engine_sha: {type: string, required: true}
+    secrets:
+      MODSYNC_SOURCE_TOKEN: {required: false}
+permissions: {contents: read}
+jobs:
+  loopback:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env: {RUSTUP_TOOLCHAIN: 1.95.0}
+    steps:
+      - name: Checkout owned CI
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Checkout admitted Rust engine
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          repository: ${{ inputs.engine_repository }}
+          ref: ${{ inputs.engine_sha }}
+          path: .modsync-source
+          token: ${{ secrets.MODSYNC_SOURCE_TOKEN || github.token }}
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with: {python-version: '3.12'}
+      - name: Prepare production CLI toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev
+          rustup toolchain install 1.95.0 --profile minimal
+      - name: Prefetch locked engine dependencies without persistent Git credentials
+        working-directory: .modsync-source
+        env:
+          SOURCE_TOKEN: ${{ secrets.MODSYNC_SOURCE_TOKEN }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          cfg="$RUNNER_TEMP/fullrun-git-config"
+          trap 'rm -f "$cfg"' EXIT
+          : > "$cfg"
+          if [[ -n "$SOURCE_TOKEN" ]]; then
+            git config --file "$cfg" url."https://x-access-token:$SOURCE_TOKEN@github.com/".insteadOf https://github.com/
+          fi
+          GIT_CONFIG_GLOBAL="$cfg" CARGO_NET_GIT_FETCH_WITH_CLI=true cargo fetch --locked
+      - name: Build production CLI only
+        working-directory: .modsync-source
+        run: cargo build --locked --no-default-features --lib --bin modsync -j2
+      - name: Verify byte transfer and wrong-hash rejection
+        run: python tools/modsync-ci/p2p_loopback.py --binary .modsync-source/target/debug/modsync

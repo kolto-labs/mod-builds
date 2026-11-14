@@ -1,0 +1,165 @@
+name: Engine production gates (manual)
+# Target-owned admission; explicit product checkout. Rust tests and temporary
+# Rust harnesses remain frozen. Passing production checks is not full parity.
+on:
+  workflow_dispatch:
+    inputs:
+      engine_ref:
+        description: Exact reviewed kolto-labs/ModSync.rs source commit (40 lowercase hex digits)
+        required: true
+        type: string
+        default: 3af718420206e8c1dcb94a58e1d3d449741258c3
+      native:
+        description: Also build natively on Windows and macOS (billed 2x/10x)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+env:
+  ENGINE_REF: ${{ inputs.engine_ref }}
+  GUIDES_SHA: ${{ github.sha }}
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Rust tests remain frozen during the parity effort. These jobs deliberately
+# compile only production lib/bin targets; passing is not full parity acceptance.
+jobs:
+  production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - name: Check out this CI revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate the selected engine revision
+        shell: bash
+        run: |
+          [[ "$ENGINE_REF" =~ ^[0-9a-f]{40}$ ]]
+      - name: Check out the product engine
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: kolto-labs/ModSync.rs
+          ref: ${{ inputs.engine_ref }}
+          path: engine-input
+          persist-credentials: false
+      - name: Verify and record source identities
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$GUIDES_SHA"
+          test "$(git -C engine-input rev-parse HEAD)" = "$ENGINE_REF"
+          mkdir -p artifacts
+          python - <<'PY'
+          import json, os, pathlib
+          receipt = {'schemaVersion': 1, 'engineRepository': 'kolto-labs/ModSync.rs', 'engineCommit': os.environ['ENGINE_REF'], 'orchestrationRepository': os.environ['GITHUB_REPOSITORY'], 'orchestrationCommit': os.environ['GUIDES_SHA'], 'runnerOs': os.environ['RUNNER_OS'], 'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'], 'proofBoundary': 'production lib/bin checks only; full parity unverified'}
+          pathlib.Path('artifacts/source-identity.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+          PY
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+          targets: x86_64-pc-windows-gnu
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          workspaces: engine-input -> target
+      - name: Install system and MinGW packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pkg-config libssl-dev \
+            libwayland-dev libxkbcommon-dev libx11-dev libxi-dev libxrandr-dev \
+            libxcursor-dev libgl1-mesa-dev gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
+      - working-directory: engine-input
+        run: cargo fmt --all -- --check
+      - working-directory: engine-input
+        run: cargo build --locked --no-default-features --lib --bin modsync -j2
+      - working-directory: engine-input
+        run: cargo clippy --locked --no-default-features --lib --bin modsync -j2 -- -D warnings
+      - working-directory: engine-input
+        run: cargo build --locked --lib --bin modsync -j2
+      - working-directory: engine-input
+        run: cargo clippy --locked --lib --bin modsync -j2 -- -D warnings
+      - name: Windows cross-check headers
+        # Vendored unrar includes <PowrProf.h> and <Wbemidl.h>; MinGW ships them in
+        # lowercase, which only matters on a case-sensitive filesystem.
+        run: |
+          dir="$RUNNER_TEMP/wininc"
+          mkdir -p "$dir"
+          for header in PowrProf Wbemidl; do
+            echo "#include <$(echo "$header" | tr '[:upper:]' '[:lower:]').h>" > "$dir/$header.h"
+          done
+          echo "CXXFLAGS_x86_64_pc_windows_gnu=-I$dir" >> "$GITHUB_ENV"
+      - working-directory: engine-input
+        run: cargo clippy --locked --no-default-features --lib --bin modsync --target x86_64-pc-windows-gnu -j2 -- -D warnings
+      - working-directory: engine-input
+        run: cargo clippy --locked --lib --bin modsync --target x86_64-pc-windows-gnu -j2 -- -D warnings
+      - name: Retain source identity
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: engine-checks-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn
+
+  native:
+    if: github.event_name == 'workflow_dispatch' && inputs.native
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    steps:
+      - name: Check out this CI revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate the selected engine revision
+        shell: bash
+        run: |
+          [[ "$ENGINE_REF" =~ ^[0-9a-f]{40}$ ]]
+      - name: Check out the product engine
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: kolto-labs/ModSync.rs
+          ref: ${{ inputs.engine_ref }}
+          path: engine-input
+          persist-credentials: false
+      - name: Verify and record source identities
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$GUIDES_SHA"
+          test "$(git -C engine-input rev-parse HEAD)" = "$ENGINE_REF"
+          mkdir -p artifacts
+          python - <<'PY'
+          import json, os, pathlib
+          receipt = {'schemaVersion': 1, 'engineRepository': 'kolto-labs/ModSync.rs', 'engineCommit': os.environ['ENGINE_REF'], 'orchestrationRepository': os.environ['GITHUB_REPOSITORY'], 'orchestrationCommit': os.environ['GUIDES_SHA'], 'runnerOs': os.environ['RUNNER_OS'], 'runId': os.environ['GITHUB_RUN_ID'], 'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'], 'proofBoundary': 'production lib/bin checks only; full parity unverified'}
+          pathlib.Path('artifacts/source-identity.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+          PY
+      - uses: dtolnay/rust-toolchain@1.95.0
+        with:
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          cache-on-failure: true
+          workspaces: engine-input -> target
+      - working-directory: engine-input
+        run: cargo build --locked --no-default-features --lib --bin modsync -j2
+      - working-directory: engine-input
+        run: cargo clippy --locked --no-default-features --lib --bin modsync -j2 -- -D warnings
+      - working-directory: engine-input
+        run: cargo build --locked --lib --bin modsync -j2
+      - working-directory: engine-input
+        run: cargo clippy --locked --lib --bin modsync -j2 -- -D warnings
+      - name: Retain source identity
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: engine-checks-${{ runner.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: warn
+

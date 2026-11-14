@@ -1,0 +1,95 @@
+name: Guide synthetic CLI (windows)
+# Target-owned orchestration and proof tools. Fabricated bytes only: a pass is
+# parser/engine plumbing evidence, not a real K1/TSL full-guide installation.
+# Manual hosted execution; no game/archive credentials or publication.
+on:
+  workflow_dispatch:
+    inputs:
+      engine_ref:
+        description: Exact reviewed kolto-labs/ModSync.rs source commit (40 lowercase hex digits)
+        required: true
+        type: string
+        default: 3af718420206e8c1dcb94a58e1d3d449741258c3
+permissions:
+  contents: read
+jobs:
+  cli:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    env:
+      ENGINE_REF: ${{ inputs.engine_ref }}
+      GUIDES_SHA: ${{ github.sha }}
+      RUSTUP_TOOLCHAIN: 1.95.0
+      CARGO_TERM_COLOR: never
+    steps:
+      - name: Check out this guide and CI revision
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - name: Validate the selected engine revision
+        shell: bash
+        run: |
+          [[ "$ENGINE_REF" =~ ^[0-9a-f]{40}$ ]]
+      - name: Check out the product engine
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          repository: kolto-labs/ModSync.rs
+          ref: ${{ inputs.engine_ref }}
+          path: engine-input
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install production Rust toolchain
+        shell: bash
+        run: rustup toolchain install 1.95.0 --profile minimal
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine-input -> target
+      - name: Build production CLI only (Rust test targets remain frozen)
+        id: build
+        shell: bash
+        working-directory: engine-input
+        run: cargo +1.95.0 build --locked --no-default-features --lib --bin modsync -j2
+      - name: Record and verify source identities
+        id: identity
+        shell: bash
+        run: |
+          test "$(git rev-parse HEAD)" = "$GUIDES_SHA"
+          test "$(git -C engine-input rev-parse HEAD)" = "$ENGINE_REF"
+          mkdir -p artifacts
+          git rev-parse HEAD > artifacts/guide-commit.txt
+          git -C engine-input rev-parse HEAD > artifacts/engine-commit.txt
+          python - <<'PY'
+          import json, os, pathlib
+          receipt = {
+              'schemaVersion': 1, 'evidenceKind': 'synthetic-action-families',
+              'guideRepository': os.environ['GITHUB_REPOSITORY'],
+              'guideCommit': os.environ['GUIDES_SHA'],
+              'engineRepository': 'kolto-labs/ModSync.rs',
+              'engineCommit': os.environ['ENGINE_REF'],
+              'orchestrationCommit': os.environ['GUIDES_SHA'],
+              'runId': os.environ['GITHUB_RUN_ID'],
+              'runAttempt': os.environ['GITHUB_RUN_ATTEMPT'],
+              'runnerOs': os.environ['RUNNER_OS'],
+              'realGameInstallVerified': False,
+          }
+          pathlib.Path('artifacts/run-identity.json').write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+          PY
+      - name: K1 production conversion and synthetic installation
+        shell: bash
+        run: python tools/prove_synthetic_full_build.py --binary engine-input/target/debug/modsync.exe --guides . --game k1 --output artifacts/k1
+      - name: TSL production conversion and synthetic installation
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.identity.outcome == 'success' }}
+        shell: bash
+        run: python tools/prove_synthetic_full_build.py --binary engine-input/target/debug/modsync.exe --guides . --game k2 --output artifacts/k2
+      - name: Retain synthetic receipts
+        if: always()
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: guide-synthetic-cli-windows-${{ github.run_id }}-${{ github.run_attempt }}
+          path: artifacts/
+          retention-days: 14
+          if-no-files-found: error
+

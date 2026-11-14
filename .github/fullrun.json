@@ -1,0 +1,12 @@
+{
+  "schema_version": 1,
+  "repository": "kolto-labs/mod-builds",
+  "role": "guides",
+  "engine_repository": "kolto-labs/ModSync.rs",
+  "guide_repository": "kolto-labs/mod-builds",
+  "counterpart_sha": "3af718420206e8c1dcb94a58e1d3d449741258c3",
+  "toolkit_origin": {
+    "repository": "kolto-labs/odyssey-ci",
+    "revision": "1bbca57afc74c102bce6075cd40da205f98959e3"
+  }
+}

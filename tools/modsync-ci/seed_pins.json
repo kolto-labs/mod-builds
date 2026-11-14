@@ -1,0 +1,552 @@
+{
+  "schema": 1,
+  "entries": {
+    "e4596a9f3af39a5b83cbf9db532715cc81e00cd003836a4b4a8f39dba14e7698": {
+      "url": "https://www.nexusmods.com/kotor/mods/1367",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Korriban High Resolution - TPC Version-1367-1-2-1668960810.rar",
+          "sha256": "9c587b682f8469c22093e9b718d1110a209c0666ece65dd007fceb9b002a11ee",
+          "size": 716440044,
+          "extension": "rar"
+        }
+      ]
+    },
+    "0fd4e8a8d1a27cdbde52d81b1cbff9495dbb65d58880bb657d1619ce798a1ee5": {
+      "url": "https://www.nexusmods.com/kotor/mods/1365",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Kashyyyk High Resolution - TPC Version-1365-1-2-1669476173.rar",
+          "sha256": "3d53dc0c905f28043c500c74eaa814ffb8447ed4c7aeed38f8367d9b3115752b",
+          "size": 316045534,
+          "extension": "rar"
+        }
+      ]
+    },
+    "ced1834c0da221711b419dbdf2580afdb9375913acf08b7bdc0208234752f862": {
+      "url": "https://www.nexusmods.com/kotor/mods/1364",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Tatooine High Resolution - TPC Version-1364-1-2-1669474980.rar",
+          "sha256": "3ec658c09cebcd9a8cc2ccf12c53faf2bc4dea0d32765cb1459f0fc45e46bd41",
+          "size": 466430635,
+          "extension": "rar"
+        }
+      ]
+    },
+    "0f6e2e93589f94d200c2611156b22f1cab6d0bd09a4701cf05cbbae302e80199": {
+      "url": "https://www.nexusmods.com/kotor/mods/1368",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Dantooine High Resolution - TPC Version-1368-1-2-1669481433.rar",
+          "sha256": "bf40814a47ce6856ec4c198e9b75e01e6b00ad91a2d9ca4486844c055e1bde8a",
+          "size": 494070294,
+          "extension": "rar"
+        }
+      ]
+    },
+    "1b118cfe39b25781a3e06948dcdb80781b8d9a08439e944744a731b5e67347c3": {
+      "url": "https://www.nexusmods.com/kotor/mods/1370",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Endar Spire-Star Forgre-Yavin Station - TPC Version-1370-1-1-1669482487.rar",
+          "sha256": "47439d7c2e25f02358a31af815b88a3c244081f3ad824ba0ab2abfa5bba6b61a",
+          "size": 497412006,
+          "extension": "rar"
+        }
+      ]
+    },
+    "76d71b909543c384703499f96a4d954ef9190c9666fbe2b3e6feb45decedc8d1": {
+      "url": "https://www.nexusmods.com/kotor/mods/1366",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Manaan High Resolution - TPC Version-1366-1-1-1669479766.rar",
+          "sha256": "c1c68f78a7b1cb80b6803d9347475f5c4fc534f2be0f235ce2163cad2e3f5387",
+          "size": 422809388,
+          "extension": "rar"
+        }
+      ]
+    },
+    "930ec1a2201c09db7afae8764fb4ccf8dec99c30b9164fd7770bcd024f05421e": {
+      "url": "https://www.nexusmods.com/kotor/mods/1360",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Taris High Resolution - TPC Version-1360-2-3-1669473109.rar",
+          "sha256": "2ead03356a24309a4d5f699966e709fe0c5ba1d900d27ed1d9bd2254f69610d9",
+          "size": 1422806887,
+          "extension": "rar"
+        }
+      ]
+    },
+    "8209e1b3d093f6bf08155c1cd681d7f3f75d19db90ec6e405ee4db94aa2a9036": {
+      "url": "https://www.nexusmods.com/kotor/mods/1282",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Character Overhaul -REDUX- ( LITE ) - TPC Version-1282-4-1-1628550322.rar",
+          "sha256": "ed3034b682c07d8bf3056a3c3769aaa82dc6275926d48a5234b014c9ee8aced8",
+          "size": 329786108,
+          "extension": "rar"
+        }
+      ]
+    },
+    "2199b93921a3d867a81a63ed9256b7d110fdbce54e6dd79e87eead1986b3105c": {
+      "url": "https://www.nexusmods.com/kotor/mods/1369",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Unknown World High Resolution - TPC Version-1369-1-2-1675865873.rar",
+          "sha256": "85ddb679d923d72806b3b7085cc5ce33c9ae99f21705469fa25b27a4b80f9fac",
+          "size": 280988383,
+          "extension": "rar"
+        }
+      ]
+    },
+    "797139bfbcda628828573bb91dc0746e42beef0118254fd1de7220269f9592cf": {
+      "url": "https://www.nexusmods.com/kotor/mods/1632",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Door Mural-1632-1-0-1713374023.zip",
+          "sha256": "7add8cda2320f0bf5e0e6bbc6739a5c59fb68083429c93e59f8f2f49f32df1d9",
+          "size": 17869526,
+          "extension": "zip"
+        },
+        {
+          "archive_name": "Sith Art-1632-1-1713373365.zip",
+          "sha256": "d5a4625c467128f9465d02f7470d611027478eea68fb5fe24eb6e30838b2c5d2",
+          "size": 5397819,
+          "extension": "zip"
+        }
+      ]
+    },
+    "7f9ed71b207a4bee7ca1adb586811e85ce160fb09dc4aa044effd13206084b14": {
+      "url": "https://www.nexusmods.com/kotor/mods/1209",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "hp_grenades-0-4-1209-0-4-1547556830.zip",
+          "sha256": "55b6ac6d744ce5faccbdaa6ef9f82955a8202294dcd9cbd6dd36c1dc6c8f7558",
+          "size": 687827,
+          "extension": "zip"
+        }
+      ]
+    },
+    "ec84dd638ccfdfb66f2765acd72cbcae22dba1fa3f89b5a56d95372ed2974d8f": {
+      "url": "https://www.nexusmods.com/kotor/mods/1192",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Fen_s - Jolee-1192-1.zip",
+          "sha256": "2dfa64b5eb3906a8b7550fb7efa7712e80c1cdb328fd22630ef3566a47d7bc1d",
+          "size": 8446385,
+          "extension": "zip"
+        }
+      ]
+    },
+    "f6c4d46959a1e601ccf85d241dc3f4c07efb07d398d192a29a51cfb70a648d2f": {
+      "url": "https://www.gamefront.com/games/knights-of-the-old-republic/file/vurt-s-k1-hi-res-ebon-hawk-retexture",
+      "provider": "gamefront",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "vurt_k1_eh_retexture_v10.rar",
+          "sha256": "5ce6fd700ffd6174ee69dd92495a9df6889141b2c5f0541e1ac84a8fd6e8c96e",
+          "size": 94724263,
+          "extension": "rar"
+        }
+      ]
+    },
+    "93994e7982e3ea7fb441f8747d743056c01cb30753e9e8becd817e35bf399e5a": {
+      "url": "http://www.nexusmods.com/kotor/mods/10/",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Taris_Reskin-10-1-0.zip",
+          "sha256": "10b7632787e36921ea5111e22baf1c544a13b80d4769d860b13c396d9c0e17f5",
+          "size": 28108209,
+          "extension": "zip"
+        }
+      ]
+    },
+    "95d63f5ff6cedceacbaa1225a5f6cf03f933b45b7e5e931e3d22e5e707c7fedd": {
+      "url": "https://www.nexusmods.com/kotor/mods/90",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "NO_Fighters.zip-90-v1-0.zip",
+          "sha256": "d8967de95af75b2cef07507a159bdceb081852f7bf495bd847a81b4fb21119df",
+          "size": 3226,
+          "extension": "zip"
+        }
+      ]
+    },
+    "2e70faf67e1846b46a5c24784366e034a077dd78ed81b8448671cebd3eb6d34d": {
+      "url": "https://www.nexusmods.com/kotor/mods/1666",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Taris Rapid Transit FULL-1666-1-1-1727167081.rar",
+          "sha256": "27fd874bca4479fac2f244fdc7d59e538757bf301e105f691dffbfbc20c09871",
+          "size": 2087151,
+          "extension": "rar"
+        }
+      ]
+    },
+    "fe8c5d0ebe5f6ca849765eed9a034dc94baa13c72baee44ac95afe383d8feedf": {
+      "url": "https://www.nexusmods.com/kotor/mods/1710",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Sentinel Sneak Attack-1710-1-2-0-1757276890.7z",
+          "sha256": "94f6455a5888726bc8f9b621976e7e6ec37fdcc69c00f9201588213fa141cbed",
+          "size": 11173121,
+          "extension": "7z"
+        }
+      ]
+    },
+    "bc1ee079018b6e32e497c8c15abdd49b8f06cb99f023d0909bbf3afc3421eeaa": {
+      "url": "https://www.nexusmods.com/kotor/mods/1711",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Multifire and Autofire-1711-1-2-2-1769975013.7z",
+          "sha256": "b006a7f68cdff71774fed72670b482e8a136b121e052422555c61f9fad02a6e4",
+          "size": 11182582,
+          "extension": "7z"
+        }
+      ]
+    },
+    "0d067e5b37e0864d969f686f93c1495e9886c208219528106cbd023562ca5c0e": {
+      "url": "https://www.nexusmods.com/kotor/mods/66/",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "DantTrainingLS-66-1-0.zip",
+          "sha256": "2614afaf76d80d69a2512b206dfb29f66843d216efb38ceda613e851ac1551c4",
+          "size": 337303,
+          "extension": "zip"
+        }
+      ]
+    },
+    "322a489542ab9f74048b93c6a0df5c3b4cc7e3284036c7f04c6bc6c331f88616": {
+      "url": "https://www.nexusmods.com/kotor/mods/1384",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Remove Duplicate TGA-TPC-1384-1-2-1616219479.zip",
+          "sha256": "08b08545240bb60c17ecd4964da4f552ad5052c4c4b6b3e8b79f5adb5fccc970",
+          "size": 800,
+          "extension": "zip"
+        }
+      ]
+    },
+    "f91dced4bedb4d28b136673da940b82db594941580b5bd699891ebbed630d76b": {
+      "url": "https://www.nexusmods.com/kotor/mods/1282?tab=files",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "KOTOR 1 Community Patch - Compatibility Patch-1282-4-1-1629713397.rar",
+          "sha256": "5f0aabcc532e1825e338f419b1e7bbec42846fd9f659db34c5924f9b13e50133",
+          "size": 74083907,
+          "extension": "rar"
+        },
+        {
+          "archive_name": "JC_s Minor Fixes - Compatibility Patch-1282-4-1-1629713341.rar",
+          "sha256": "28a09afd65caafe6aaf28bbaca08863ddc2aa56344e3380b92aea00dae9e84f3",
+          "size": 50099701,
+          "extension": "rar"
+        },
+        {
+          "archive_name": "JC_s Mandalorian Armor - Compatibility Patch-1282-4-1-1629713289.rar",
+          "sha256": "979dac2a3372716949cd68f29fde84debf5a84d4af2b324999d28eb3333925fa",
+          "size": 40868391,
+          "extension": "rar"
+        },
+        {
+          "archive_name": "Miscellaneous Compatibility Patches-1282-4-1-1629713437.rar",
+          "sha256": "8bc574b9537112fda55032c9a4d7490a98c7fdc00d3ca6c860c1ccd3ae014db2",
+          "size": 13533093,
+          "extension": "rar"
+        },
+        {
+          "archive_name": "Republic Soldier_s New Shade - Compatibility Patch-1282-4-1-1629713494.rar",
+          "sha256": "988f2223ec6c162593a3d27e04bb1d20e4d01ab0ab3adf5435d3018a6eb434f5",
+          "size": 40096544,
+          "extension": "rar"
+        }
+      ]
+    },
+    "54baef9e7a38d5be8d6c6675321ef4855ddc83ea0b50cb8a6b0acf0352a8d934": {
+      "url": "https://www.nexusmods.com/kotor/mods/1211",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "ws models for swkotor-1211-0-22-1550195260.zip",
+          "sha256": "45f7195df31d0dc10035fb0fd1204de72fdc4c86169f8e7681cd7c664dda4ff4",
+          "size": 1342090,
+          "extension": "zip"
+        }
+      ]
+    },
+    "b2d026b6038a98b72b686c93de35d6aa02cc965096a7e7935e791ff97be79eaa": {
+      "url": "https://www.gamefront.com/games/knights-of-the-old-republic-ii/file/remote-tells-influence",
+      "provider": "gamefront",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "remote_influence.zip",
+          "sha256": "8331ae9647516034a61d3ae24bd1847cbcab1a6e4cd4d3cf14fb075cb8052e85",
+          "size": 10088,
+          "extension": "zip"
+        }
+      ]
+    },
+    "cc949406130f885425318f67df438df7ab1d19c6de48f5640e60602cb64419e0": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1100",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate High Resolution Texture Pack - TPC Version-1100-1-1-1670426755.rar",
+          "sha256": "61fd130601101471c40a6982c2b066208ea70b435d2cdc02e998fe5656b9b00b",
+          "size": 1391063691,
+          "extension": "rar"
+        }
+      ]
+    },
+    "42e9dbd36ab125e5e9aea9ac34eb2f209b5e39ba5b8138f8691c91bfa0cc12e0": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1060",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Character Overhaul -REDUX- ( LITE ) - TPC Version-1060-3-0-1628674441.rar",
+          "sha256": "54862b9062d1caa891cbf05fe06fd77882bd9755a6c2349e4b5a64ac3bcb13bc",
+          "size": 529327004,
+          "extension": "rar"
+        }
+      ]
+    },
+    "a1ed3c17358f5999cf93a7cc0653704d827dafcf35d94ab5be7250956aafd1e1": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1101",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Nar Shaddaa High Resolution - TPC Version-1101-2-1-1670677562.rar",
+          "sha256": "6dd006e47fe60bb078f2a2b061ab2a1e200c6b4b05b5a2e4cb448fbff324a426",
+          "size": 807988379,
+          "extension": "rar"
+        }
+      ]
+    },
+    "c8d3abc7ff19488dd4f8bd6645532076e86ce08ab5eed4295dd80638f4b8a9b4": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1103",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Dantooine High Resolution - TPC Version-1103-2-1-1670680013.rar",
+          "sha256": "27ee469896ea7096672feef033b6c448f52680eb354dce20cd66915d23c98752",
+          "size": 750063088,
+          "extension": "rar"
+        }
+      ]
+    },
+    "65814681140352cc94fac473fa7487f134f01cdeb39c98ca348fd157f8605bc3": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1105",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Dxun High Resolution - TPC Version-1105-1-1-1670681825.rar",
+          "sha256": "810be6bccaaea067fdb4e74d5de0840f0a1e217f3492075b6beb2aa8b8fc2d89",
+          "size": 482504635,
+          "extension": "rar"
+        }
+      ]
+    },
+    "e04bfd9ca6e11719fd76fdbb173465c84475608abe674aa75b1ca01062a43825": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1102",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Onderon High Resolution - TPC Version-1102-1-1-1670678459.rar",
+          "sha256": "76c9267d1b06db45c5a0231a27e457a29f22ef00654d963b0ad3ed78dfd1364a",
+          "size": 333596075,
+          "extension": "rar"
+        }
+      ]
+    },
+    "8951cd5d0d1d760ca4a25294949989fb621f2b371fd8cdc7968f2b5d40407fdd": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1104",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Korriban High Resolution - TPC Version-1104-1-0-1607783470.rar",
+          "sha256": "6dbb6a726bd2dc930a7c338addffc39626d3a948d85458a2d1a20a708d4cc35b",
+          "size": 109304258,
+          "extension": "rar"
+        }
+      ]
+    },
+    "da8371ae9ead7c6b73dc4588258b1ae2c609a0d62b2291280019fb715db749b7": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1106",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Ultimate Malachor V High Resolution - TPC Version-1106-1-1-1670682360.rar",
+          "sha256": "711e16c8cfc82fa4a7d410ef4b7520f2564088b182be4cb493113121213c6bc0",
+          "size": 202714575,
+          "extension": "rar"
+        }
+      ]
+    },
+    "ae56149fff10f17ea863c5853c9d15d5d35de098fd677a4ac9df0d1f2d4b82cf": {
+      "url": "http://www.nexusmods.com/kotor2/mods/9/?",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "TSL_Darth_Malaks_Armour_PMBM05_Reskin-9-1-0.7z",
+          "sha256": "fa14574479abb668b1cb145bb46cd70e6e72a65e1a0d9553245b24aba16bfc43",
+          "size": 1059675,
+          "extension": "7z"
+        }
+      ]
+    },
+    "ac79ae8fc9a832b15fb24dcda73956c30a04cc9acc64e509bbaab2565a87efb1": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1296",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Smoother G0-T0-1296-1-0-1750625306.7z",
+          "sha256": "cab07129802e4efa128981c6644c8895b3181c1854e47b9b5130208478a83658",
+          "size": 156213,
+          "extension": "7z"
+        }
+      ]
+    },
+    "b334f0c5f1b949c924977e9256110df2ef21041a35252c45bd4fe71041c91509": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1161?tab=description",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "FTL Hyperspace Loop-1161-1-1-1647298435.rar",
+          "sha256": "b83a07ff94e3b363149a831a82c37b6cf2891689c2f1bd04665b6e00b31ba754",
+          "size": 807420,
+          "extension": "rar"
+        }
+      ]
+    },
+    "8ab924a5897dde779600d72594310ba5d23570791a4d1bef5bedaad24004581b": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1060?tab=files",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "JC_s Minor Fixes - Compatibility Patch-1060-3-0-1629717168.rar",
+          "sha256": "514c51b56e784b09d26c93e85b669daef1af34b0e479ffc0749ae99999676ed9",
+          "size": 33480956,
+          "extension": "rar"
+        },
+        {
+          "archive_name": "KOTOR 2 Community Patch - Compatibility Patch-1060-3-0-1629717259.rar",
+          "sha256": "1110b6879a1a69103e8a56d944db5ccb650c149cbfc634b33e5c05203469e4f6",
+          "size": 275630105,
+          "extension": "rar"
+        },
+        {
+          "archive_name": "Fixed Hologram Models and Admiralty Redux - Compatibility Patch-1060-3-0-1629717121.rar",
+          "sha256": "6d781cd15eeceae1d87ff7cbfb0bdd8a99f2cd90123bde81ccca02f1d064ee8e",
+          "size": 10588354,
+          "extension": "rar"
+        },
+        {
+          "archive_name": "Miscellaneous Compatibility Patches-1060-3-0-1629717320.rar",
+          "sha256": "aae7b6984e70839e2059196618b3f38535dcac3aec4f802dd74079563605df37",
+          "size": 127735225,
+          "extension": "rar"
+        },
+        {
+          "archive_name": "The Sith Lords Restored Content Mod - Compatibility Patch-1060-3-0-1629717420.rar",
+          "sha256": "16dbc3654bbaf4a15de5b6d89b649f2c5a44efcf1114f4055d0b11bae6149ee9",
+          "size": 79298469,
+          "extension": "rar"
+        },
+        {
+          "archive_name": "Canonical Jedi Exile - Compatibility Patch-1060-3-0-1629717058.rar",
+          "sha256": "25cf282dfb28ffdf1255008595d5feaa11683b3250d3d99e6e7e69dbe7553f33",
+          "size": 11265701,
+          "extension": "rar"
+        }
+      ]
+    },
+    "697f63fc224cc4b83aed2f8965d73769a4c18326a50ed2d29bd6e7359ce240c0": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1066/",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "1920x1080 TSLRCM Patch-1066-1-2-1575040419.zip",
+          "sha256": "56e87873606765efced68a213dc006ababc93fdfbba86b8918cef38827bf4149",
+          "size": 1095362625,
+          "extension": "zip"
+        },
+        {
+          "archive_name": "Resolution 1920x1080-1066-1-2-1575040400.zip",
+          "sha256": "295a42a537f9cb19e329a8bac458720d0858ced929243d361995ffe3aa0cea77",
+          "size": 2331082636,
+          "extension": "zip"
+        }
+      ]
+    },
+    "5d13bd9dfa4b95bb25a2b3b2e96424791cff4efbbed5a24ab70a0dc36cd9826f": {
+      "url": "https://www.nexusmods.com/kotor2/mods/1086",
+      "provider": "nexus",
+      "provenance": "operator-local-download",
+      "objects": [
+        {
+          "archive_name": "Mod files-1086-1-0-1590189064.7z",
+          "sha256": "e3c49ad8480d30bd9f936ded4f9c26cbfd5de076ba4d2ec58e72b07799ab5e5a",
+          "size": 44077260,
+          "extension": "7z"
+        }
+      ]
+    }
+  }
+}

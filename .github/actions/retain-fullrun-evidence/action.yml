@@ -1,0 +1,39 @@
+name: Retain encrypted full-run evidence
+description: Encrypt only the stage evidence directory and retain it without publishing plaintext.
+inputs:
+  source:
+    description: Private evidence directory under runner.temp
+    required: true
+  name:
+    description: Unique artifact name for this stage and attempt
+    required: true
+  encryption-key:
+    description: Diagnostics encryption secret supplied explicitly by the caller
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Seal private evidence
+      id: seal
+      if: ${{ success() || failure() }}
+      shell: bash
+      env:
+        SOURCE_DIR: ${{ inputs.source }}
+        CACHE_ENCRYPTION_KEY: ${{ inputs.encryption-key }}
+      run: |
+        test -n "$CACHE_ENCRYPTION_KEY"
+        python -c 'import os,pathlib; p=pathlib.Path(os.environ["SOURCE_DIR"]).resolve(); assert p.is_relative_to(pathlib.Path(os.environ["RUNNER_TEMP"]).resolve())'
+        umask 077
+        mkdir -p "$SOURCE_DIR"
+        sealed_dir=$(mktemp -d "$RUNNER_TEMP/fullrun-encrypted.XXXXXX")
+        python "$GITHUB_ACTION_PATH/../../../tools/modsync-ci/seal.py" seal --source "$SOURCE_DIR" \
+          --destination "$sealed_dir/evidence.seal"
+        echo "path=$sealed_dir/evidence.seal" >> "$GITHUB_OUTPUT"
+    - name: Upload authenticated ciphertext only
+      if: ${{ (success() || failure()) && steps.seal.outcome == 'success' }}
+      uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      with:
+        name: ${{ inputs.name }}
+        path: ${{ steps.seal.outputs.path }}
+        retention-days: 7
+        if-no-files-found: error
